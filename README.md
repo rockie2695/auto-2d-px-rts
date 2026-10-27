@@ -2,6 +2,9 @@
 
 自動化 2D 像素風 RTS。玩家只調 Policy 滑桿、不下直接指令，觀察 AI 對手如何演化。
 
+> **規格見 [`docs/SPEC.md`](docs/SPEC.md)** —— MVP 的唯一事實來源。
+> 實作與規格衝突時以該文件為準。
+
 ## 技術棧
 
 | 用途 | 工具 |
@@ -72,3 +75,5 @@ JSON 結構會按最終 schema 設計，方便日後遷移到 DB。
 
 - [x] Prompt 1 — 專案骨架：pnpm workspace、分層目錄、PixiJS 深灰留白畫布、
       TypeScript strict、Vitest、分層邊界測試。
+- [x] Prompt 2 — `docs/SPEC.md`：MVP 規格（資源、單位、建築、經濟、
+      5 個 Policy 滑桿、AI 三層、勝負、文字面板、JSON schema、不做清單）。
