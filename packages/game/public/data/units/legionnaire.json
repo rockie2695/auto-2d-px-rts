@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "unit": {
+    "id": "legionnaire",
+    "faction": "test_faction",
+    "tier": "small",
+    "role": "melee",
+    "cost": { "blue_crystal": 50 },
+    "stats": {
+      "hp": 100,
+      "dmg": 12,
+      "range": 0.8,
+      "attackSpeed": 1.2,
+      "moveSpeed": 2.1
+    },
+    "requires": ["barracks"],
+    "sprite": { "color": "#d94f4f", "size": 12 },
+    "ai": {
+      "value": 100,
+      "preferredRange": 0.8,
+      "retreatHpPct": 0.2
+    },
+    "trainTimeSec": 5
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "faction": {
+    "id": "test_faction",
+    "name": "Test Faction",
+    "startUnits": { "legionnaire": 3 },
+    "startBuildings": ["keep", "barracks", "crystal_mine"],
+    "roster": ["legionnaire", "archer"],
+    "buildings": ["barracks", "crystal_mine"],
+    "startResources": { "blue_crystal": 600 },
+    "counterMatrix": {
+      "melee": { "melee": 1.0, "ranged": 1.0 },
+      "ranged": { "melee": 1.0, "ranged": 1.0 }
+    }
+  }
+}

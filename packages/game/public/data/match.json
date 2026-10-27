@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "match": {
+    "tickRateHz": 20,
+    "maxTicks": 12000,
+    "unitCap": 40,
+    "mineCap": 3,
+    "barracksCap": 3
+  }
+}

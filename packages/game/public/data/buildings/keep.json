@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "building": {
+    "id": "keep",
+    "faction": "test_faction",
+    "cost": { "blue_crystal": 0 },
+    "size": [3, 3],
+    "produces": [],
+    "requires": [],
+    "sprite": { "color": "#e0b040", "size": 48 },
+    "ai": { "value": 1000 },
+    "hp": 1000,
+    "buildTimeSec": 0
+  }
+}

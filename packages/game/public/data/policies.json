@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "policies": [
+    { "id": "econMilitary", "min": 0, "max": 1, "default": 0.5, "step": 0.01 },
+    { "id": "unitSize", "min": 0, "max": 1, "default": 0.5, "step": 0.01 },
+    { "id": "unitRange", "min": 0, "max": 1, "default": 0.5, "step": 0.01 },
+    { "id": "aggression", "min": 0, "max": 1, "default": 0.5, "step": 0.01 },
+    { "id": "clusterSpread", "min": 0, "max": 1, "default": 0.5, "step": 0.01 }
+  ]
+}
