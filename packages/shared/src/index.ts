@@ -1,1 +1,43 @@
 export { MAP_SIZE, TICK_INTERVAL_MS, TICK_RATE_HZ } from './constants.ts'
+
+export {
+  BuildingDefSchema,
+  BuildingFileSchema,
+  CounterMatrixSchema,
+  FactionDefSchema,
+  FactionFileSchema,
+  HexColorSchema,
+  MapDefSchema,
+  MapFileSchema,
+  MatchDefSchema,
+  MatchFileSchema,
+  POLICY_IDS,
+  PolicyDefSchema,
+  PolicyIdSchema,
+  PoliciesFileSchema,
+  ResourceAmountSchema,
+  ResourceDefSchema,
+  ResourceFileSchema,
+  ResourceRateSchema,
+  RoleSchema,
+  SchemaVersionSchema,
+  TierSchema,
+  TileCoordSchema,
+  UnitDefSchema,
+  UnitFileSchema,
+} from './schema.ts'
+
+export type {
+  BuildingDef,
+  CounterMatrix,
+  FactionDef,
+  MapDef,
+  MatchDef,
+  PolicyDef,
+  PolicyId,
+  ResourceDef,
+  Role,
+  Tier,
+  TileCoord,
+  UnitDef,
+} from './schema.ts'

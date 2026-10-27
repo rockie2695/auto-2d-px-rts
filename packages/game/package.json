@@ -9,11 +9,11 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@auto-2d-px-rts/shared": "workspace:*",
     "@pixi/react": "^8.0.5",
     "pixi.js": "^8.22.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
-    "zod": "^4.6.7",
     "zustand": "^5.0.16"
   },
   "devDependencies": {
