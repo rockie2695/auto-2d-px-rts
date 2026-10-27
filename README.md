@@ -77,3 +77,6 @@ JSON 結構會按最終 schema 設計，方便日後遷移到 DB。
       TypeScript strict、Vitest、分層邊界測試。
 - [x] Prompt 2 — `docs/SPEC.md`：MVP 規格（資源、單位、建築、經濟、
       5 個 Policy 滑桿、AI 三層、勝負、文字面板、JSON schema、不做清單）。
+- [x] Prompt 3 — 資料 schema 與內容 JSON：`packages/shared/src/schema.ts`（Zod）、
+      `packages/game/public/data/` 的 10 份內容檔、Zod 驗證測試（計數、
+      id 交叉引用、地圖 180° 對稱）。

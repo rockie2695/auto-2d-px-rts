@@ -188,6 +188,8 @@ P(生產 legionnaire) = 1 − unitRange
 
 > **撤退閾值不由此滑桿控制** —— 可調的撤退閾值屬延後清單（規則 12）。
 > 微操層的撤退採**固定規則**：`hp ≤ 20%` 即撤退，不開放調整。
+> 該比例存放在各單位資料的 `ai.retreatHpPct`（**欄位已預留**：Prompt 3 已進 schema，
+> 兩個單位皆為 0.2），由 sim 讀取 —— 資料可改，但玩家在遊戲中不可調。
 
 ### 8.5 `clusterSpread` — 0 = 分散游擊，1 = 集群推進
 
@@ -247,6 +249,8 @@ P(生產 legionnaire) = 1 − unitRange
 
 - **無護甲、無命中、無閃避**（裝甲屬延後清單，規則 12）。
 - 實傷害：`hp -= dmg`，無傷害類型。
+- `FactionDef.counterMatrix`（melee/ranged 2×2）**欄位已預留**：Prompt 3 已進 schema，
+  但 MVP 四格恆為 1.0、戰鬥公式不讀取；傷害相剋與裝甲同屬延後範圍。
 - 攻擊冷卻見 §2.2 累積器。
 - 射程判定用固定點距離（§2.2）。
 - `keep` hp ≤ 0 → 該方落敗。
@@ -312,51 +316,109 @@ P(生產 legionnaire) = 1 − unitRange
 
 位置：`/packages/game/public/data/`。
 依規則 7，**不用 Postgres、Content Pack、CDN**；但結構按最終 schema 設計，
-日後遷移 DB 不需改欄位。所有檔案帶 `schemaVersion`。
+日後遷移 DB 不需改欄位。所有檔案帶 `schemaVersion: 1`。
 
-### `units.json`
+schema 定義在 `packages/shared/src/schema.ts`（Zod）；
+每份內容檔的外層固定是 `{ "schemaVersion": 1, "<種類>": { ... } }`。
+
+### 檔案清單（共 10 個）
+
+```
+public/data/
+  resources/blue_crystal.json     1 個資源
+  factions/test_faction.json      1 個陣營（雙方共用）
+  units/legionnaire.json          2 個單位（各一檔）
+  units/archer.json
+  buildings/keep.json             3 個建築（各一檔）
+  buildings/barracks.json
+  buildings/crystal_mine.json
+  maps/test_map.json              1 張 32x32 地圖
+  policies.json                   5 個滑桿
+  match.json                      對局設定（tick 頻率、時限、各項上限）
+```
+
+### `resources/blue_crystal.json`
 
 ```json
 {
   "schemaVersion": 1,
-  "units": [
-    {
-      "id": "legionnaire",
-      "name": "Legionnaire",
-      "class": "melee",
-      "tier": "small",
-      "hp": 100,
-      "dmg": 12,
-      "range": 0.8,
-      "attackSpeed": 1.2,
-      "moveSpeed": 2.1,
-      "cost": { "blue_crystal": 50 },
-      "trainTimeSec": 5
-    }
-  ]
+  "resource": { "id": "blue_crystal", "name": "藍水晶", "color": "#4fc3f7" }
 }
 ```
 
-### `buildings.json`
+### `units/*.json`（每單位一檔）
 
 ```json
 {
   "schemaVersion": 1,
-  "buildings": [
-    {
-      "id": "crystal_mine",
-      "name": "Crystal Mine",
-      "category": "economy",
-      "hp": 300,
-      "footprint": [1, 1],
-      "cost": { "blue_crystal": 150 },
-      "buildTimeSec": 12,
-      "requiresResourceNode": true,
-      "incomePerSec": { "blue_crystal": 1.0 }
-    }
-  ]
+  "unit": {
+    "id": "legionnaire",
+    "faction": "test_faction",
+    "tier": "small",
+    "role": "melee",
+    "cost": { "blue_crystal": 50 },
+    "stats": { "hp": 100, "dmg": 12, "range": 0.8, "attackSpeed": 1.2, "moveSpeed": 2.1 },
+    "requires": ["barracks"],
+    "sprite": { "color": "#d94f4f", "size": 12 },
+    "ai": { "value": 100, "preferredRange": 0.8, "retreatHpPct": 0.2 },
+    "trainTimeSec": 5
+  }
 }
 ```
+
+- `requires` = 產出此單位所需的建築。
+- `ai.value` = AI 的生產評價權重；`ai.preferredRange` = 微操層偏好的交戰距離；
+  `ai.retreatHpPct` 見 §8.4（資料定義，玩家不可調）。
+
+### `buildings/*.json`（每建築一檔）
+
+```json
+{
+  "schemaVersion": 1,
+  "building": {
+    "id": "crystal_mine",
+    "faction": "test_faction",
+    "cost": { "blue_crystal": 150 },
+    "size": [1, 1],
+    "produces": [],
+    "requires": [],
+    "sprite": { "color": "#38b0d8", "size": 16 },
+    "ai": { "value": 300 },
+    "hp": 300,
+    "buildTimeSec": 12,
+    "incomePerSec": { "blue_crystal": 1.0 },
+    "requiresResourceNode": true
+  }
+}
+```
+
+- `size` = 佔地 `[寬, 高]`（格）。
+- `keep` 的 `cost: 0`、`buildTimeSec: 0`：它不可建造，只能由開局配置放置。
+
+### `factions/test_faction.json`
+
+```json
+{
+  "schemaVersion": 1,
+  "faction": {
+    "id": "test_faction",
+    "name": "Test Faction",
+    "startUnits": { "legionnaire": 3 },
+    "startBuildings": ["keep", "barracks", "crystal_mine"],
+    "roster": ["legionnaire", "archer"],
+    "buildings": ["barracks", "crystal_mine"],
+    "startResources": { "blue_crystal": 600 },
+    "counterMatrix": {
+      "melee": { "melee": 1.0, "ranged": 1.0 },
+      "ranged": { "melee": 1.0, "ranged": 1.0 }
+    }
+  }
+}
+```
+
+- `roster` = 可訓練單位；`buildings` = **可建造**建築（不含不可建造的 `keep`）。
+- 開局配置即 §7 對稱標準局；雙方共用此陣營，差別只在出生點與滑桿（敵方用固定預設值）。
+- `counterMatrix` 四格皆為 **1.0**：欄位已預留，MVP 戰鬥公式不讀取（§10）。
 
 ### `policies.json`
 
@@ -373,45 +435,57 @@ P(生產 legionnaire) = 1 − unitRange
 }
 ```
 
-### `map.json`
+### `maps/test_map.json`
 
 ```json
 {
   "schemaVersion": 1,
-  "id": "symmetric_32",
-  "size": 32,
-  "symmetry": "rotational180",
-  "resourceNodes": [[7, 24], [4, 27], [10, 27]],
-  "spawns": { "player": { "x": 5, "y": 26 }, "enemy": { "x": 26, "y": 5 } }
+  "map": {
+    "id": "test_map",
+    "size": 32,
+    "tiles": [0, 0, 1, "... 長度 1024，行優先"],
+    "resourceNodes": [
+      { "x": 7, "y": 24 }, { "x": 4, "y": 27 }, { "x": 10, "y": 27 },
+      { "x": 24, "y": 7 }, { "x": 27, "y": 4 }, { "x": 21, "y": 4 }
+    ],
+    "spawnPoints": [{ "x": 5, "y": 26 }, { "x": 26, "y": 5 }]
+  }
 }
 ```
 
-> `resourceNodes` 只列我方半側，敵方座標由 180° 旋轉推導，保證對稱。
-> `spawns` 必須標明 player / enemy，因為開局配置的歸屬不能靠推導。
+- `tiles` = **可通行性**（§9.4）：`0` 可走、`1` 岩石，共 16 格岩石、180° 旋轉對稱。
+- `resourceNodes`：雙方各 3 個，後 3 個是前 3 個的 180° 像。
+- `spawnPoints`：恰好 2 個，互為 180° 像。
+- **不設 `symmetry` 欄位** —— 對稱性由測試斷言（`content.test.ts`），
+  座標界內、`tiles` 長度、出生點數量則由 schema 的 `superRefine` 驗證。
 
 ### `match.json`
 
 ```json
 {
   "schemaVersion": 1,
-  "tickRateHz": 20,
-  "maxTicks": 12000,
-  "startingBlueCrystal": 600,
-  "unitCap": 40,
-  "mineCap": 3,
-  "barracksCap": 3,
-  "opening": {
-    "buildings": ["keep", "barracks", "crystal_mine"],
-    "units": { "legionnaire": 3 },
-    "blueCrystal": 600
+  "match": {
+    "tickRateHz": 20,
+    "maxTicks": 12000,
+    "unitCap": 40,
+    "mineCap": 3,
+    "barracksCap": 3
   }
 }
 ```
 
+- `tickRateHz` 必須等於 `TICK_RATE_HZ`、`maxTicks` 必須等於 12000（§2.1），由測試交叉驗證。
+- 開局建築／單位／資源已移到 `factions/test_faction.json`
+  （`startBuildings` / `startUnits` / `startResources`），此檔只保留對局上限。
+
 ### Zod 驗證（`data` 層）
 
-- 載入時逐檔 `zod` 驗證，失敗即**啟動失敗並顯示錯誤**，不靜默降級。
-- 驗證通過後轉為 `packages/shared` 的共用型別。
+- `packages/game/src/data/content.test.ts` 逐檔 `JSON.parse` → schema `.parse`，
+  失敗即測試失敗，不靜默降級；同時斷言檔案清單恰為上述 10 個。
+- 額外把關：id 交叉引用無斷鏈、地圖 180° 對稱、資源點與出生點可通行且互有路徑、
+  `counterMatrix` 恆為 1.0、內容數值與 §4–§7 一致。
+- 遊戲執行期的載入器沿用同一套 schema，載入失敗即**啟動失敗並顯示錯誤**；
+  該載入器在 sim 層需要時實作（本階段只交付 schema + JSON + 測試）。
 
 ---
 
