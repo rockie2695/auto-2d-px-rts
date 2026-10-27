@@ -1,0 +1,31 @@
+{
+  "name": "@auto-2d-px-rts/game",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit -p tsconfig.json && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@pixi/react": "^8.0.5",
+    "pixi.js": "^8.22.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "zod": "^4.6.7",
+    "zustand": "^5.0.16"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.29.7",
+    "@rolldown/plugin-babel": "^0.2.4",
+    "@types/babel__core": "^7.20.5",
+    "@types/node": "^24.19.2",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.2",
+    "babel-plugin-react-compiler": "^1.0.0",
+    "typescript": "~7.0.2",
+    "vite": "^8.3.5"
+  }
+}

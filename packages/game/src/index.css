@@ -1,0 +1,29 @@
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  /* 深灰背景：PixiJS 畫布尚未初始化前，畫面也必須是深灰 */
+  background: #1c1c1c;
+}
+
+.game-shell {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+.game-canvas-host {
+  position: absolute;
+  inset: 0;
+  background: #1c1c1c;
+}
+
+/* 像素風：canvas 被瀏覽器縮放時走最近鄰，不做插值 */
+.game-canvas-host canvas {
+  display: block;
+  image-rendering: pixelated;
+}
