@@ -24,8 +24,10 @@ function printStatus(world: World): void {
     console.log(`  ${describePlayer(world, player.id)}`)
   }
   const snapshot = snapshotWorld(world)
+  const nodesLeft = world.resourceNodes.reduce((total, node) => total + node.amountRemaining, 0)
   console.log(
-    `  units=${world.units.length} buildings=${world.buildings.length} rng=${snapshot.rngState}`,
+    `  units=${world.units.length} buildings=${world.buildings.length} ` +
+      `nodesLeft=${nodesLeft} rng=${snapshot.rngState}`,
   )
 }
 

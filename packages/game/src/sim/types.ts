@@ -85,12 +85,19 @@ export interface Building {
   queue: TrainJob[]
   /** 佔用的資源點 index；null = 不佔資源點。 */
   nodeId: number | null
+  /**
+   * 收入累積器（Prompt 5：逐礦結算才能扣節點存量），
+   * 單位 milli·tick，見 economy.ts。
+   */
+  incomeAccMilli: number
 }
 
 /** 單一資源的礦點。 */
 export interface ResourceNode {
   x: number
   y: number
+  /** 剩餘蘊藏量（Prompt 5）：每入帳 1 水晶扣 1；歸零後所在礦場收入為 0。 */
+  amountRemaining: number
   /** 採用中的礦場 building id；null = 空閒。 */
   buildingId: number | null
 }
@@ -98,10 +105,8 @@ export interface ResourceNode {
 export interface Player {
   id: PlayerId
   factionId: string
-  /** 藍水晶整數庫存。 */
+  /** 藍水晶整數庫存（上限 shared 的 MAX_RESOURCE）。 */
   blueCrystal: number
-  /** 收入累積器，單位 milli·tick（見 economy.ts，整數精確結算）。 */
-  incomeAccMilli: number
   spawn: TilePos
   unitCount: number
   mineCount: number

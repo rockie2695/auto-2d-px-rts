@@ -60,6 +60,8 @@ export interface TestWorldOptions {
   rocks?: readonly TilePos[]
   /** 資源點格。 */
   resourceNodes?: readonly TilePos[]
+  /** 每個資源點的蘊藏量（預設 500，與 test_map.json 一致）。 */
+  nodeAmount?: number
   units?: readonly UnitDef[]
   buildings?: readonly BuildingDef[]
   /** 玩家起始藍水晶（預設 1000）。 */
@@ -69,14 +71,19 @@ export interface TestWorldOptions {
 
 const TEST_FACTION_ID = 'test_faction'
 
-function makeMap(size: number, rocks: readonly TilePos[], nodes: readonly TilePos[]): MapDef {
+function makeMap(
+  size: number,
+  rocks: readonly TilePos[],
+  nodes: readonly TilePos[],
+  nodeAmount: number,
+): MapDef {
   const tiles = new Array<number>(size * size).fill(0)
   for (const rock of rocks) tiles[rock.y * size + rock.x] = 1
   return {
     id: 'test_map',
     size,
     tiles,
-    resourceNodes: nodes.map((node) => ({ ...node })),
+    resourceNodes: nodes.map((node) => ({ ...node, amount: nodeAmount })),
     // 開局配置不跑，出生點只給型別檢查用。
     spawnPoints: [
       { x: 0, y: 0 },
@@ -115,7 +122,7 @@ export function createTestWorld(options: TestWorldOptions = {}): World {
   const size = options.size ?? 12
   const units = options.units ?? [makeUnitDef({ id: 'u' })]
   const buildings = options.buildings ?? [makeBuildingDef({ id: 'b' })]
-  const map = makeMap(size, options.rocks ?? [], options.resourceNodes ?? [])
+  const map = makeMap(size, options.rocks ?? [], options.resourceNodes ?? [], options.nodeAmount ?? 500)
 
   const world: World = {
     tick: 0,
@@ -128,12 +135,16 @@ export function createTestWorld(options: TestWorldOptions = {}): World {
     },
     units: [],
     buildings: [],
-    resourceNodes: map.resourceNodes.map((node) => ({ x: node.x, y: node.y, buildingId: null })),
+    resourceNodes: map.resourceNodes.map((node) => ({
+      x: node.x,
+      y: node.y,
+      amountRemaining: node.amount,
+      buildingId: null,
+    })),
     players: ['player', 'enemy'].map((id) => ({
       id: id as PlayerId,
       factionId: TEST_FACTION_ID,
       blueCrystal: options.startCrystal ?? 1000,
-      incomeAccMilli: 0,
       spawn: id === 'player' ? { x: 0, y: 0 } : { x: size - 1, y: size - 1 },
       unitCount: 0,
       mineCount: 0,

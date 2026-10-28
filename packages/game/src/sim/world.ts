@@ -1,3 +1,4 @@
+import { MAX_RESOURCE } from '@auto-2d-px-rts/shared'
 import type { ContentPack } from '@auto-2d-px-rts/shared'
 
 import { stepCombat } from './combat.ts'
@@ -112,6 +113,7 @@ export function createWorld(content: ContentPack, seed: number): World {
     resourceNodes: content.map.resourceNodes.map((node) => ({
       x: node.x,
       y: node.y,
+      amountRemaining: node.amount,
       buildingId: null,
     })),
     players: [],
@@ -134,8 +136,7 @@ export function createWorld(content: ContentPack, seed: number): World {
     world.players.push({
       id: playerId,
       factionId: content.faction.id,
-      blueCrystal: content.faction.startResources.blue_crystal,
-      incomeAccMilli: 0,
+      blueCrystal: Math.min(MAX_RESOURCE, content.faction.startResources.blue_crystal),
       spawn: { x: spawn.x, y: spawn.y },
       unitCount: 0,
       mineCount: 0,
@@ -310,8 +311,14 @@ export interface WorldSnapshot {
     damageTaken: number
     queue: Array<{ defId: string; remainingTicks: number }>
     nodeId: number | null
+    incomeAccMilli: number
   }>
-  resourceNodes: Array<{ x: number; y: number; buildingId: number | null }>
+  resourceNodes: Array<{
+    x: number
+    y: number
+    amountRemaining: number
+    buildingId: number | null
+  }>
 }
 
 /** 產出當下世界的完整快照（純觀測，不推進模擬）。 */
@@ -351,6 +358,7 @@ export function snapshotWorld(world: World): WorldSnapshot {
       damageTaken: building.damageTaken,
       queue: building.queue.map((job) => ({ ...job })),
       nodeId: building.nodeId,
+      incomeAccMilli: building.incomeAccMilli,
     })),
     resourceNodes: world.resourceNodes.map((node) => ({ ...node })),
   }

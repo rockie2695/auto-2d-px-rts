@@ -1,4 +1,4 @@
-import { TICK_RATE_HZ } from '@auto-2d-px-rts/shared'
+import { MAX_RESOURCE, TICK_RATE_HZ } from '@auto-2d-px-rts/shared'
 
 import {
   buildingEffectiveMaxHp,
@@ -14,9 +14,11 @@ import type { Building, PlayerId, TilePos, Unit, World } from './types.ts'
  * 經濟系統（SPEC §5–§7）：採礦收入、建築施工、生產佇列與放置／生成 API。
  *
  * 全整數運算：
- * - 收入：每個有 `incomePerSec` 的建築（crystal_mine）把
- *   `round(blue_crystal × 1000)` 累積到所屬玩家的 `incomeAccMilli`，
- *   每 tick 取出 `floor(acc / (TICK_RATE_HZ × 1000))` 入庫（整數精確、無浮點漂移）。
+ * - 收入（Prompt 5）：每個有 `incomePerSec` 的建築各自累積
+ *   `round(blue_crystal × 1000)` 到自己的 `incomeAccMilli`，
+ *   每 tick 取出 `floor(acc / (TICK_RATE_HZ × 1000))`，
+ *   並以 `MIN(gain, MAX_RESOURCE − 庫存, 節點 amountRemaining)` 夾制後入帳；
+ *   節點耗盡則該礦場收入為 0（礦場保留）。
  * - 建造進度以 tick 計數；未完工建築 hp 按完成比例折算（SPEC §5）。
  * - 生產佇列倒數至 0 時在建築外圍第一個空格生成單位；
  *   無空格或達單位上限則留在佇列，下一 tick 重試。
@@ -38,23 +40,34 @@ const PERIMETER_OFFSETS: ReadonlyArray<readonly [number, number]> = [
 /* ------------------------------------------------------------------ */
 
 function stepIncome(world: World): void {
-  for (const player of world.players) {
-    // 以「實際建築」計算產出：礦場被打掉收入立即減少。
-    let perSecMilli = 0
-    for (const building of world.buildings) {
-      if (building.player !== player.id || building.hp <= 0) continue
-      const rate = world.defs.buildings[building.defId]?.incomePerSec
-      if (rate !== undefined) perSecMilli += Math.round(rate.blue_crystal * 1000)
-    }
-    if (perSecMilli <= 0) continue
+  // 逐礦結算（Prompt 5）：每座有 incomePerSec 的建築各自累積，
+  // 取出的水晶同時受「庫存上限 MAX_RESOURCE」與「節點剩餘量」夾制。
+  for (const building of world.buildings) {
+    if (building.hp <= 0) continue
+    const def = world.defs.buildings[building.defId]
+    const rate = def?.incomePerSec
+    if (rate === undefined) continue
 
-    player.incomeAccMilli += perSecMilli
-    const gain = Math.floor(player.incomeAccMilli / INCOME_DIVISOR)
-    if (gain > 0) {
-      player.incomeAccMilli -= gain * INCOME_DIVISOR
-      player.blueCrystal += gain
+    building.incomeAccMilli += Math.round(rate.blue_crystal * 1000)
+    let gain = Math.floor(building.incomeAccMilli / INCOME_DIVISOR)
+    if (gain <= 0) continue
+    building.incomeAccMilli -= gain * INCOME_DIVISOR
+
+    const player = getPlayer(world, building.player)
+    gain = Math.min(gain, MAX_RESOURCE - player.blueCrystal) // 庫存滿 → 不入帳
+    if (building.nodeId !== null) {
+      const node = world.resourceNodes[building.nodeId]
+      if (node === undefined) continue
+      gain = Math.min(gain, node.amountRemaining) // 節點耗盡 → 收入為 0
+      node.amountRemaining -= gain
     }
+    if (gain > 0) player.blueCrystal += gain
   }
+}
+
+/** 玩家目前的藍水晶庫存（Prompt 5 指定 API）。 */
+export function getResource(world: World, playerId: PlayerId): number {
+  return getPlayer(world, playerId).blueCrystal
 }
 
 /* ------------------------------------------------------------------ */
@@ -212,6 +225,7 @@ export function addBuilding(
     damageTaken: 0,
     queue: [],
     nodeId: options.nodeId,
+    incomeAccMilli: 0,
   }
   world.nextBuildingId += 1
   world.buildings.push(building)
