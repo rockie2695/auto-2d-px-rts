@@ -1,10 +1,11 @@
 import { fileURLToPath } from 'node:url'
 
+import { MAX_RESOURCE } from '@auto-2d-px-rts/shared'
 import { describe, expect, it } from 'vitest'
 
 import { loadContentPackFromDir } from '../data/loadFromDir.ts'
 import { GameLoop } from './gameLoop.ts'
-import { addBuilding, placeBuilding, queueTrain } from './economy.ts'
+import { addBuilding, getResource, placeBuilding, queueTrain } from './economy.ts'
 import {
   centerOf,
   createTestWorld,
@@ -221,6 +222,91 @@ describe('經濟（SPEC §5）', () => {
     addBuilding(world, 'player', 'mine', { x: 8, y: 8 }, { built: true, nodeId: 1 })
     for (let tick = 0; tick < 20; tick++) stepWorld(world)
     expect(crystalOf(world, 'player')).toBe(1002)
+  })
+})
+
+/* ------------------------------------------------------------------ */
+/* Prompt 5：單一資源經濟（節點存量、上限、getResource）               */
+/* ------------------------------------------------------------------ */
+
+describe('單一資源經濟（Prompt 5）', () => {
+  const fastMine = makeBuildingDef({
+    id: 'fast_mine',
+    cost: { blue_crystal: 150 },
+    requiresResourceNode: true,
+    incomePerSec: { blue_crystal: 2 },
+  })
+
+  it('蓋水晶礦場（2.0/秒），10 tick 後藍水晶恰 +1', () => {
+    const world = createTestWorld({
+      size: 12,
+      resourceNodes: [{ x: 4, y: 4 }],
+      buildings: [fastMine],
+    })
+    const mine = placeBuilding(world, 'player', 'fast_mine', { x: 4, y: 4 })
+    expect(mine).not.toBeNull()
+    const before = getResource(world, 'player')
+
+    for (let tick = 0; tick < 10; tick++) stepWorld(world)
+
+    // 2.0/秒 × 10 tick ÷ 20Hz = 1000 milli×tick × 10 = 10000；10000 / 20000 = 0.5 → 第 10 tick 恰滿 1。
+    expect(getResource(world, 'player')).toBe(before + 1)
+  })
+
+  it('getResource 回傳玩家庫存；花費生兵後正確扣減', () => {
+    const world = createTestWorld({
+      size: 12,
+      units: [makeUnitDef({ id: 'u', cost: { blue_crystal: 50 }, trainTimeSec: 1 })],
+      buildings: [makeBuildingDef({ id: 'rax', size: [2, 2], cost: { blue_crystal: 200 }, produces: ['u'] })],
+    })
+    expect(getResource(world, 'player')).toBe(1000)
+
+    const rax = placeBuilding(world, 'player', 'rax', { x: 4, y: 4 }) // −200
+    expect(getResource(world, 'player')).toBe(800)
+
+    expect(queueTrain(world, rax?.id ?? -1, 'u')).toBe(true) // −50
+    expect(getResource(world, 'player')).toBe(750)
+
+    for (let tick = 0; tick < 20; tick++) stepWorld(world) // 出生不退費
+    expect(getPlayer(world, 'player').unitCount).toBe(1)
+    expect(getResource(world, 'player')).toBe(750)
+  })
+
+  it('節點 amount 被消耗；耗盡後礦場保留但收入歸零', () => {
+    const world = createTestWorld({
+      size: 12,
+      resourceNodes: [{ x: 4, y: 4 }],
+      buildings: [fastMine],
+      nodeAmount: 3,
+    })
+    addBuilding(world, 'player', 'fast_mine', { x: 4, y: 4 }, { built: true, nodeId: 0 })
+    const before = getResource(world, 'player')
+
+    for (let tick = 0; tick < 200; tick++) stepWorld(world)
+
+    // 節點只有 3：入帳 3 後耗盡，再多跑也不會增加。
+    expect(getResource(world, 'player')).toBe(before + 3)
+    expect(world.resourceNodes[0]?.amountRemaining).toBe(0)
+    // 建築仍在、仍佔著節點。
+    expect(world.buildings.some((building) => building.defId === 'fast_mine')).toBe(true)
+    expect(world.resourceNodes[0]?.buildingId).not.toBeNull()
+  })
+
+  it('庫存上限 9999：clamp 且不溢位', () => {
+    const world = createTestWorld({
+      size: 12,
+      resourceNodes: [{ x: 4, y: 4 }],
+      buildings: [fastMine],
+      startCrystal: 9998,
+    })
+    addBuilding(world, 'player', 'fast_mine', { x: 4, y: 4 }, { built: true, nodeId: 0 })
+
+    for (let tick = 0; tick < 100; tick++) stepWorld(world)
+
+    expect(getResource(world, 'player')).toBe(MAX_RESOURCE)
+    // 庫存滿時入帳被丟棄，但礦場不會崩潰（下一輪照常結算）。
+    for (let tick = 0; tick < 20; tick++) stepWorld(world)
+    expect(getResource(world, 'player')).toBe(MAX_RESOURCE)
   })
 })
 
