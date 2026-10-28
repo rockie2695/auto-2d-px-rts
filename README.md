@@ -20,7 +20,8 @@ pnpm install   # 安裝所有 workspace 套件
 pnpm dev       # 啟動 dev server 並自動開瀏覽器 (localhost:5173)
 pnpm test      # 執行所有測試
 pnpm lint      # oxlint
-pnpm sim       # 跑 1000 tick 模擬 CLI（固定種子 42）
+pnpm sim       # 跑 1000 tick AI 戰略層 CLI（固定種子 42；--econMilitary=0 等覆寫滑桿）
+pnpm sim:fight # 純模擬對打 CLI（無 AI，雙方推向中心接戰）
 pnpm build     # 型別檢查 + 產出 dist
 ```
 
@@ -88,3 +89,8 @@ JSON 結構會按最終 schema 設計，方便日後遷移到 DB。
 - [x] Prompt 5 — 單一資源經濟：節點 `amount` 蘊藏量（採完礦場保留但收入歸零）、
       庫存上限 9999、`getResource(playerId)` API、逐礦整數精確結算、
       10 tick 入帳／生兵扣費／節點耗盡／上限 clamp 測試（60 個測試）。
+- [x] Prompt 6 — AI 戰略層 `packages/game/src/ai/`：5 滑桿權重映射
+      （`buildEcon = econMilitary × 2`）、建築效用（飽和度懲罰 + 零礦強制 3.0）、
+      單位效用（counterMatrix 克制 + tier + 射程 + 稀缺性）、每 40 tick 雙軌決策
+      （蓋一棟 + 生一兵）、`pnpm sim` 組合根 CLI 與滑桿覆寫、
+      4 個滑桿驗收 + 克制／均攤／確定性測試（73 個測試）。

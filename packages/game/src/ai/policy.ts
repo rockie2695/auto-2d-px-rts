@@ -12,15 +12,6 @@ export interface PolicyValues {
   clusterSpread: number
 }
 
-/** 全部 Policy id（含尚未作用於戰略層的 aggression / clusterSpread）。 */
-export const POLICY_IDS_LIST: readonly PolicyId[] = [
-  'econMilitary',
-  'unitSize',
-  'unitRange',
-  'aggression',
-  'clusterSpread',
-]
-
 /** content policies.json 的 default（全 0.5）；敵方與未設定時使用。 */
 export const DEFAULT_POLICIES: PolicyValues = {
   econMilitary: 0.5,
