@@ -66,6 +66,8 @@ export interface TestWorldOptions {
   buildings?: readonly BuildingDef[]
   /** 玩家起始藍水晶（預設 1000）。 */
   startCrystal?: number
+  /** counterMatrix 覆寫（預設全 1.0；克制測試用）。 */
+  counterMatrix?: FactionDef['counterMatrix']
   seed?: number
 }
 
@@ -100,6 +102,7 @@ function makeFaction(
   units: readonly UnitDef[],
   buildings: readonly BuildingDef[],
   startCrystal: number,
+  counterMatrix: FactionDef['counterMatrix'],
 ): FactionDef {
   return {
     id: TEST_FACTION_ID,
@@ -110,10 +113,7 @@ function makeFaction(
     // palette 含全部合成建築（keep 測試自行用 makeBuildingDef 排除）。
     buildings: buildings.map((building) => building.id),
     startResources: { blue_crystal: startCrystal },
-    counterMatrix: {
-      melee: { melee: 1.0, ranged: 1.0 },
-      ranged: { melee: 1.0, ranged: 1.0 },
-    },
+    counterMatrix,
   }
 }
 
@@ -128,7 +128,15 @@ export function createTestWorld(options: TestWorldOptions = {}): World {
     tick: 0,
     map,
     match: makeMatch(),
-    faction: makeFaction(units, buildings, options.startCrystal ?? 1000),
+    faction: makeFaction(
+      units,
+      buildings,
+      options.startCrystal ?? 1000,
+      options.counterMatrix ?? {
+        melee: { melee: 1.0, ranged: 1.0 },
+        ranged: { melee: 1.0, ranged: 1.0 },
+      },
+    ),
     defs: {
       units: Object.fromEntries(units.map((unit) => [unit.id, unit])),
       buildings: Object.fromEntries(buildings.map((building) => [building.id, building])),

@@ -71,16 +71,27 @@ function isFootprintValid(world: World, tile: TilePos, w: number, h: number): bo
   return !coveredNode
 }
 
-/** 找離 anchor 最近的有效建築位置（keep／barracks 用）。 */
-function findNearestPlacement(world: World, anchor: TilePos, w: number, h: number): TilePos {
+/**
+ * 找離 anchor 最近的有效建築位置（界內、無岩石、無重疊、未壓資源點）。
+ * 找不到回傳 null（地圖塞滿時）；確定性排序：距離 → y → x。
+ */
+export function findNearestPlacement(
+  world: World,
+  anchor: TilePos,
+  w: number,
+  h: number,
+): TilePos | null {
   for (const tile of tilesByDistance(world.map.size, anchor)) {
     if (isFootprintValid(world, tile, w, h)) return tile
   }
-  throw new Error(`地圖上找不到 ${w}x${h} 的有效建築位置`)
+  return null
 }
 
-/** 找離 anchor 最近的空閒資源點；無空閒資源點丟錯。 */
-function findNearestFreeNode(world: World, anchor: TilePos): { tile: TilePos; nodeIndex: number } {
+/** 找離 anchor 最近的空閒資源點；無空閒資源點回傳 null。 */
+export function tryFindNearestFreeNode(
+  world: World,
+  anchor: TilePos,
+): { tile: TilePos; nodeIndex: number } | null {
   let best: { tile: TilePos; nodeIndex: number } | null = null
   let bestDistance = Number.POSITIVE_INFINITY
   world.resourceNodes.forEach((node, index) => {
@@ -91,7 +102,6 @@ function findNearestFreeNode(world: World, anchor: TilePos): { tile: TilePos; no
       best = { tile: { x: node.x, y: node.y }, nodeIndex: index }
     }
   })
-  if (best === null) throw new Error('沒有空閒的資源點可供開局礦場使用')
   return best
 }
 
@@ -157,13 +167,15 @@ function placeOpeningBuildings(world: World, playerId: PlayerId, spawn: TilePos)
     if (def === undefined) throw new Error(`開局建築定義不存在：${defId}`)
 
     if (def.requiresResourceNode === true) {
-      const { tile, nodeIndex } = findNearestFreeNode(world, spawn)
-      addBuilding(world, playerId, defId, tile, { built: true, nodeId: nodeIndex })
+      const found = tryFindNearestFreeNode(world, spawn)
+      if (found === null) throw new Error('沒有空閒的資源點可供開局礦場使用')
+      addBuilding(world, playerId, defId, found.tile, { built: true, nodeId: found.nodeIndex })
       continue
     }
 
     const [w, h] = def.size
     const tile = findNearestPlacement(world, spawn, w, h)
+    if (tile === null) throw new Error(`地圖上找不到 ${defId}（${w}x${h}）的有效建築位置`)
     addBuilding(world, playerId, defId, tile, { built: true, nodeId: null })
   }
 }
