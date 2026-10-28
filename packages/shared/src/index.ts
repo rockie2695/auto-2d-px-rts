@@ -28,6 +28,7 @@ export {
 } from './schema.ts'
 
 export type {
+  ContentPack,
   BuildingDef,
   CounterMatrix,
   FactionDef,

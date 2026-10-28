@@ -330,3 +330,23 @@ export const PoliciesFileSchema = z.object({
   schemaVersion: SchemaVersionSchema,
   policies: z.array(PolicyDefSchema),
 })
+
+/* ------------------------------------------------------------------ */
+/* ContentPack（10 份內容檔驗證後的 bundle）                            */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 世界初始化的唯一輸入（Prompt 4）：
+ * `packages/game/public/data/` 的 10 份 JSON 全部通過 Zod 驗證後的結果。
+ *
+ * `data` 層負責組出這個物件，`sim` 層只吃這個型別 —— sim 對資料來源零依賴。
+ */
+export interface ContentPack {
+  resource: ResourceDef
+  units: UnitDef[]
+  buildings: BuildingDef[]
+  faction: FactionDef
+  map: MapDef
+  match: MatchDef
+  policies: PolicyDef[]
+}
