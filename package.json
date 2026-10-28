@@ -8,6 +8,7 @@
     "build": "pnpm -r build",
     "test": "vitest run",
     "lint": "oxlint",
+    "sim": "node --experimental-strip-types --disable-warning=ExperimentalWarning packages/game/src/sim/simCli.ts",
     "preview": "pnpm --filter @auto-2d-px-rts/game preview"
   },
   "devDependencies": {
