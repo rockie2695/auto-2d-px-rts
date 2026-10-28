@@ -141,6 +141,21 @@ export type CombatTarget =
   | { kind: 'unit'; unit: Unit }
   | { kind: 'building'; building: Building }
 
+/** 建築是否已完工（totalTicks === 0 視為完工，例如開局 keep）。 */
+export function isConstructed(building: Building): boolean {
+  return building.builtTicks >= building.totalTicks
+}
+
+/**
+ * 建築目前的最大 hp：未完工時按完成比例折算（SPEC §5），
+ * 完工後即 def.hp。至少保留 1 hp，否則剛放下的建築會瞬間不存在。
+ */
+export function buildingEffectiveMaxHp(def: BuildingDef, building: Building): number {
+  if (building.totalTicks === 0) return def.hp
+  const progress = building.builtTicks / building.totalTicks
+  return Math.max(1, Math.floor(def.hp * progress))
+}
+
 export function getPlayer(world: World, playerId: PlayerId): Player {
   const player = world.players.find((candidate) => candidate.id === playerId)
   if (player === undefined) {
