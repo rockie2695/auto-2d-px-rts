@@ -20,6 +20,7 @@ pnpm install   # 安裝所有 workspace 套件
 pnpm dev       # 啟動 dev server 並自動開瀏覽器 (localhost:5173)
 pnpm test      # 執行所有測試
 pnpm lint      # oxlint
+pnpm sim       # 跑 1000 tick 模擬 CLI（固定種子 42）
 pnpm build     # 型別檢查 + 產出 dist
 ```
 
@@ -80,3 +81,7 @@ JSON 結構會按最終 schema 設計，方便日後遷移到 DB。
 - [x] Prompt 3 — 資料 schema 與內容 JSON：`packages/shared/src/schema.ts`（Zod）、
       `packages/game/public/data/` 的 10 份內容檔、Zod 驗證測試（計數、
       id 交叉引用、地圖 180° 對稱）。
+- [x] Prompt 4 — 模擬核心 `packages/game/src/sim/`：內容載入器、固定點移動、
+      確定性 A\*、空間雜湊自動接戰、整數精確經濟（收入／建造／生產佇列）、
+      放置 API、開局配置、`GameLoop`（20Hz 累加器）、`pnpm sim`（1000 tick CLI）、
+      確定性與真實內容整合測試（56 個測試）。

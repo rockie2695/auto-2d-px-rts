@@ -216,6 +216,11 @@ export function addBuilding(
   world.nextBuildingId += 1
   world.buildings.push(building)
 
+  // 未完工建築的 hp 立即按完成比例折算（與 stepConstruction 一致）。
+  if (!options.built) {
+    building.hp = buildingEffectiveMaxHp(def, building)
+  }
+
   if (options.nodeId !== null) {
     const node = world.resourceNodes[options.nodeId]
     if (node !== undefined) node.buildingId = building.id
