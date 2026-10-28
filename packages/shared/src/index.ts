@@ -1,4 +1,4 @@
-export { MAP_SIZE, TICK_INTERVAL_MS, TICK_RATE_HZ } from './constants.ts'
+export { MAP_SIZE, MAX_RESOURCE, TICK_INTERVAL_MS, TICK_RATE_HZ } from './constants.ts'
 
 export {
   BuildingDefSchema,
@@ -18,6 +18,7 @@ export {
   ResourceAmountSchema,
   ResourceDefSchema,
   ResourceFileSchema,
+  ResourceNodeSchema,
   ResourceRateSchema,
   RoleSchema,
   SchemaVersionSchema,
@@ -37,6 +38,7 @@ export type {
   PolicyDef,
   PolicyId,
   ResourceDef,
+  ResourceNodeCoord,
   Role,
   Tier,
   TileCoord,

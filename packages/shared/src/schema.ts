@@ -35,6 +35,19 @@ export const TileCoordSchema = z.object({
 
 export type TileCoord = z.infer<typeof TileCoordSchema>
 
+/**
+ * 地圖上的資源節點（Prompt 5）：格座標 + 可採總量。
+ * 礦場必須蓋在節點上；每入帳 1 水晶扣 1 amount，歸零後礦場保留但收入為 0。
+ */
+export const ResourceNodeSchema = z.object({
+  x: z.number().int(),
+  y: z.number().int(),
+  /** 節點蘊藏總量（整數，採完即耗盡）。 */
+  amount: z.number().int().positive(),
+})
+
+export type ResourceNodeCoord = z.infer<typeof ResourceNodeSchema>
+
 /* ------------------------------------------------------------------ */
 /* 資源                                                                */
 /* ------------------------------------------------------------------ */
@@ -191,7 +204,7 @@ export const MapDefSchema = z
      * 0 = 可走、1 = 不可走（岩石）。
      */
     tiles: z.array(z.number().int().min(0).max(1)),
-    resourceNodes: z.array(TileCoordSchema),
+    resourceNodes: z.array(ResourceNodeSchema),
     spawnPoints: z.array(TileCoordSchema),
   })
   .superRefine((map, ctx) => {

@@ -136,6 +136,10 @@ describe('MVP 內容 JSON（Prompt 3）', () => {
     // superRefine 已驗證座標界內與恰好 2 個出生點；這裡再確認內容數量
     expect(map.spawnPoints).toHaveLength(2)
     expect(map.resourceNodes).toHaveLength(6)
+    // Prompt 5：每個節點的蘊藏量鎖定 500（SPEC §5，對稱同值）。
+    for (const node of map.resourceNodes) {
+      expect(node.amount).toBe(500)
+    }
   })
 
   it('Policy 滑桿：5 個，數值與 SPEC §8 一致', () => {

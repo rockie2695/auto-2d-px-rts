@@ -12,3 +12,9 @@ export const TICK_INTERVAL_MS = 1000 / TICK_RATE_HZ
  * 地圖為正方形，座標範圍是 [0, MAP_SIZE)。
  */
 export const MAP_SIZE = 32
+
+/**
+ * 單一玩家的資源庫存上限（Prompt 5：藍水晶 9999）。
+ * 收入結算時 clamp，超額部分直接丟棄（不溢位）。
+ */
+export const MAX_RESOURCE = 9999
