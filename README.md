@@ -94,3 +94,8 @@ JSON 結構會按最終 schema 設計，方便日後遷移到 DB。
       單位效用（counterMatrix 克制 + tier + 射程 + 稀缺性）、每 40 tick 雙軌決策
       （蓋一棟 + 生一兵）、`pnpm sim` 組合根 CLI 與滑桿覆寫、
       4 個滑桿驗收 + 克制／均攤／確定性測試（73 個測試）。
+- [x] Prompt 6.5 — AI 決策記錄：每個戰略動作產出 `DecisionRecord`
+      （tick/layer/actor/action/target + 候選分數/滑桿快照/topFactor/中文解釋），
+      `ai/explain.ts` 規則式模板（`topFactor` 與文字同源、無 LLM）、
+      `pnpm sim` 印最近 5 條決策記錄、
+      200 tick 整合 + 非空解釋 + 同 seed 一致測試（88 個測試）。

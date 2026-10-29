@@ -243,6 +243,12 @@ P(生產 legionnaire) = 1 − unitRange
 依 §8.1 的效用函數挑選行動，執行於：興建 `crystal_mine`、興建 `barracks`、
 生產單位。生產種類依 §8.3 配額抽籤（種子化 RNG）。
 
+**實作補註（Prompt 6.5）**：每個實際執行的產出一條決策記錄
+（`tick` / `layer` / `actor` / `action` / `target`，`reason` 內含當軌全部候選分數、
+當時 5 個 Policy 滑桿、主導因素 `topFactor` 與一行中文 `explanation`）。
+解釋由 `ai/explain.ts` 的規則式模板產出（不用 LLM），
+且 `topFactor` 與文字出自同一條規則鏈、保證一致；`pnpm sim` 會印出最近 5 條。
+
 ### 9.2 戰術層（10 tick）
 
 - **影響力地圖**：32×32 格網格，每格累積己方單位的戰力貢獻（距離衰減），
