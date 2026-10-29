@@ -99,3 +99,9 @@ JSON 結構會按最終 schema 設計，方便日後遷移到 DB。
       `ai/explain.ts` 規則式模板（`topFactor` 與文字同源、無 LLM）、
       `pnpm sim` 印最近 5 條決策記錄、
       200 tick 整合 + 非空解釋 + 同 seed 一致測試（88 個測試）。
+- [x] Prompt 7 — AI 戰術層 `packages/game/src/ai/`：影響力地圖（8×8 tile 粗網格、
+  `threat = Σ value × hp/maxHp / (1 + dist²)`、每 500ms 重算）、小隊編組
+  （`squadCount`／`squadSize` 隨 `clusterSpread`）、任務 attack／defend／harass
+  （`aggression` 決定比例、目標 = 價值高 × 防守弱 × 距離近）、撤退
+  （戰力劣勢回集結點、`hp < retreatHpPct` 脫離戰鬥）、`pnpm sim` 可見集結／推進／撤退
+  （113 個測試）。

@@ -256,6 +256,16 @@ P(生產 legionnaire) = 1 − unitRange
 - **小隊分配**：依 §8.2 編制上限重新編隊，依 §8.5 決定目標集群數，
   依 §8.4 決定是否越出防禦半徑。
 
+**實作補註（Prompt 7）**：MVP 的影響力地圖採 **8×8 tile 粗網格**
+（32×32 地圖 → 4×4 = 16 格），`threat = Σ ai.value × (hp/maxHp) / (1 + dist²)`
+（整數 milli；`value`／`retreatHpPct` 取自單位 JSON）。小隊編組為
+`squadCount = round(lerp(4, 1, clusterSpread))`、
+`squadSize = round(lerp(4, 18, clusterSpread))`，任務 attack／defend／harass
+由 `aggression` 決定攻守比例（隊數 ≥ 3 且 attack ≥ 2 時派 1 隊騷擾打敵方經濟）；
+進攻目標評分 = `建築ai.value × 1/(敵方格威脅+1) × 1/(1+距離)`。
+撤退：隊級 `squadPower < 敵方在重心的即時威脅 × 0.7` → 回集結點；
+個體 `hp < retreatHpPct × maxHp` → 脫離戰鬥。`pnpm sim` 會印出小隊任務變化與脫離事件。
+
 ### 9.3 微操層（2 tick）
 
 行為樹節點：
