@@ -6,6 +6,7 @@ import { loadContentPackFromDir } from '../data/loadFromDir.ts'
 import { resolvePolicies } from './policy.ts'
 import type { PolicyValues } from './policy.ts'
 import { runStrategicCycle, STRATEGIC_INTERVAL_TICKS } from './strategy.ts'
+import type { DecisionRecord } from './strategy.ts'
 import { createWorld, describePlayer, snapshotWorld, stepWorld } from '../sim/world.ts'
 import type { PlayerId, World } from '../sim/types.ts'
 
@@ -17,7 +18,8 @@ import type { PlayerId, World } from '../sim/types.ts'
  * - **不移動單位**：移動與接戰屬戰術層（之後的 Prompt），
  *   此處只驗證「蓋什麼、生什麼、資源是否平衡」。
  * - 每次戰略動作即時印出（`t=40 player: built barracks@(x,y)`），
- *   每 250 tick 印一次狀態列。
+ *   每 250 tick 印一次狀態列，並附**最近 5 條決策記錄**
+ *   （含一行中文解釋，見 ai/explain.ts）。
  * - 我方滑桿可用 CLI 覆寫：`pnpm sim --econMilitary=0 --unitRange=1`；
  *   敵方固定預設值 0.5（SPEC §7）。兩次執行輸出逐字相同即確定性成立。
  */
@@ -54,7 +56,7 @@ function isPolicyId(id: string): id is PolicyId {
   )
 }
 
-function printStatus(world: World): void {
+function printStatus(world: World, records: readonly DecisionRecord[]): void {
   console.log(`--- tick ${world.tick} ---`)
   for (const player of world.players) {
     console.log(`  ${describePlayer(world, player.id)}`)
@@ -65,6 +67,17 @@ function printStatus(world: World): void {
     `  units=${world.units.length} buildings=${world.buildings.length} ` +
       `nodesLeft=${nodesLeft} rng=${snapshot.rngState}`,
   )
+
+  const recent = records.slice(-5)
+  if (recent.length > 0) {
+    console.log(`  最近決策（${recent.length}/${records.length} 條）:`)
+    for (const record of recent) {
+      console.log(
+        `    t=${record.tick} ${record.actor}: ${record.action} ${record.target}` +
+          ` — ${record.reason.explanation}`,
+      )
+    }
+  }
 }
 
 function main(): void {
@@ -81,13 +94,17 @@ function main(): void {
       `enemy=[${Object.values(policies.enemy).join(', ')}]`,
   )
 
-  printStatus(world)
+  const decisionLog: DecisionRecord[] = []
+
+  printStatus(world, decisionLog)
   while (world.tick < TOTAL_TICKS) {
     stepWorld(world)
 
     if (world.tick % STRATEGIC_INTERVAL_TICKS === 0) {
       for (const player of world.players) {
-        for (const action of runStrategicCycle(world, player.id, policies[player.id])) {
+        const result = runStrategicCycle(world, player.id, policies[player.id])
+        decisionLog.push(...result.records)
+        for (const action of result.actions) {
           if (action.kind === 'build') {
             console.log(
               `t=${world.tick} ${player.id}: built ${action.defId}@(${action.tile.x},${action.tile.y})`,
@@ -99,7 +116,7 @@ function main(): void {
       }
     }
 
-    if (world.tick % PRINT_EVERY === 0) printStatus(world)
+    if (world.tick % PRINT_EVERY === 0) printStatus(world, decisionLog)
   }
 }
 

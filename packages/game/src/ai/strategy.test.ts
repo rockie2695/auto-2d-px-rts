@@ -1,10 +1,13 @@
+import { fileURLToPath } from 'node:url'
+
 import { describe, expect, it } from 'vitest'
 
 import type { UnitDef } from '@auto-2d-px-rts/shared'
 
 import { DEFAULT_POLICIES, resolvePolicies } from './policy.ts'
 import { runStrategicCycle, STRATEGIC_INTERVAL_TICKS } from './strategy.ts'
-import type { StrategicAction } from './strategy.ts'
+import type { DecisionRecord, StrategicAction } from './strategy.ts'
+import { loadContentPackFromDir } from '../data/loadFromDir.ts'
 import {
   createTestWorld,
   makeBuildingDef,
@@ -12,6 +15,7 @@ import {
   putUnit,
 } from '../sim/testFixtures.ts'
 import { addBuilding } from '../sim/economy.ts'
+import { createWorld, stepWorld } from '../sim/world.ts'
 import type { TestWorldOptions } from '../sim/testFixtures.ts'
 import type { PolicyValues } from './policy.ts'
 import type { PlayerId, World } from '../sim/types.ts'
@@ -36,9 +40,23 @@ function runCycles(
 ): StrategicAction[] {
   const actions: StrategicAction[] = []
   for (let cycle = 0; cycle < n; cycle++) {
-    actions.push(...runStrategicCycle(world, playerId, policies))
+    actions.push(...runStrategicCycle(world, playerId, policies).actions)
   }
   return actions
+}
+
+/** 跑 n 次戰略循環，攤平所有決策記錄。 */
+function runCycleRecords(
+  world: World,
+  playerId: PlayerId,
+  policies: PolicyValues,
+  n: number,
+): DecisionRecord[] {
+  const records: DecisionRecord[] = []
+  for (let cycle = 0; cycle < n; cycle++) {
+    records.push(...runStrategicCycle(world, playerId, policies).records)
+  }
+  return records
 }
 
 function countBuildings(world: World, playerId: PlayerId, defId: string): number {
@@ -257,5 +275,87 @@ describe('決策節奏與確定性（規則 8）', () => {
     const a = JSON.stringify(runCycles(worldA, 'player', resolvePolicies({ econMilitary: 0 }), 5))
     const b = JSON.stringify(runCycles(worldB, 'player', resolvePolicies({ econMilitary: 1 }), 5))
     expect(a).not.toBe(b)
+  })
+})
+
+/* ------------------------------------------------------------------ */
+/* Prompt 6.5：決策記錄                                                 */
+/* ------------------------------------------------------------------ */
+
+/** 真實內容 + seed 42 跑 totalTicks，回傳雙方累積的決策記錄。 */
+function runRealWorldRecords(totalTicks: number): DecisionRecord[] {
+  const dataDir = fileURLToPath(new URL('../../public/data/', import.meta.url))
+  const content = loadContentPackFromDir(dataDir)
+  const world = createWorld(content, 42)
+  const records: DecisionRecord[] = []
+  while (world.tick < totalTicks) {
+    stepWorld(world)
+    if (world.tick % STRATEGIC_INTERVAL_TICKS === 0) {
+      for (const player of world.players) {
+        records.push(...runStrategicCycle(world, player.id, DEFAULT_POLICIES).records)
+      }
+    }
+  }
+  return records
+}
+
+describe('決策記錄（Prompt 6.5）', () => {
+  it('真實內容跑 200 tick：至少 1 條決策記錄', () => {
+    expect(runRealWorldRecords(200).length).toBeGreaterThanOrEqual(1)
+  })
+
+  it('每條記錄欄位齊全、explanation 非空、topFactor 合法', () => {
+    const validFactors = [
+      'forcedMine',
+      'econWeight',
+      'militaryWeight',
+      'saturation',
+      'counter',
+      'range',
+      'tier',
+      'scarcity',
+      'feasibility',
+    ]
+    const records = runRealWorldRecords(200)
+    expect(records.length).toBeGreaterThanOrEqual(1)
+    for (const record of records) {
+      expect(record.layer).toBe('strategic')
+      expect(record.tick).toBeGreaterThan(0)
+      expect(['player', 'enemy']).toContain(record.actor)
+      expect(['build', 'train']).toContain(record.action)
+      expect(record.target.length).toBeGreaterThan(0)
+      expect(record.reason.explanation).not.toBe('')
+      expect(record.reason.explanation).toContain('理由：')
+      expect(record.reason.candidates.length).toBeGreaterThanOrEqual(1)
+      expect(validFactors).toContain(record.reason.topFactor)
+      expect(record.reason.weights.econMilitary).toBe(0.5)
+    }
+  })
+
+  it('相同 seed → 決策記錄一致', () => {
+    expect(JSON.stringify(runRealWorldRecords(200))).toBe(
+      JSON.stringify(runRealWorldRecords(200)),
+    )
+  })
+
+  it('build 記錄：target 帶 @(x,y)、候選分數降冪；train 記錄：target 為單位 defId', () => {
+    // 建築記錄（預設滑桿 → mine 強制 3.0 壓過兵營 1.0，兩個候選都入列）。
+    const buildWorld = buildingWorld()
+    const build = runCycleRecords(buildWorld, 'player', DEFAULT_POLICIES, 1).find(
+      (record) => record.action === 'build',
+    )
+    expect(build?.target).toMatch(/^mine@\(\d+,\d+\)$/)
+    expect(build?.reason.candidates).toHaveLength(2)
+    const scores = build?.reason.candidates.map((candidate) => candidate.score) ?? []
+    expect(scores[0]).toBeGreaterThanOrEqual(scores[1] ?? Number.POSITIVE_INFINITY)
+
+    // 生產記錄（兵營已就緒、unitRange=1 → 遠程單位勝出）。
+    const prodWorld = productionWorld(rangeUnits())
+    const train = runCycleRecords(prodWorld, 'player', resolvePolicies({ unitRange: 1 }), 1).find(
+      (record) => record.action === 'train',
+    )
+    expect(train?.target).toBe('rangedU')
+    expect(train?.reason.explanation).toBe('生 rangedU。理由：unitRange 偏遠程')
+    expect(train?.reason.topFactor).toBe('range')
   })
 })
