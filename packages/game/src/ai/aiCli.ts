@@ -7,8 +7,9 @@ import { resolvePolicies } from './policy.ts'
 import type { PolicyValues } from './policy.ts'
 import { runStrategicCycle, STRATEGIC_INTERVAL_TICKS } from './strategy.ts'
 import type { DecisionRecord } from './strategy.ts'
-import { planTactics, TACTICAL_INTERVAL_TICKS } from './tactics.ts'
+import { computeTacticalPlan, TACTICAL_INTERVAL_TICKS } from './tactics.ts'
 import type { SquadMission, TacticalPlan } from './tactics.ts'
+import { focusTargets, MICRO_INTERVAL_TICKS, runMicroCycle } from './micro.ts'
 import { createWorld, describePlayer, snapshotWorld, stepWorld } from '../sim/world.ts'
 import type { PlayerId, World } from '../sim/types.ts'
 
@@ -17,9 +18,11 @@ import type { PlayerId, World } from '../sim/types.ts'
  * （sim 層本身不得 import ai —— 方向性由 architecture.test.ts 守衛）。
  *
  * - 種子固定 42；戰略層每 40 tick（2 秒）蓋房、生兵。
- * - 戰術層每 10 tick（500ms）重編小隊、指派任務、下移動命令；
- *   小隊任務變化時即時印一行（可目視集結／推進／撤退），
- *   接戰由 sim 的自動接戰結算（戰術層不直接指揮單位的攻擊細節）。
+ * - 戰術層每 10 tick（500ms）重編小隊、指派任務（純計畫，不下單）；
+ *   小隊任務變化時即時印一行（可目視集結／推進／撤退）。
+ * - 微操層每 2 tick（100ms）依行為樹對每個單位下單：撤退／攻擊／風箏／編隊／待機；
+ *   風箏與集火狀態變化時即時印一行（可目視風箏、集火），
+ *   接戰由 sim 的自動接戰結算。
  * - 每次戰略動作即時印出（`t=40 player: built barracks@(x,y)`），
  *   每 250 tick 印一次狀態列（含小隊摘要與最近 5 條決策記錄）。
  * - 我方滑桿可用 CLI 覆寫：`pnpm sim --econMilitary=0 --aggression=1`；
@@ -35,7 +38,7 @@ const MISSION_LABEL: Record<SquadMission, string> = {
 }
 
 const SEED = 42
-const TOTAL_TICKS = 1000
+const TOTAL_TICKS = 1500
 const PRINT_EVERY = 250
 
 /** 解析 `--econMilitary=0` 形式的滑桿覆寫（僅接受已知 id 與 [0,1] 數值）。 */
@@ -78,12 +81,16 @@ function printStatus(
     if (plan === null || plan.squads.length === 0) {
       console.log(`    小隊: （無）`)
     } else {
+      const focus = focusTargets(world, player.id, plan)
       const summary = plan.squads
-        .map(
-          (squad) =>
+        .map((squad) => {
+          const target = focus.get(squad.index) ?? null
+          const focusLabel = target === null ? '' : ` 集火u${target}`
+          return (
             `#${squad.index} ${MISSION_LABEL[squad.mission]}(${squad.memberIds.length})` +
-            `→(${squad.target.x},${squad.target.y})`,
-        )
+            `→(${squad.target.x},${squad.target.y})${focusLabel}`
+          )
+        })
         .join(' ')
       console.log(`    小隊: ${summary}`)
     }
@@ -125,14 +132,36 @@ function main(): void {
   const lastPlans: Record<PlayerId, TacticalPlan | null> = { player: null, enemy: null }
   const prevMissions: Record<PlayerId, SquadMission[]> = { player: [], enemy: [] }
   const reportedDisengaged: Record<PlayerId, Set<number>> = { player: new Set(), enemy: new Set() }
+  const kitingUnits: Record<PlayerId, Set<number>> = { player: new Set(), enemy: new Set() }
+
+  // tick 0 先算一次戰術計畫，讓微操層從第 1 tick 起就有小隊目標。
+  for (const player of world.players) {
+    lastPlans[player.id] = computeTacticalPlan(world, player.id, policies[player.id])
+  }
 
   printStatus(world, decisionLog, lastPlans)
   while (world.tick < TOTAL_TICKS) {
     stepWorld(world)
 
+    if (world.tick % STRATEGIC_INTERVAL_TICKS === 0) {
+      for (const player of world.players) {
+        const result = runStrategicCycle(world, player.id, policies[player.id])
+        decisionLog.push(...result.records)
+        for (const action of result.actions) {
+          if (action.kind === 'build') {
+            console.log(
+              `t=${world.tick} ${player.id}: built ${action.defId}@(${action.tile.x},${action.tile.y})`,
+            )
+          } else {
+            console.log(`t=${world.tick} ${player.id}: queued ${action.defId}`)
+          }
+        }
+      }
+    }
+
     if (world.tick % TACTICAL_INTERVAL_TICKS === 0) {
       for (const player of world.players) {
-        const plan = planTactics(world, player.id, policies[player.id])
+        const plan = computeTacticalPlan(world, player.id, policies[player.id])
         lastPlans[player.id] = plan
         const before = prevMissions[player.id]
         for (const squad of plan.squads) {
@@ -162,18 +191,24 @@ function main(): void {
       }
     }
 
-    if (world.tick % STRATEGIC_INTERVAL_TICKS === 0) {
+    if (world.tick % MICRO_INTERVAL_TICKS === 0) {
       for (const player of world.players) {
-        const result = runStrategicCycle(world, player.id, policies[player.id])
-        decisionLog.push(...result.records)
-        for (const action of result.actions) {
-          if (action.kind === 'build') {
-            console.log(
-              `t=${world.tick} ${player.id}: built ${action.defId}@(${action.tile.x},${action.tile.y})`,
-            )
-          } else {
-            console.log(`t=${world.tick} ${player.id}: queued ${action.defId}`)
+        const decisions = runMicroCycle(world, player.id, lastPlans[player.id])
+
+        // 風箏：首次進入風箏狀態時印一次（離開時靜默清除）。
+        const kiting = kitingUnits[player.id]
+        for (const decision of decisions) {
+          if (decision.action !== 'kite') {
+            kiting.delete(decision.unitId)
+            continue
           }
+          if (kiting.has(decision.unitId)) continue
+          kiting.add(decision.unitId)
+          const dest = decision.moveDest
+          console.log(
+            `t=${world.tick} ${player.id}: unit ${decision.unitId} 風箏` +
+              (dest === null ? '' : ` → (${dest.x},${dest.y})`),
+          )
         }
       }
     }

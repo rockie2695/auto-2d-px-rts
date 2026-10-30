@@ -1,6 +1,4 @@
-import { setAttackTarget } from '../sim/combat.ts'
 import { getPlayer, isBlockedAt, tileOf, UNITS_PER_TILE } from '../sim/types.ts'
-import { orderMove } from '../sim/world.ts'
 import type { Building, PlayerId, TilePos, Unit, World } from '../sim/types.ts'
 import { computeInfluenceMap, enemyThreatAtPoint, enemyThreatAtTile } from './influence.ts'
 import type { InfluenceMap } from './influence.ts'
@@ -9,8 +7,11 @@ import type { PolicyValues } from './policy.ts'
 
 /**
  * AI 戰術層（SPEC §9.2，Prompt 7）：每 500ms（= 10 tick）重編小隊、指派任務、
- * 選定進攻目標、判斷撤退，並透過 sim 的既有 API（`orderMove` / `setAttackTarget`）
- * 下單。戰鬥本身仍由 sim 的自動接戰（`stepCombat`）結算。
+ * 選定進攻目標、判斷撤退。
+ *
+ * **本層只產出計畫（純函式），不下單**：實際的移動與聚火由微操層
+ * （`micro.ts`，Prompt 8）每 100ms 依行為樹決定 —— 單一「命令來源」
+ * 才能讓風箏／集火／撤退互相協調而不打架。戰鬥仍由 sim 自動接戰結算。
  *
  * 小隊編組：
  * - `squadCount = round(lerp(4, 1, clusterSpread))`（0 → 4 隊分散、1 → 1 隊集中）
@@ -109,8 +110,8 @@ function unitPower(world: World, unit: Unit): number {
   return Math.round((def.ai.value * Math.max(0, unit.hp)) / def.stats.hp)
 }
 
-/** 由指定格往外找最近的可走格（環狀搜尋，固定順序）。 */
-function nearestWalkable(world: World, tile: TilePos): TilePos | null {
+/** 由指定格往外找最近的可走格（環狀搜尋，固定順序）。微操層亦共用。 */
+export function nearestWalkable(world: World, tile: TilePos): TilePos | null {
   const { size } = world.map
   const inBounds = (candidate: TilePos): boolean =>
     candidate.x >= 0 && candidate.y >= 0 && candidate.x < size && candidate.y < size
@@ -302,23 +303,4 @@ export function computeTacticalPlan(
   return { tick: world.tick, player: playerId, rally, squads, disengaged, influence }
 }
 
-/** 把計畫下單給 sim（移動 + 聚火）。 */
-export function applyTacticalPlan(world: World, plan: TacticalPlan): void {
-  for (const squad of plan.squads) {
-    for (const id of squad.memberIds) {
-      orderMove(world, id, squad.target)
-      setAttackTarget(world, id, squad.targetBuildingId)
-    }
-  }
-  for (const id of plan.disengaged) {
-    orderMove(world, id, plan.rally)
-    setAttackTarget(world, id, null)
-  }
-}
 
-/** 計算並下單一次戰術循環（呼叫端負責每 TACTICAL_INTERVAL_TICKS 節流）。 */
-export function planTactics(world: World, playerId: PlayerId, policies: PolicyValues): TacticalPlan {
-  const plan = computeTacticalPlan(world, playerId, policies)
-  applyTacticalPlan(world, plan)
-  return plan
-}

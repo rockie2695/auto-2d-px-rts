@@ -7,12 +7,12 @@ import {
   computeTacticalPlan,
   countSquads,
   lerp,
-  planTactics,
   RETREAT_POWER_RATIO,
   squadSizing,
   TACTICAL_INTERVAL_TICKS,
 } from './tactics.ts'
 import type { TacticalPlan } from './tactics.ts'
+import { MICRO_INTERVAL_TICKS, runMicroCycle } from './micro.ts'
 import { DEFAULT_POLICIES, resolvePolicies } from './policy.ts'
 import type { PolicyValues } from './policy.ts'
 import { runStrategicCycle, STRATEGIC_INTERVAL_TICKS } from './strategy.ts'
@@ -213,30 +213,27 @@ describe('撤退（Prompt 7）', () => {
   })
 })
 
-describe('下單與確定性（Prompt 7）', () => {
-  it('進攻隊：聚火目標建築並移動到目標格', () => {
+describe('計畫與確定性（Prompt 7 / 8）', () => {
+  it('進攻隊：任務為 attack 並鎖定敵方目標建築', () => {
     const world = worldWithBases()
     putUnit(world, 'player', 'u', { x: 4, y: 4 })
-    const plan = planTactics(world, 'player', resolvePolicies({ aggression: 1 }))
+    const plan = computeTacticalPlan(world, 'player', resolvePolicies({ aggression: 1 }))
     const squad = plan.squads[0]
     expect(squad?.mission).toBe('attack')
-    const memberId = squad?.memberIds[0]
-    const member = world.units.find((unit) => unit.id === memberId)
-    expect(member?.dest).toEqual(squad?.target)
-    expect(member?.targetId).toBe(squad?.targetBuildingId)
+    expect(squad?.targetBuildingId).not.toBeNull()
   })
 
-  it('守備與脫離單位：回集結點且清空攻擊目標', () => {
+  it('低血單位被排除於小隊之外（下單改由微操層負責）', () => {
     const world = worldWithBases()
     const hurt = putUnit(world, 'player', 'u', { x: 6, y: 6 })
-    putUnit(world, 'player', 'u', { x: 7, y: 6 })
+    const fine = putUnit(world, 'player', 'u', { x: 7, y: 6 })
     const hurtUnit = world.units.find((unit) => unit.id === hurt)
     if (hurtUnit === undefined) throw new Error('找不到受傷單位')
     hurtUnit.hp = 10
 
-    const plan = planTactics(world, 'player', resolvePolicies({ aggression: 0 }))
-    expect(hurtUnit.dest).toEqual(plan.rally)
-    expect(hurtUnit.targetId).toBeNull()
+    const plan = computeTacticalPlan(world, 'player', resolvePolicies({ aggression: 0 }))
+    expect(plan.disengaged).toEqual([hurt])
+    expect(plan.squads.flatMap((squad) => squad.memberIds)).toEqual([fine])
     expect(plan.squads[0]?.mission).toBe('defend')
   })
 
@@ -265,7 +262,7 @@ interface RealRun {
   positions: string
 }
 
-/** 真實內容 + seed 42：戰略層每 40 tick、戰術層每 10 tick 各跑一次。 */
+/** 真實內容 + seed 42：戰略層每 40、戰術層每 10、微操層每 2 tick 各跑一次。 */
 function runReal(ticks: number): RealRun {
   const dataDir = fileURLToPath(new URL('../../public/data/', import.meta.url))
   const content = loadContentPackFromDir(dataDir)
@@ -277,6 +274,7 @@ function runReal(ticks: number): RealRun {
   const spawnY = world.players.find((player) => player.id === 'player')?.spawn.y ?? 0
   let maxPlayerAdvance = 0
   let squadsSeen = 0
+  const plans: Record<PlayerId, TacticalPlan | null> = { player: null, enemy: null }
 
   while (world.tick < ticks) {
     stepWorld(world)
@@ -287,8 +285,14 @@ function runReal(ticks: number): RealRun {
     }
     if (world.tick % TACTICAL_INTERVAL_TICKS === 0) {
       for (const player of world.players) {
-        const plan = planTactics(world, player.id, policies[player.id])
+        const plan = computeTacticalPlan(world, player.id, policies[player.id])
+        plans[player.id] = plan
         if (player.id === 'player' && plan.squads.length > 0) squadsSeen += 1
+      }
+    }
+    if (world.tick % MICRO_INTERVAL_TICKS === 0) {
+      for (const player of world.players) {
+        runMicroCycle(world, player.id, plans[player.id])
       }
     }
     for (const unit of world.units) {
