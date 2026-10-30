@@ -105,3 +105,8 @@ JSON 結構會按最終 schema 設計，方便日後遷移到 DB。
   （`aggression` 決定比例、目標 = 價值高 × 防守弱 × 距離近）、撤退
   （戰力劣勢回集結點、`hp < retreatHpPct` 脫離戰鬥）、`pnpm sim` 可見集結／推進／撤退
   （113 個測試）。
+- [x] Prompt 8 — AI 微操層 `packages/game/src/ai/micro.ts`（每 100ms＝2 tick）：
+  單位行為樹（撤退／接戰風箏／編隊／待機），`retreatHpPct` 讀 JSON、
+  風箏 `preferredRange × 0.7` 邊退邊打、集火（全隊打離小隊重心最近者）、
+  隊形 slot、A* 每 500ms 重算；戰術層改為只產計畫、微操層是唯一下單者；
+  `pnpm sim` 可見風箏、集火、撤退（127 個測試）。
