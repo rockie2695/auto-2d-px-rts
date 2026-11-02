@@ -27,3 +27,79 @@ body,
   display: block;
   image-rendering: pixelated;
 }
+
+/* ---- 單位資訊面板（Prompt 9：覆蓋在畫布右上的文字面板）---- */
+.info-panel {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 220px;
+  z-index: 10;
+  padding: 8px 10px;
+  font-family: 'Courier New', monospace;
+  font-size: 13px;
+  line-height: 1.6;
+  color: #dfe5ec;
+  background: rgba(16, 18, 22, 0.88);
+  border: 1px solid #4a5568;
+  user-select: none;
+}
+
+.info-panel-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-weight: bold;
+  border-bottom: 1px solid #4a5568;
+  padding-bottom: 4px;
+  margin-bottom: 4px;
+}
+
+.info-panel button {
+  background: transparent;
+  color: #9aa5b1;
+  border: none;
+  cursor: pointer;
+  font: inherit;
+  padding: 0 4px;
+}
+
+.info-panel button:hover {
+  color: #ffffff;
+}
+
+.info-panel-empty {
+  color: #808a96;
+  padding: 8px 0;
+}
+
+.info-panel-rows {
+  margin: 0;
+}
+
+.info-panel-rows div {
+  display: flex;
+  justify-content: space-between;
+}
+
+.info-panel-rows dt {
+  color: #9aa5b1;
+}
+
+.info-panel-rows dd {
+  margin: 0;
+}
+
+.info-panel-collapsed {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 10;
+  padding: 6px 10px;
+  font-family: 'Courier New', monospace;
+  font-size: 13px;
+  color: #dfe5ec;
+  background: rgba(16, 18, 22, 0.88);
+  border: 1px solid #4a5568;
+  cursor: pointer;
+}

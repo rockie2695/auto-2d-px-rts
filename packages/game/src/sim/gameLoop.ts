@@ -32,8 +32,12 @@ export class GameLoop {
   /**
    * 以毫秒推進：累加時間，每滿 `TICK_INTERVAL_MS` 走一個 tick，
    * 餘數留到下次。回傳本次實際推進的 tick 數。
+   *
+   * `onTick`（可選）在**每個 tick 完成後**立即回呼本 world —— 瀏覽器組合根
+   * 借此把 AI 三層（每 40/10/2 tick）掛在精確的 tick 邊界上；一次推進多個
+   * tick 時（分頁切換補齊）每個 tick 都會各自回呼，節奏不受掉幀影響。
    */
-  advance(deltaMs: number): number {
+  advance(deltaMs: number, onTick?: (world: World) => void): number {
     if (deltaMs < 0) return 0
     this.accumulatorMs += deltaMs
     let ticks = 0
@@ -41,6 +45,7 @@ export class GameLoop {
       this.accumulatorMs -= TICK_INTERVAL_MS
       this.step()
       ticks += 1
+      if (onTick !== undefined) onTick(this.world)
     }
     return ticks
   }
