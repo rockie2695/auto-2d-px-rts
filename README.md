@@ -110,3 +110,15 @@ JSON 結構會按最終 schema 設計，方便日後遷移到 DB。
   風箏 `preferredRange × 0.7` 邊退邊打、集火（全隊打離小隊重心最近者）、
   隊形 slot、A* 每 500ms 重算；戰術層改為只產計畫、微操層是唯一下單者；
   `pnpm sim` 可見風箏、集火、撤退（127 個測試）。
+- [x] Prompt 9 — 渲染層 `packages/game/src/render/`（Pixel 完美）：邏輯 20Hz／渲染 60fps、
+  前後快照線性插值、`scaleMode: 'nearest'` + 整數縮放置中、32px tile 地圖色塊 +
+  單位／建築色塊 + 血條（三段色）；`<PixiCanvas>`（React 生命週期 + zustand UI 狀態）、
+  組合根 `session.ts`（fetch 內容 → 建世界 → `GameLoop.advance` + AI 三層掛 tick 邊界）、
+  jsdom 掛載測試（152 個測試）。
+- [x] Prompt 9.1 — 原地抖動修復 + 建築資訊：
+  `stepMovement` 步長夾限（路徑重排後垂直首格 × 偏心座標造成每 tick ±1 步永久乒乓，
+  修復後 800 tick 診斷由 2750+ 次歸零、回歸測試鎖定）；
+  點擊建築顯示資訊（`pickTarget` 單位優先 → 建築、選取框描佔地、
+  面板顯示 hp／施工進度%／佔地／座標，SPEC §5 有效 maxHp 折算）；
+  接戰中偶發的微操 formation↔kite 互換（≈20 tick 週期）屬決策行為、非抖動 bug，
+  留待後續 prompt 觀察（162 個測試）。
