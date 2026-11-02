@@ -249,7 +249,7 @@ function stepMovement(world: World): void {
       const target = tileCenter(waypoint)
       const dx = target.x - unit.x
       const dy = target.y - unit.y
-      const distance = Math.abs(dx) + Math.abs(dy) // 路徑為 4 方向，只會有一軸非 0
+      const distance = Math.abs(dx) + Math.abs(dy)
 
       if (distance <= remaining) {
         unit.x = target.x
@@ -257,9 +257,19 @@ function stepMovement(world: World): void {
         remaining -= distance
         unit.path.shift()
       } else {
-        if (dx !== 0) unit.x += Math.sign(dx) * remaining
-        else unit.y += Math.sign(dy) * remaining
-        remaining = 0
+        // 步長夾限到該軸的缺口量：路徑重排後的首格可能與目前的偏心座標
+        // 垂直對齊（dx、dy 同時非 0），若不夾限會走滿 remaining 造成
+        // 該軸過衝 → 每 tick ±1 步永久乒乓（永遠到不了格中心）。剩餘步數
+        // 留給迴圈下一輪補另一軸。
+        if (dx !== 0) {
+          const step = Math.min(remaining, Math.abs(dx))
+          unit.x += Math.sign(dx) * step
+          remaining -= step
+        } else {
+          const step = Math.min(remaining, Math.abs(dy))
+          unit.y += Math.sign(dy) * step
+          remaining -= step
+        }
       }
     }
 
