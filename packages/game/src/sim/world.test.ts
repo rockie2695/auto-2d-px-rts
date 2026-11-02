@@ -60,6 +60,41 @@ describe('移動（SPEC §2.2 固定點）', () => {
     expect(unit?.x).toBe(centerOf({ x: 10, y: 0 }).x)
     expect(unit?.y).toBe(centerOf({ x: 10, y: 0 }).y)
   })
+
+  it('偏心座標 + 垂直首格 → 步長夾限後仍收斂到格中心並前進（不乒乓）', () => {
+    // 重現線上病灶：微操重排路徑時，單位在原軸上離格中心一段「非步長倍數」
+    // 的偏移（殘餘步數造成），而新路徑第一格與之垂直。修復前步長不夾限，
+    // 每 tick 越過中心 ±1 步、永遠到不了目的地。
+    const world = createTestWorld({
+      size: 12,
+      units: [makeUnitDef({ id: 'u', stats: { hp: 100, dmg: 1, range: 0.1, attackSpeed: 1, moveSpeed: 2.1 } })],
+    })
+    const id = putUnit(world, 'player', 'u', { x: 5, y: 4 })
+    const unit = world.units.find((candidate) => candidate.id === id)
+    if (unit === undefined) throw new Error('找不到單位')
+    unit.x = centerOf({ x: 5, y: 4 }).x + 12 // 離中心偏 12（非 21 的倍數）
+
+    orderMove(world, id, { x: 5, y: 8 }) // 首格 (5,5) 正下方
+    const pathLen0 = unit.path?.length ?? -1
+    expect(pathLen0).toBeGreaterThan(0)
+
+    const xs: number[] = []
+    for (let tick = 0; tick < 40; tick++) {
+      stepWorld(world)
+      xs.push(unit.x)
+    }
+
+    // 首步把偏移補回中心，之後 x 恆等於格中心（不得再 ±21 跳動）。
+    expect(xs[0]).toBe(centerOf({ x: 5, y: 4 }).x)
+    for (const x of xs.slice(1)) {
+      expect(x).toBe(centerOf({ x: 5, y: 4 }).x)
+    }
+    // 40 tick 內抵達 (5,8) 格中心：總位移 = 橫向 12 + 垂直 4 格 × 200 = 812，
+    // moveSpeed 2.1 → 21/tick → 39 tick 走完（40 給一點餘裕）。
+    expect(unit.path).toBeNull()
+    expect(unit.x).toBe(centerOf({ x: 5, y: 8 }).x)
+    expect(unit.y).toBe(centerOf({ x: 5, y: 8 }).y)
+  })
 })
 
 /* ------------------------------------------------------------------ */
