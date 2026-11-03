@@ -239,6 +239,20 @@ function ownedCountOf(world: World, playerId: PlayerId, defId: string): number {
   return alive + queued
 }
 
+/**
+ * 命運值（Prompt 10.11）：由對局種子狀態與 tick 純函數導出的 [0,1) 值。
+ * - 同 tick 兩側同值 → 鏡像對稱（紅藍抽籤一致）。
+ * - 跨 tick／跨種子變化 → 對局多樣性（軍種組成因種子而異）。
+ * 不消耗 `world.rng`（該序列保留給未來規則）。
+ */
+function fateOf(world: World, tick: number): number {
+  let h = (world.rng.state ^ Math.imul(tick + 1, 0x9e3779b9)) >>> 0
+  h = Math.imul(h ^ (h >>> 16), 0x85ebca6b) >>> 0
+  h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35) >>> 0
+  h = (h ^ (h >>> 16)) >>> 0
+  return h / 4294967296
+}
+
 /** 評估生產候選：克制 + tier + range − 稀缺性 ＋ 壓境防守加權；不可負擔或無產能者剔除。 */
 function evaluateUnits(world: World, playerId: PlayerId, policies: PolicyValues): UnitCandidate[] {
   const player = getPlayer(world, playerId)
@@ -350,8 +364,21 @@ export function runStrategicCycle(
   }
 
   // 生產軌：最高分優先，queueTrain 拒絕則嘗試次高。
+  // 命運抽籤（Prompt 10.11）：分數在 best − FATE_BAND 內的候選以 fate 抽選先後——
+  // 同 tick 兩側同值（鏡像對稱）、跨種子變化（軍種組成因對局而異）。
+  // （稀缺性差 0.15 級的近似同分也納入，否則同帶候選永遠固定先後。）
+  const FATE_BAND = 0.2
   const unitCandidates = evaluateUnits(world, playerId, policies)
-  for (const candidate of unitCandidates) {
+  const bestScore = unitCandidates[0]?.score ?? 0
+  const tied = unitCandidates.filter((candidate) => candidate.score >= bestScore - FATE_BAND)
+  let ordered = unitCandidates
+  if (tied.length > 1) {
+    const cut = Math.floor(fateOf(world, world.tick) * tied.length) % tied.length
+    const pickedIds = new Set(tied.map((candidate) => candidate.defId))
+    const rest = unitCandidates.filter((candidate) => !pickedIds.has(candidate.defId))
+    ordered = [...tied.slice(cut), ...tied.slice(0, cut), ...rest]
+  }
+  for (const candidate of ordered) {
     const producerId = chooseProducer(world, playerId, candidate.defId)
     if (producerId === null) continue
     if (queueTrain(world, producerId, candidate.defId)) {

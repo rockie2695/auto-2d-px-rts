@@ -59,6 +59,37 @@ function runCycleRecords(
   return records
 }
 
+describe('命運抽籤：同帶候選以種子抽選（Prompt 10.11 對局多樣性）', () => {
+  /** 跑 n 個戰略循環，回傳首個 train 的 defId（無則 null）。 */
+  function firstTrained(seed: number): string | null {
+    const world = createTestWorld({
+      size: 32,
+      seed,
+      units: [makeUnitDef({ id: 'u' }), makeUnitDef({ id: 'v', stats: { hp: 80, dmg: 8, range: 3.0, attackSpeed: 1.0, moveSpeed: 1 } })],
+      buildings: [
+        makeBuildingDef({ id: 'keep', size: [3, 3] }),
+        makeBuildingDef({ id: 'barracks', produces: ['u', 'v'] }),
+      ],
+    })
+    addBuilding(world, 'player', 'keep', { x: 2, y: 2 }, { built: true, nodeId: null })
+    addBuilding(world, 'player', 'barracks', { x: 6, y: 2 }, { built: true, nodeId: null })
+    for (const record of runCycleRecords(world, 'player', DEFAULT_POLICIES, 1)) {
+      if (record.action === 'train') return record.target
+    }
+    return null
+  }
+
+  it('同 seed 決定性：兩次跑出相同結果', () => {
+    expect(firstTrained(7)).toBe(firstTrained(7))
+  })
+
+  it('跨 seed 產生多樣性：8 個種子至少出現 2 種首個生兵', () => {
+    const picks = new Set<string | null>()
+    for (let seed = 1; seed <= 8; seed++) picks.add(firstTrained(seed))
+    expect(picks.size).toBeGreaterThanOrEqual(2)
+  })
+})
+
 describe('主動防禦：壓境防守加權（保護建築與水晶，Prompt 10.6）', () => {
   const BARRACKS_PROD = makeBuildingDef({ id: 'barracks', produces: ['u'] })
 
