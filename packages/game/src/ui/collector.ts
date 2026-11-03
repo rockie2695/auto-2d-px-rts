@@ -71,8 +71,11 @@ export class ResourceSeries {
     const latest = this.points[count - 1]
     const first = this.points[0]
     if (latest === undefined || first === undefined) return null
+    // 窗口起點：不含最新樣本，取最舊的可入窗樣本；窗內無前序樣本 → 用第一點。
     let windowStart = first
-    for (const point of this.points) {
+    for (let index = 0; index < count - 1; index++) {
+      const point = this.points[index]
+      if (point === undefined) continue
       if (latest.tick - point.tick <= this.incomeWindowTicks) {
         windowStart = point
         break
@@ -122,6 +125,22 @@ function sampleSpan(samples: readonly SamplePoint[]): number {
 }
 
 export type RatioTone = 'red' | 'yellow' | 'green'
+
+/** 決策層標籤的來源型別（與 session 的 DecisionLogEntry.layer 同構）。 */
+export type DecisionLayerTag = 'strategic' | 'tactical'
+
+/** tick（20Hz）→ `m:ss` 時鐘（日誌／小隊面板共用）。 */
+export function formatClock(tick: number): string {
+  const seconds = Math.floor(tick / 20)
+  const minutes = Math.floor(seconds / 60)
+  const rest = seconds % 60
+  return `${minutes}:${String(rest).padStart(2, '0')}`
+}
+
+/** 層級中文名：戰略／戰術。 */
+export function layerLabel(layer: DecisionLayerTag): string {
+  return layer === 'strategic' ? '戰略' : '戰術'
+}
 
 /**
  * 戰力比上色（Prompt 9.5 驗收 boundaries）：

@@ -1,17 +1,5 @@
 import type { DecisionLogEntry } from '../session.ts'
-
-/** tick（20Hz）→ `m:ss`時鐘。 */
-export function formatClock(tick: number): string {
-  const seconds = Math.floor(tick / 20)
-  const minutes = Math.floor(seconds / 60)
-  const rest = seconds % 60
-  return `${minutes}:${String(rest).padStart(2, '0')}`
-}
-
-/** 層級標籤。 */
-export function layerLabel(layer: DecisionLogEntry['layer']): string {
-  return layer === 'strategic' ? '戰略' : '戰術'
-}
+import { formatClock, layerLabel } from './collector.ts'
 
 /**
  * 左下：AI 決策日誌（Prompt 9.5）。

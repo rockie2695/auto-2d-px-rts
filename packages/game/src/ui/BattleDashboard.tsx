@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 
 import { getActiveSession } from '../session.ts'
@@ -27,8 +27,8 @@ function powerRatio(playerPower: number, enemyPower: number): number {
 export function BattleDashboard({ children }: { children?: ReactNode }) {
   const [stats, setStats] = useState<BattleStats | null>(null)
   const [samples, setSamples] = useState<readonly SamplePoint[]>([])
-  const seriesRef = useRef<ResourceSeries | null>(null)
-  if (seriesRef.current === null) seriesRef.current = new ResourceSeries()
+  // 取樣器與該元件同生命週期；惰性初始化（state 而非 ref，可於渲染期讀取收入）。
+  const [series] = useState(() => new ResourceSeries())
 
   useEffect(() => {
     const refresh = (): void => {
@@ -36,16 +36,16 @@ export function BattleDashboard({ children }: { children?: ReactNode }) {
       if (active === null) return
       const next = active.getBattleStats()
       setStats(next)
-      seriesRef.current?.push(next.tick, next.playerCrystal)
-      setSamples(seriesRef.current?.chart() ?? [])
+      series.push(next.tick, next.playerCrystal)
+      setSamples(series.chart())
     }
     const timer = window.setInterval(refresh, POLL_MS)
     return () => {
       window.clearInterval(timer)
     }
-  }, [])
+  }, [series])
 
-  const income = seriesRef.current?.incomePerSec() ?? null
+  const income = series.incomePerSec()
   const ratio = powerRatio(stats?.playerPower ?? 0, stats?.enemyPower ?? 0)
 
   return (
