@@ -55,15 +55,16 @@ export function BattleDashboard({ children }: { children?: ReactNode }) {
       })
     }
     const timer = window.setInterval(refresh, POLL_MS)
+    refresh() // 掛載即取一次樣本：曲線第一格就有雙方資料（不等 250ms）
     return () => {
       window.clearInterval(timer)
     }
   }, [])
 
-  const applySlider = (key: keyof PolicyValues, value: number): void => {
+  const applyPolicy = (values: PolicyValues): void => {
     const active = getActiveSession()
     if (active === null) return
-    active.applyPolicies('player', { [key]: value })
+    active.applyPolicies('player', values)
     // 立即反映冷卻與新值（不等下一次 250ms 輪詢）。
     setPolicy(active.getPolicies('player'))
   }
@@ -85,7 +86,7 @@ export function BattleDashboard({ children }: { children?: ReactNode }) {
       </div>
       <DecisionLogPanel entries={stats?.log ?? []} />
       <SquadPanel squads={stats?.squads ?? []} />
-      <PolicyPanel policy={policy} onSliderChange={applySlider} />
+      <PolicyPanel policy={policy} onApply={applyPolicy} />
     </>
   )
 }

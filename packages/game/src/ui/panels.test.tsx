@@ -52,18 +52,25 @@ const squadOf = (
   distTiles: dist,
 })
 
-const policyOf = (overrides?: Partial<PolicySnapshot>): PolicySnapshot => ({
-  values: {
-    econMilitary: 0.5,
-    unitSize: 0.5,
-    unitRange: 0.5,
-    aggression: 0.5,
-    clusterSpread: 0.5,
-  },
-  cooldownRemainingTicks: 0,
-  summary: null,
-  ...overrides,
-})
+const DEFAULT_POLICY_VALUES = {
+  econMilitary: 0.5,
+  unitSize: 0.5,
+  unitRange: 0.5,
+  aggression: 0.5,
+  clusterSpread: 0.5,
+}
+
+const policyOf = (
+  overrides?: Partial<Omit<PolicySnapshot, 'values'>> & { values?: Partial<PolicyValues> },
+): PolicySnapshot => {
+  const { values: valueOverrides, ...rest } = overrides ?? {}
+  return {
+    values: { ...DEFAULT_POLICY_VALUES, ...valueOverrides },
+    cooldownRemainingTicks: 0,
+    summary: null,
+    ...rest,
+  }
+}
 
 /* ---------- 掛載工具 ---------- */
 
@@ -223,14 +230,14 @@ describe('ResourceChart（左上）', () => {
   })
 })
 
-/* ---------- AI 政策滑桿（Prompt 10） ---------- */
+/* ---------- AI 政策滑桿（Prompt 10：草稿＋套用/還原） ---------- */
 
 describe('PolicyPanel（底部中央）', () => {
   it('顯示 5 個滑桿（名稱／0–1 範圍／數值）＋決策摘要＋可調整狀態', () => {
     const container = render(
       <PolicyPanel
         policy={policyOf({ summary: 'build mine（收入不足）' })}
-        onSliderChange={() => {}}
+        onApply={() => {}}
       />,
     )
     // 5 個滑桿、範圍 0–1。
@@ -256,20 +263,22 @@ describe('PolicyPanel（底部中央）', () => {
     expect(container.querySelector('[data-testid="policy-cooldown"]')?.textContent).toContain('可調整')
   })
 
-  it('冷卻中：滑桿禁用、顯示倒數秒數（600 tick → 30s）', () => {
+  it('冷卻中：滑桿與套用鈕禁用、顯示倒數秒數（600 tick → 30s）', () => {
     const container = render(
-      <PolicyPanel policy={policyOf({ cooldownRemainingTicks: 600 })} onSliderChange={() => {}} />,
+      <PolicyPanel policy={policyOf({ cooldownRemainingTicks: 600 })} onApply={() => {}} />,
     )
     for (const slider of container.querySelectorAll('input[type="range"]')) {
       expect((slider as HTMLInputElement).disabled).toBe(true)
     }
+    const apply = container.querySelector('[data-testid="policy-apply"]') as HTMLButtonElement
+    expect(apply.disabled).toBe(true)
     expect(container.querySelector('[data-testid="policy-cooldown"]')?.textContent).toContain('冷卻中 30s')
   })
 
-  it('拖動滑桿 → onSliderChange 帶 key 與數值', () => {
-    const changes: Array<[string, number]> = []
+  it('拖動滑桿只改草稿（不觸發 onApply）；按套用 → 整包 draft 呼叫一次', () => {
+    const applied: PolicyValues[] = []
     const container = render(
-      <PolicyPanel policy={policyOf()} onSliderChange={(key, value) => changes.push([key, value])} />,
+      <PolicyPanel policy={policyOf()} onApply={(values) => applied.push(values)} />,
     )
     const slider = container.querySelector('[data-testid="slider-aggression"]') as HTMLInputElement
     const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
@@ -277,11 +286,66 @@ describe('PolicyPanel（底部中央）', () => {
       setter?.call(slider, '0.9')
       slider.dispatchEvent(new Event('input', { bubbles: true }))
     })
-    expect(changes).toEqual([['aggression', 0.9]])
+    // 草稿數值已顯示、onApply 還沒被呼叫、套用鈕解鎖並標示變更數。
+    expect(container.querySelector('[data-testid="slider-aggression"]')?.getAttribute('value')).toBe('0.9')
+    expect(textOf(container)).toContain('0.90')
+    expect(applied).toHaveLength(0)
+    const apply = container.querySelector('[data-testid="policy-apply"]') as HTMLButtonElement
+    expect(apply.disabled).toBe(false)
+    expect(apply.textContent).toContain('套用變更（1 項）')
+
+    act(() => {
+      apply.click()
+    })
+    expect(applied).toHaveLength(1)
+    expect(applied[0]).toEqual({
+      econMilitary: 0.5,
+      unitSize: 0.5,
+      unitRange: 0.5,
+      aggression: 0.9,
+      clusterSpread: 0.5,
+    })
   })
 
-  it('收合 → 只剩收合鈕；再點展開恢復 5 個滑桿', () => {
-    const container = render(<PolicyPanel policy={policyOf()} onSliderChange={() => {}} />)
+  it('還原：草稿回復為生效值（變更前）；無差異時兩鈕禁用', () => {
+    const applied: PolicyValues[] = []
+    const container = render(
+      <PolicyPanel
+        policy={policyOf({ values: { unitRange: 0.25 } })}
+        onApply={(values) => applied.push(values)}
+      />,
+    )
+    // 初始無草稿：套用與還原都禁用。
+    const apply = container.querySelector('[data-testid="policy-apply"]') as HTMLButtonElement
+    const reset = container.querySelector('[data-testid="policy-reset"]') as HTMLButtonElement
+    expect(apply.disabled).toBe(true)
+    expect(reset.disabled).toBe(true)
+
+    // 拖動 unitRange 0.25 → 0.7：草稿與生效值不同。
+    const slider = container.querySelector('[data-testid="slider-unitRange"]') as HTMLInputElement
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+    act(() => {
+      setter?.call(slider, '0.7')
+      slider.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    expect(container.querySelector('[data-testid="slider-unitRange"]')?.getAttribute('value')).toBe('0.7')
+
+    // 還原 → 回到 0.25（變更前）、按鈕回到禁用。
+    act(() => {
+      reset.click()
+    })
+    expect(container.querySelector('[data-testid="slider-unitRange"]')?.getAttribute('value')).toBe('0.25')
+    expect(apply.disabled).toBe(true)
+    expect(reset.disabled).toBe(true)
+    expect(applied).toHaveLength(0)
+  })
+
+  it('無差異套用鈕禁用；收合 → 只剩收合鈕；再點展開恢復 5 個滑桿', () => {
+    const container = render(<PolicyPanel policy={policyOf()} onApply={() => {}} />)
+    const apply = container.querySelector('[data-testid="policy-apply"]') as HTMLButtonElement
+    expect(apply.disabled).toBe(true) // 草稿＝生效值
+    expect(apply.textContent).toBe('套用變更')
+
     const collapseButton = container.querySelector('.hud-panel-title button') as HTMLButtonElement
     act(() => {
       collapseButton.click()
@@ -298,11 +362,13 @@ describe('PolicyPanel（底部中央）', () => {
     expect(container.querySelectorAll('input[type="range"]').length).toBe(5)
   })
 
-  it('無對局（policy null）→ 滑桿禁用、摘要走空狀態', () => {
-    const container = render(<PolicyPanel policy={null} onSliderChange={() => {}} />)
+  it('無對局（policy null）→ 滑桿與套用鈕禁用、摘要走空狀態', () => {
+    const container = render(<PolicyPanel policy={null} onApply={() => {}} />)
     for (const slider of container.querySelectorAll('input[type="range"]')) {
       expect((slider as HTMLInputElement).disabled).toBe(true)
     }
+    const apply = container.querySelector('[data-testid="policy-apply"]') as HTMLButtonElement
+    expect(apply.disabled).toBe(true)
     expect(container.querySelector('[data-testid="policy-summary"]')?.textContent).toContain('尚未有戰略決策')
   })
 })
