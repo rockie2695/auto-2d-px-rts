@@ -10,9 +10,10 @@ import type { Squad, TacticalPlan } from './tactics.ts'
  * 輕量行為樹，並是全遊戲**唯一的單位命令來源**（戰術層只產計畫）。
  *
  * 行為樹（依序命中，`hp` 門檻與 `preferredRange` 取自單位 JSON）：
- * 1. `hp < retreatHpPct × maxHp` → **撤退**：移往集結點（「最近安全點」的 MVP 簡化）、
- *    清空攻擊目標；**抵達集結點後落回行為樹**（守備隊 slot＋sim 自動接戰，
- *    Prompt 9.4 傷兵補位——不再永久停擺）。
+ * 1. `hp < retreatHpPct × maxHp` → **撤退**：移往集結點（「最近安全點」的 MVP 簡化）；
+ *    射程內有敵人 → **邊退邊打**（Prompt 10：保持最近射程內敵人為目標，
+ *    後撤本身即拉開距離，不再是清空目標的靜默撤退）；**抵達集結點後落回行為樹**
+ *    （守備隊 slot＋sim 自動接戰，Prompt 9.4 傷兵補位——不再永久停擺）。
  * 2. 最近敵在**攻擊射程內** → **攻擊**：目標取「同小隊集火目標」（離小隊重心最近的敵
  *    單位，平手取 id 小者）在射程內者，否則射程內最近者。遠程若最近敵
  *    距 < `preferredRange × KITE_MARGIN` → **風箏**：往遠離敵人的方向退，邊退邊打。
@@ -220,20 +221,27 @@ export function computeMicroPlan(
     const unitTile = tileOf(unit.x, unit.y)
     const atRally = unitTile.x === rally.x && unitTile.y === rally.y
 
-    // 1. 撤退：hp < retreatHpPct × maxHp（JSON）→ 移往集結點、清空攻擊目標。
+    // 1. 撤退：hp < retreatHpPct × maxHp（JSON）→ 移往集結點；射程內有敵人 →
+    //    邊退邊打（保持最近射程內敵人為攻擊目標，每微操循環更新；移動仍朝集結點——
+    //    後撤本身即拉開距離，Prompt 10 修：不再是「清空攻擊目標的靜默撤退」）。
     //    抵達集結點後落回行為樹（守備隊 slot＋sim 自動接戰）——傷兵補位不永久停擺。
     const maxHp = def.stats.hp
+    const rangeFixed = Math.round(def.stats.range * UNITS_PER_TILE)
     if (maxHp > 0 && unit.hp < maxHp * def.ai.retreatHpPct) {
       if (!atRally) {
         const hpPct = Math.floor((unit.hp / maxHp) * 100)
         const thresholdPct = Math.round(def.ai.retreatHpPct * 100)
+        const target = nearestEnemyWithin(world, unit, rangeFixed)
         decisions.push({
           unitId: unit.id,
           action: 'retreat',
           squadIndex,
           moveDest: shouldIssueMove(world, unit, rally) ? { x: rally.x, y: rally.y } : null,
-          attackTargetId: null,
-          reason: `hp ${hpPct}% 低於撤退門檻 ${thresholdPct}%：撤回集結點`,
+          attackTargetId: target?.id ?? null,
+          reason:
+            target !== null
+              ? `hp ${hpPct}% 低於撤退門檻 ${thresholdPct}%：邊退邊打、撤回集結點`
+              : `hp ${hpPct}% 低於撤退門檻 ${thresholdPct}%：撤回集結點`,
         })
         continue
       }
@@ -241,7 +249,6 @@ export function computeMicroPlan(
     }
 
     // 2. 敵在射程內 → 攻擊（遠程被貼近時風箏）。
-    const rangeFixed = Math.round(def.stats.range * UNITS_PER_TILE)
     const inRange = nearestEnemyWithin(world, unit, rangeFixed)
     if (inRange !== null) {
       const focusId = squadIndex === null ? null : (focusBySquad.get(squadIndex) ?? null)

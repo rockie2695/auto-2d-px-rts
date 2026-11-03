@@ -172,11 +172,11 @@ describe('集火（Prompt 8）', () => {
   })
 })
 
-describe('撤退（Prompt 8）', () => {
-  it('hp < retreatHpPct → 撤退到集結點並清空攻擊目標（優先於接戰）', () => {
+describe('撤退（Prompt 8 / Prompt 10 邊退邊打）', () => {
+  it('hp < retreatHpPct → 撤回集結點且邊退邊打（射程內敵人保持為攻擊目標）', () => {
     const world = microWorld()
     const hurtId = putUnit(world, 'player', 'melee', { x: 10, y: 10 })
-    putUnit(world, 'enemy', 'melee', { x: 10, y: 10 }) // 敵就在射程內
+    const enemyId = putUnit(world, 'enemy', 'melee', { x: 10, y: 10 }) // 敵就在射程內
     const hurt = world.units.find((unit) => unit.id === hurtId)
     if (hurt === undefined) throw new Error('找不到受傷單位')
     hurt.hp = 15 // 15% < 20%
@@ -186,12 +186,45 @@ describe('撤退（Prompt 8）', () => {
     const decisions = computeMicroPlan(world, 'player', plan)
     const decision = decisions.find((d) => d.unitId === hurtId)
     expect(decision?.action).toBe('retreat')
-    expect(decision?.moveDest).toEqual(rally)
-    expect(decision?.attackTargetId).toBeNull()
+    expect(decision?.moveDest).toEqual(rally) // 仍朝集結點後撤
+    expect(decision?.attackTargetId).toBe(enemyId) // 邊退邊打
+    expect(decision?.reason).toContain('邊退邊打')
 
     applyMicroPlan(world, decisions)
     expect(hurt.dest).toEqual(rally)
-    expect(hurt.targetId).toBeNull()
+    expect(hurt.targetId).toBe(enemyId)
+  })
+
+  it('撤退途中射程內無敵人 → 純撤退（不亂認目標）', () => {
+    const world = microWorld()
+    const hurtId = putUnit(world, 'player', 'melee', { x: 10, y: 10 })
+    putUnit(world, 'enemy', 'melee', { x: 15, y: 10 }) // 距 5 格：射程外
+    const hurt = world.units.find((unit) => unit.id === hurtId)
+    if (hurt === undefined) throw new Error('找不到受傷單位')
+    hurt.hp = 15
+
+    const rally: TilePos = { x: 2, y: 2 }
+    const plan = planWith(world, rally, [makeSquad(0, [hurtId], { x: 20, y: 20 })])
+    const decision = computeMicroPlan(world, 'player', plan).find((d) => d.unitId === hurtId)
+    expect(decision?.action).toBe('retreat')
+    expect(decision?.moveDest).toEqual(rally)
+    expect(decision?.attackTargetId).toBeNull()
+    expect(decision?.reason).not.toContain('邊退邊打')
+  })
+
+  it('撤退中每循環改打最近的射程內敵人（路過誰打誰）', () => {
+    const world = microWorld()
+    const hurtId = putUnit(world, 'player', 'melee', { x: 10, y: 10 })
+    putUnit(world, 'enemy', 'melee', { x: 11, y: 10 }) // 距 1 格
+    const closer = putUnit(world, 'enemy', 'melee', { x: 10, y: 10 }) // 同格：最近
+    const hurt = world.units.find((unit) => unit.id === hurtId)
+    if (hurt === undefined) throw new Error('找不到受傷單位')
+    hurt.hp = 15
+
+    const rally: TilePos = { x: 2, y: 2 }
+    const plan = planWith(world, rally, [makeSquad(0, [hurtId], { x: 20, y: 20 })])
+    const decision = computeMicroPlan(world, 'player', plan).find((d) => d.unitId === hurtId)
+    expect(decision?.attackTargetId).toBe(closer) // 打最近者（同格距 0 < 相鄰 1 格）
   })
 
   it('hp 充足 → 不撤退（照常接戰）', () => {
