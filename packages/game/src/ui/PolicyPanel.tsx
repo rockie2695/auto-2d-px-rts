@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 
 import type { PolicyValues } from '../ai/policy.ts'
 import type { PolicySnapshot } from '../session.ts'
@@ -10,7 +10,8 @@ import type { PolicySnapshot } from '../session.ts'
  *   「還原」把草稿回復為最後生效值（= 變更前）。
  * - 5 個滑桿各顯示名稱／0–1 範圍／數值；冷卻中滑桿與套用鈕禁用並顯示倒數。
  * - 頂部一行顯示「目前 AI 決策摘要」（最後一條戰略日誌）。
- * - 可收合（四角已被 HUD 佔用，本面板放底部中央）。
+ * - 可收合（四角已被 HUD 佔用，本面板放底部中央）；底部「結束並復盤」
+ *   手動結束對局進入戰後復盤（Prompt 10.5）。
  */
 
 const SLIDERS: ReadonlyArray<{ key: keyof PolicyValues; label: string }> = [
@@ -31,19 +32,20 @@ function diffKeys(draft: PolicyValues, committed: PolicyValues): Array<keyof Pol
 export function PolicyPanel({
   policy,
   onApply,
+  onEndMatch,
 }: {
   /** 目前政策快照（輪詢取得）；尚未有對局為 null。 */
   policy: PolicySnapshot | null
   /** 按下「套用變更」：呼叫端負責 `applyPolicies`（冷卻中按鈕已禁用）。 */
   onApply: (values: PolicyValues) => void
+  /** 按下「結束並復盤」：手動結束對局（Prompt 10.5）。 */
+  onEndMatch: () => void
 }) {
   const [open, setOpen] = useState(true)
-  // 草稿：null = 與最後生效值一致（拖動才建立）；生效值物件引用變化（真正套用）時重置。
+  // 草稿：null = 與最後生效值一致（拖動才建立）。生效值只會被本面板的
+  // 「套用變更」改動，所以在該事件裡重置草稿即可（不用 effect 同步）。
   const [draft, setDraft] = useState<PolicyValues | null>(null)
   const committed = policy?.values
-  useEffect(() => {
-    setDraft(null)
-  }, [committed])
 
   if (!open) {
     return (
@@ -106,7 +108,10 @@ export function PolicyPanel({
           data-testid="policy-apply"
           disabled={applyDisabled}
           onClick={() => {
-            if (draft !== null) onApply(draft)
+            if (draft !== null) {
+              onApply(draft)
+              setDraft(null) // 已送出：草稿歸零（生效值由輪詢/立即讀取更新）
+            }
           }}
         >
           {hasChanges ? `套用變更（${changes.length} 項）` : '套用變更'}
@@ -123,6 +128,9 @@ export function PolicyPanel({
       <div className="policy-cooldown" data-testid="policy-cooldown">
         {cooling ? `冷卻中 ${countdownSec}s（30 秒可改一次）` : '可調整（30 秒可改一次）'}
       </div>
+      <button type="button" className="policy-end" data-testid="policy-end-match" onClick={onEndMatch}>
+        結束並復盤
+      </button>
     </aside>
   )
 }

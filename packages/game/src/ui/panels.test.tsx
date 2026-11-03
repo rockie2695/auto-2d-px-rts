@@ -11,10 +11,13 @@ import { ResourceSeries } from './collector.ts'
 import { DecisionLogPanel } from './DecisionLogPanel.tsx'
 import { formatClock, layerLabel } from './collector.ts'
 import { PolicyPanel } from './PolicyPanel.tsx'
+import type { PolicyValues } from '../ai/policy.ts'
+import { PostGamePanel } from './PostGamePanel.tsx'
 import { ResourceChart } from './ResourceChart.tsx'
 import { ResourcePanel } from './ResourcePanel.tsx'
 import { SquadPanel } from './SquadPanel.tsx'
 import type { DecisionLogEntry, PolicySnapshot, SquadInfo } from '../session.ts'
+import type { ReplayRecord } from '../replay.ts'
 
 /**
  * 四角 HUD 展示面板測試（Prompt 9.5 驗收）：
@@ -235,10 +238,7 @@ describe('ResourceChart（左上）', () => {
 describe('PolicyPanel（底部中央）', () => {
   it('顯示 5 個滑桿（名稱／0–1 範圍／數值）＋決策摘要＋可調整狀態', () => {
     const container = render(
-      <PolicyPanel
-        policy={policyOf({ summary: 'build mine（收入不足）' })}
-        onApply={() => {}}
-      />,
+      <PolicyPanel policy={policyOf({ summary: 'build mine（收入不足）' })} onApply={() => {}} onEndMatch={() => {}} />,
     )
     // 5 個滑桿、範圍 0–1。
     const sliders = container.querySelectorAll('input[type="range"]')
@@ -265,7 +265,7 @@ describe('PolicyPanel（底部中央）', () => {
 
   it('冷卻中：滑桿與套用鈕禁用、顯示倒數秒數（600 tick → 30s）', () => {
     const container = render(
-      <PolicyPanel policy={policyOf({ cooldownRemainingTicks: 600 })} onApply={() => {}} />,
+      <PolicyPanel policy={policyOf({ cooldownRemainingTicks: 600 })} onApply={() => {}} onEndMatch={() => {}} />,
     )
     for (const slider of container.querySelectorAll('input[type="range"]')) {
       expect((slider as HTMLInputElement).disabled).toBe(true)
@@ -278,7 +278,7 @@ describe('PolicyPanel（底部中央）', () => {
   it('拖動滑桿只改草稿（不觸發 onApply）；按套用 → 整包 draft 呼叫一次', () => {
     const applied: PolicyValues[] = []
     const container = render(
-      <PolicyPanel policy={policyOf()} onApply={(values) => applied.push(values)} />,
+      <PolicyPanel policy={policyOf()} onApply={(values) => applied.push(values)} onEndMatch={() => {}} />,
     )
     const slider = container.querySelector('[data-testid="slider-aggression"]') as HTMLInputElement
     const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
@@ -313,6 +313,7 @@ describe('PolicyPanel（底部中央）', () => {
       <PolicyPanel
         policy={policyOf({ values: { unitRange: 0.25 } })}
         onApply={(values) => applied.push(values)}
+        onEndMatch={() => {}}
       />,
     )
     // 初始無草稿：套用與還原都禁用。
@@ -341,7 +342,7 @@ describe('PolicyPanel（底部中央）', () => {
   })
 
   it('無差異套用鈕禁用；收合 → 只剩收合鈕；再點展開恢復 5 個滑桿', () => {
-    const container = render(<PolicyPanel policy={policyOf()} onApply={() => {}} />)
+    const container = render(<PolicyPanel policy={policyOf()} onApply={() => {}} onEndMatch={() => {}} />)
     const apply = container.querySelector('[data-testid="policy-apply"]') as HTMLButtonElement
     expect(apply.disabled).toBe(true) // 草稿＝生效值
     expect(apply.textContent).toBe('套用變更')
@@ -363,12 +364,102 @@ describe('PolicyPanel（底部中央）', () => {
   })
 
   it('無對局（policy null）→ 滑桿與套用鈕禁用、摘要走空狀態', () => {
-    const container = render(<PolicyPanel policy={null} onApply={() => {}} />)
+    const container = render(<PolicyPanel policy={null} onApply={() => {}} onEndMatch={() => {}} />)
     for (const slider of container.querySelectorAll('input[type="range"]')) {
       expect((slider as HTMLInputElement).disabled).toBe(true)
     }
     const apply = container.querySelector('[data-testid="policy-apply"]') as HTMLButtonElement
     expect(apply.disabled).toBe(true)
     expect(container.querySelector('[data-testid="policy-summary"]')?.textContent).toContain('尚未有戰略決策')
+  })
+
+  it('結束並復盤鈕 → onEndMatch', () => {
+    let ended = 0
+    const container = render(
+      <PolicyPanel policy={policyOf()} onApply={() => {}} onEndMatch={() => { ended += 1 }} />,
+    )
+    const endButton = container.querySelector('[data-testid="policy-end-match"]') as HTMLButtonElement
+    act(() => {
+      endButton.click()
+    })
+    expect(ended).toBe(1)
+  })
+})
+
+/* ---------- 戰後復盤（Prompt 10.5） ---------- */
+
+const replayFixture: ReplayRecord = {
+  result: 'player',
+  durationTicks: 2400,
+  finalCrystal: { player: 830, enemy: 410 },
+  resourceSeries: [
+    { tick: 0, player: 600, enemy: 600 },
+    { tick: 1200, player: 700, enemy: 500 },
+    { tick: 2400, player: 830, enemy: 410 },
+  ],
+  unitCountSeries: [
+    { tick: 0, player: 3, enemy: 3 },
+    { tick: 1200, player: 5, enemy: 4 },
+    { tick: 2400, player: 7, enemy: 2 },
+  ],
+  policyEvents: [
+    { tick: 600, key: 'aggression', from: 0.5, to: 1 },
+    { tick: 1800, key: 'econMilitary', from: 0.5, to: 0 },
+  ],
+}
+
+describe('PostGamePanel（/post-game，Prompt 10.5）', () => {
+  it('讀 replay：勝負＋時長＋最終資源＋兩張曲線 canvas', () => {
+    const container = render(<PostGamePanel replay={replayFixture} onRestart={() => {}} />)
+    const result = container.querySelector('[data-testid="post-game-result"]')
+    expect(result?.textContent).toBe('勝利')
+    expect((result as HTMLElement).style.color).toBe('rgb(124, 227, 139)')
+    expect(container.querySelector('[data-testid="post-game-duration"]')?.textContent).toBe('時長 2:00')
+    expect(container.querySelector('[data-testid="post-game-final-crystal"]')?.textContent).toContain('830')
+    expect(container.querySelectorAll('canvas').length).toBe(2)
+    expect(container.querySelector('[data-testid="post-game-resource-chart"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="post-game-unitcount-chart"]')).not.toBeNull()
+  })
+
+  it('Policy 時間軸：標記數與明細（tick → 時鐘、key from→to）', () => {
+    const container = render(<PostGamePanel replay={replayFixture} onRestart={() => {}} />)
+    const timeline = container.querySelector('[data-testid="policy-timeline"]')
+    expect(timeline).not.toBeNull()
+    expect(timeline?.querySelectorAll('.policy-timeline-marker').length).toBe(2)
+    const listText = timeline?.querySelector('ol')?.textContent ?? ''
+    expect(listText).toContain('0:30') // tick 600 → 30 秒
+    expect(listText).toContain('aggression 0.50→1.00')
+    expect(listText).toContain('1:30') // tick 1800
+    expect(listText).toContain('econMilitary 0.50→0.00')
+  })
+
+  it('平手顯示黃色、無政策變更走空狀態、「再來一場」觸發 onRestart', () => {
+    const restarts: number[] = []
+    const container = render(
+      <PostGamePanel
+        replay={{ ...replayFixture, result: 'draw', policyEvents: [] }}
+        onRestart={() => restarts.push(1)}
+      />,
+    )
+    const result = container.querySelector('[data-testid="post-game-result"]') as HTMLElement
+    expect(result.textContent).toBe('平手')
+    expect(result.style.color).toBe('rgb(255, 216, 102)')
+    expect(container.querySelector('[data-testid="policy-timeline"]')).toBeNull()
+    expect(textOf(container)).toContain('對局中未調整政策')
+
+    const restart = container.querySelector('[data-testid="post-game-restart"]') as HTMLButtonElement
+    act(() => {
+      restart.click()
+    })
+    expect(restarts).toHaveLength(1)
+  })
+
+  it('戰敗顯示紅色', () => {
+    const container = render(
+      <PostGamePanel replay={{ ...replayFixture, result: 'enemy' }} onRestart={() => {}} />,
+    )
+    const result = container.querySelector('[data-testid="post-game-result"]') as HTMLElement
+    expect(result.textContent).toBe('戰敗')
+    expect(result.style.color).toBe('rgb(255, 122, 122)')
   })
 })

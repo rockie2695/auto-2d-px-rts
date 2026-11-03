@@ -69,6 +69,12 @@ export function BattleDashboard({ children }: { children?: ReactNode }) {
     setPolicy(active.getPolicies('player'))
   }
 
+  const endMatch = (): void => {
+    const active = getActiveSession()
+    if (active === null) return
+    active.endMatch() // App 的輪詢偵測 ended → 切換復盤頁
+  }
+
   const ratio = powerRatio(stats?.playerPower ?? 0, stats?.enemyPower ?? 0)
 
   return (
@@ -86,7 +92,7 @@ export function BattleDashboard({ children }: { children?: ReactNode }) {
       </div>
       <DecisionLogPanel entries={stats?.log ?? []} />
       <SquadPanel squads={stats?.squads ?? []} />
-      <PolicyPanel policy={policy} onApply={applyPolicy} />
+      <PolicyPanel policy={policy} onApply={applyPolicy} onEndMatch={endMatch} />
     </>
   )
 }
