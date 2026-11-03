@@ -78,6 +78,32 @@ describe('A* 尋路（SPEC §9.4）', () => {
     const b = findPath(query, { x: 0, y: 0 }, { x: 9, y: 9 })
     expect(a).toEqual(b)
   })
+
+  it('鏡像序（Prompt 10.11）：鏡射起訖 + mirrorOrder → 路徑逐格互為鏡像', () => {
+    // 對稱岩石配置（點鏡射不變）。
+    const rocks: TilePos[] = [
+      { x: 2, y: 4 },
+      { x: 7, y: 5 },
+      { x: 4, y: 4 },
+      { x: 5, y: 5 },
+    ]
+    const mirrorTile = (tile: TilePos): TilePos => ({ x: size - 1 - tile.x, y: size - 1 - tile.y })
+    const start: TilePos = { x: 0, y: 0 }
+    const goal: TilePos = { x: 9, y: 9 }
+    const blue = findPath({ size, walkable: walkableOver(rocks, size) }, start, goal)
+    const red = findPath(
+      { size, walkable: walkableOver(rocks, size), mirrorOrder: true },
+      mirrorTile(start),
+      mirrorTile(goal),
+    )
+    expect(blue).not.toBeNull()
+    expect(red).not.toBeNull()
+    if (blue === null || red === null) return
+    expect(red).toHaveLength(blue.length)
+    for (let index = 0; index < blue.length; index++) {
+      expect(red[index]).toEqual(mirrorTile(blue[index] as TilePos))
+    }
+  })
 })
 
 describe('空間雜湊', () => {

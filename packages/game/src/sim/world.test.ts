@@ -15,7 +15,7 @@ import {
   putUnit,
 } from './testFixtures.ts'
 import { snapshotWorld, createWorld, orderMove, stepWorld } from './world.ts'
-import { getPlayer, isBlockedAt, tileOf } from './types.ts'
+import { getPlayer, isBlockedAt, tileOf, UNITS_PER_TILE } from './types.ts'
 
 /* ------------------------------------------------------------------ */
 /* 移動                                                                */
@@ -497,6 +497,35 @@ describe('GameLoop（20Hz 固定步長）', () => {
     const loop = new GameLoop(b)
     for (let frame = 0; frame < 100; frame++) loop.advance(50)
     expect(JSON.stringify(snapshotWorld(a))).toBe(JSON.stringify(snapshotWorld(b)))
+  })
+})
+
+describe('生產出廠格鏡像（Prompt 10.11：公平性）', () => {
+  it('紅藍兵營的出廠格互為鏡像（偶數寬高置中亦精確）', () => {
+    // 藍兵營 (4,24)、鏡像紅兵營 (26,6)（2×2，點鏡射 (x,y) → (31−x−1, 31−y−1)）。
+    const world = createTestWorld({
+      size: 32,
+      units: [makeUnitDef({ id: 'u', trainTimeSec: 0 })],
+      buildings: [makeBuildingDef({ id: 'barracks', size: [2, 2], produces: ['u'] })],
+    })
+    const blueBarracks = addBuilding(world, 'player', 'barracks', { x: 4, y: 24 }, { built: true, nodeId: null })
+    const redBarracks = addBuilding(world, 'enemy', 'barracks', { x: 26, y: 6 }, { built: true, nodeId: null })
+    expect(queueTrain(world, blueBarracks.id, 'u')).toBe(true)
+    expect(queueTrain(world, redBarracks.id, 'u')).toBe(true)
+
+    const before = new Set(world.units.map((unit) => unit.id))
+    for (let tick = 0; tick < 5; tick++) stepWorld(world)
+    const spawned = world.units.filter((unit) => !before.has(unit.id))
+    expect(spawned).toHaveLength(2)
+    const blueUnit = spawned.find((unit) => unit.player === 'player')
+    const redUnit = spawned.find((unit) => unit.player === 'enemy')
+    expect(blueUnit).toBeDefined()
+    expect(redUnit).toBeDefined()
+    if (blueUnit === undefined || redUnit === undefined) return
+    // 固定點鏡射：x' = size×200 − x。
+    const span = world.map.size * UNITS_PER_TILE
+    expect(redUnit.x).toBe(span - blueUnit.x)
+    expect(redUnit.y).toBe(span - blueUnit.y)
   })
 })
 

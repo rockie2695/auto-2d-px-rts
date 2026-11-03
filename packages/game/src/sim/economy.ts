@@ -89,8 +89,27 @@ function stepConstruction(world: World): void {
 /* 單位生成                                                            */
 /* ------------------------------------------------------------------ */
 
-/** 在建築外圍（上、右、下、左逐環）找第一個可走空格並設定座標；無空格回傳 false。 */
-function placeAtPerimeter(world: World, building: Building, unit: Unit): boolean {
+/** 在建築外圍（上、右、下、左逐環）找第一個可走空格並設定座標；無空格回傳 false。
+ *  `mirrorOrder`（Prompt 10.11）：敵方改在**鏡像座標系**搜尋後把出廠格鏡射回來——
+ *  偶數寬高的置中、掃描序、擋路順移全部精確鏡像（紅藍新兵出廠格互為鏡像，
+ *  增援到前線的距離對稱）。 */
+function placeAtPerimeter(world: World, building: Building, unit: Unit, mirrorOrder = false): boolean {
+  if (mirrorOrder) {
+    const last = world.map.size - 1
+    const mirrored: Building = {
+      ...building,
+      x: last - (building.x + building.w - 1),
+      y: last - (building.y + building.h - 1),
+    }
+    const probe: Unit = { ...unit }
+    if (!placeAtPerimeter(world, mirrored, probe, false)) return false
+    // 固定點鏡射：x' = size×200 − x（tile 中心互鏡）。
+    const span = world.map.size * UNITS_PER_TILE
+    unit.x = span - probe.x
+    unit.y = span - probe.y
+    return true
+  }
+
   const centerX = building.x + Math.floor(building.w / 2)
   const centerY = building.y + Math.floor(building.h / 2)
   const maxRing = Math.max(building.w, building.h)
@@ -164,7 +183,7 @@ function stepProduction(world: World): void {
     const spawnTile: TilePos = { x: building.x, y: building.y }
     const unit = spawnUnit(world, building.player, job.defId, spawnTile)
     if (unit === null) continue
-    if (!placeAtPerimeter(world, building, unit)) {
+    if (!placeAtPerimeter(world, building, unit, building.player === 'enemy')) {
       // 外圍無空格：移除剛建立的單位，下一 tick 重試。
       world.units = world.units.filter((candidate) => candidate.id !== unit.id)
       player.unitCount = world.units.filter((candidate) => candidate.player === building.player).length

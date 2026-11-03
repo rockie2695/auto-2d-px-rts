@@ -289,14 +289,20 @@ function placeMirroredOpening(world: World, playerId: PlayerId): void {
 }
 
 /**
- * 移動命令：以 A\* 規劃路徑（SPEC §9.4）。失敗（無路徑）回傳 false。
+ * 移動命令：以 A\* 規劃路徑（SPEC §9.4）。
+ * 敵方單位使用**鏡像鄰居序**（Prompt 10.9/10.11）——鏡射起訖走出互為鏡像的路徑。
+ * 失敗（無路徑）回傳 false。
  */
 export function orderMove(world: World, unitId: number, dest: TilePos): boolean {
   const unit = world.units.find((candidate) => candidate.id === unitId)
   if (unit === undefined) return false
   const start = tileOf(unit.x, unit.y)
   const path = findPath(
-    { size: world.map.size, walkable: (tile) => !isBlockedAt(world, tile) },
+    {
+      size: world.map.size,
+      walkable: (tile) => !isBlockedAt(world, tile),
+      mirrorOrder: unit.player === 'enemy',
+    },
     start,
     dest,
   )

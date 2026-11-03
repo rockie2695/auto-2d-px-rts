@@ -12,6 +12,8 @@ export interface PathQuery {
   size: number
   /** 格是否可走；界外一律由本函式視為不可走。 */
   walkable: (tile: TilePos) => boolean
+  /** 敵方側鏡像鄰居序（Prompt 10.11）：鏡射起訖的查詢會走出互為鏡像的路徑。 */
+  mirrorOrder?: boolean
 }
 
 /** 鄰居展開的固定順序（北、東、南、西）。 */
@@ -20,6 +22,15 @@ const NEIGHBOR_OFFSETS: ReadonlyArray<readonly [number, number]> = [
   [1, 0],
   [0, 1],
   [-1, 0],
+]
+
+/** 鏡像序（Prompt 10.11）：藍方候選取 +offset、紅方取 −offset——
+ *  對鏡射地圖與鏡射起訖，兩次搜尋的展開序、平手裁決逐項互為鏡像。 */
+const NEIGHBOR_OFFSETS_MIRRORED: ReadonlyArray<readonly [number, number]> = [
+  [0, 1],
+  [-1, 0],
+  [0, -1],
+  [1, 0],
 ]
 
 /**
@@ -88,7 +99,8 @@ export function findPath(query: PathQuery, start: TilePos, goal: TilePos): TileP
     const current = tileAt(currentIndex)
     const currentG = gScore[currentIndex] ?? Number.POSITIVE_INFINITY
 
-    for (const [dx, dy] of NEIGHBOR_OFFSETS) {
+    const offsets = query.mirrorOrder === true ? NEIGHBOR_OFFSETS_MIRRORED : NEIGHBOR_OFFSETS
+    for (const [dx, dy] of offsets) {
       const neighbor: TilePos = { x: current.x + dx, y: current.y + dy }
       if (!inBounds(neighbor) || !walkable(neighbor)) continue
       const neighborIndex = indexOf(neighbor)
