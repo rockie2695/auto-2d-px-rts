@@ -411,6 +411,11 @@ A\* 路徑未變更且非重算點時沿用，`tick % 10 === 0`（500ms）定期
 > 左下決策日誌（時間 + 層級 + 動作 + 原因，最新 5 條、新的在上）、
 > 右下小隊狀態（一隊一行：任務 + 人數 + 戰力 + 距目標距離）。
 > 面板由單一輪詢元件（250ms）餵樣本，純邏輯集中在 `ui/collector.ts`。
+>
+> **Prompt 10 補註**：資源曲線畫**雙線**（敵方紅 3px 墊底、我方藍 2px 疊上——
+> 開局雙方經濟完全對稱時兩線重疊呈「藍芯紅邊」，仍可辨識有兩條線）、
+> y 軸 3 條格線標整數（最大值／中線／最小值，共用值域取自 `chartDomain`）、
+> 線尾 3×3 色點標示各自現值。曲線第一格就有雙方資料（掛載即取樣一次）。
 
 ### 12.2 物件選取與資訊面板（Prompt 9 / 9.1）
 
@@ -426,6 +431,28 @@ A\* 路徑未變更且非重算點時沿用，`tick % 10 === 0`（500ms）定期
     狀態（`已建成` 或 `施工中 n%`，n = `⌊builtTicks×100 / totalTicks⌋`）、佔地、左上角格座標。
 - 選取目標屬 **UI 狀態**（zustand，ui 層專屬）；命中的遊戲資料一律經組合根
   （`session.getUnitInfo` / `getBuildingInfo`）取得，面板不做任何遊戲計算。
+
+### 12.3 戰後復盤（Prompt 10.5，MVP）
+
+對局結束後的**靜態資訊頁**：輸入只有一份 `ReplayRecord`（props 純渲染），
+**不依賴即時 sim、不 import session/pixi**。路由用 App 的 state 切換
+`/game ↔ /post-game`（MVP 不引入 react-router）。
+
+- **結束條件**：一方主堡（keep）被毀 → 對方勝；同 tick 雙殺 → 平手；
+  達 `match.maxTicks` 超時 → 水晶多者勝、同數平手。
+  玩家也可在政策面板按「結束並復盤」手動提前結束（雙主堡俱在且未超時 → 平手）。
+  結束即停 ticker——畫面凍結、復盤頁不依賴即時模擬。
+- **ReplayRecord**（`replay.ts`，純資料層）：`result`（player/enemy/draw）、
+  `durationTicks`、`finalCrystal`、`resourceSeries`（雙陣營水晶，**每 20 tick 取樣、
+  tick 0 起**全程曲線）、`unitCountSeries`（雙方存活單位數，同節奏）、
+  `policyEvents`（玩家每次改滑桿的 tick/key/from/to）。
+  `parseReplay` 負責 replay 檔（JSON）驗證——MVP 以記憶體物件傳遞，
+  測試以 JSON fixture 模擬檔案，日後要存檔／分享再擴充。
+- **復盤頁內容**：勝負結果（勝利綠／戰敗紅／平手黃）、對局時長、雙方最終資源、
+  完整資源曲線與單位數量曲線（canvas 自繪兩線、y 軸 3 格線標整數、
+  x 軸 `0:00`～總時長）、Policy 調整時間軸（0→時長水平軸、每次變更一個 ▼ 標記＋
+  下方 `m:ss key from→to` 明細）、「再來一場」按鈕重開對局。
+- **不做（延後）**：反事實建議、決策歸因表、投降分析、戰鬥事件時間軸。
 
 ---
 
