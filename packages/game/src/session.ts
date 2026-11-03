@@ -2,7 +2,7 @@ import type { Application, Ticker } from 'pixi.js'
 
 import { MICRO_INTERVAL_TICKS, runMicroCycle } from './ai/micro.ts'
 import type { MicroDecision } from './ai/micro.ts'
-import { DEFAULT_POLICIES } from './ai/policy.ts'
+import { DEFAULT_POLICIES, resolvePolicies } from './ai/policy.ts'
 import type { PolicyValues } from './ai/policy.ts'
 import { runStrategicCycle, STRATEGIC_INTERVAL_TICKS } from './ai/strategy.ts'
 import type { DecisionRecord } from './ai/strategy.ts'
@@ -19,12 +19,12 @@ import type { WorldSnapshot } from './sim/world.ts'
 /** 對局種子（與 `pnpm sim` 相同，方便對照）。 */
 export const SEED = 42
 
-/** 決策日誌單條（Prompt 9.5：左下面板顯示；戰略紀錄＋戰術小隊變動）。 */
+/** 決策日誌單條（Prompt 9.5：左下面板顯示；戰略紀錄＋戰術小隊變動＋政策變更）。 */
 export interface DecisionLogEntry {
   /** 單調遞增序號（面板 key 用；同 tick 同文字的兩條也不會撞）。 */
   readonly sequence: number
   readonly tick: number
-  readonly layer: 'strategic' | 'tactical'
+  readonly layer: 'strategic' | 'tactical' | 'policy'
   readonly actor: PlayerId
   /** 一行中文：動作＋原因（戰略例 `build mine（…）`）。 */
   readonly text: string
@@ -98,6 +98,19 @@ export interface BuildingInfo {
   readonly tileY: number
 }
 
+/** 政策冷卻：30 秒 × 20Hz = 600 tick（Prompt 10：對局中每 30 秒才能改一次滑桿）。 */
+export const POLICY_COOLDOWN_TICKS = 600
+
+/** 政策滑桿快照（Prompt 10：下方面板輪詢讀取）。 */
+export interface PolicySnapshot {
+  /** 目前生效的 5 個滑桿值。 */
+  readonly values: PolicyValues
+  /** 距離下次可變更還需等待的 tick 數；0 = 可立即變更。 */
+  readonly cooldownRemainingTicks: number
+  /** 目前 AI 決策摘要：該玩家最後一條戰略日誌文字；尚無為 null。 */
+  readonly summary: string | null
+}
+
 export interface GameSession {
   readonly scene: GameScene
   /** 最新一份世界快照（插值的「當前」幀）。 */
@@ -106,6 +119,14 @@ export interface GameSession {
   getBuildingInfo(buildingId: number): BuildingInfo | null
   /** 四角面板（Prompt 9.5）一次取齊的戰況。 */
   getBattleStats(): BattleStats
+  /** 政策滑桿（Prompt 10）：讀取某玩家的滑桿值與冷卻狀態。 */
+  getPolicies(playerId: PlayerId): PolicySnapshot
+  /**
+   * 政策滑桿（Prompt 10）：套用某玩家的滑桿變更。
+   * 冷卻中（上次變更後 600 tick 內）回傳 false；無實際變更不消耗冷卻。
+   * 生效時機：即時換掉政策物件，下一個戰略／戰術週期讀到新值。
+   */
+  applyPolicies(playerId: PlayerId, values: Partial<PolicyValues>): boolean
   /** 停止 ticker 迴圈（卸載 PixiCanvas 前呼叫）。 */
   stop(): void
 }
@@ -118,7 +139,8 @@ export interface GameSession {
  *   AI 三層在 `onTick` 掛在精確的 tick 邊界（strategy 40 / tactics 10 / micro 2）。
  * - 每個 tick 完成、AI 下單後取一份 `snapshotWorld`；場景以
  *   `progressToNextTick` 為 alpha 在前後兩份快照之間插值（SPEC §2：20Hz 邏輯、60fps 渲染）。
- * - 雙方滑桿固定預設值（滑桿 UI 屬後續 prompt 的 ui 層）。
+ * - 政策滑桿（Prompt 10）：玩家側可由 ui 經 `applyPolicies` 變更（600 tick 冷卻），
+ *   下一個戰略／戰術週期讀到新值；敵方固定預設值。
  */
 export async function startGameSession(app: Application, scene: GameScene): Promise<GameSession> {
   const content = await loadContentPackFromFetch('/data')
@@ -147,6 +169,12 @@ export async function startGameSession(app: Application, scene: GameScene): Prom
     while (decisionLog.length > LOG_LIMIT) {
       decisionLog.shift()
     }
+  }
+
+  // 政策滑桿（Prompt 10）：每次變更的 tick（冷卻 600 tick）；初始 -600 = 開局即可改。
+  const lastPolicyChange: Record<PlayerId, number> = {
+    player: -POLICY_COOLDOWN_TICKS,
+    enemy: -POLICY_COOLDOWN_TICKS,
   }
 
   let prev: WorldSnapshot = snapshotWorld(world)
@@ -327,6 +355,45 @@ export async function startGameSession(app: Application, scene: GameScene): Prom
         log: [...decisionLog],
         squads,
       }
+    },
+    getPolicies: (playerId: PlayerId): PolicySnapshot => {
+      let summary: string | null = null
+      for (let index = decisionLog.length - 1; index >= 0; index--) {
+        const entry = decisionLog[index]
+        if (entry === undefined) continue
+        if (entry.actor === playerId && entry.layer === 'strategic') {
+          summary = entry.text
+          break
+        }
+      }
+      return {
+        values: policies[playerId],
+        cooldownRemainingTicks: Math.max(
+          0,
+          lastPolicyChange[playerId] + POLICY_COOLDOWN_TICKS - world.tick,
+        ),
+        summary,
+      }
+    },
+    applyPolicies: (playerId: PlayerId, values: Partial<PolicyValues>): boolean => {
+      if (world.tick - lastPolicyChange[playerId] < POLICY_COOLDOWN_TICKS) return false
+      const current = policies[playerId]
+      const next = resolvePolicies({ ...current, ...values })
+      const changed = (Object.keys(next) as Array<keyof PolicyValues>).filter(
+        (key) => next[key] !== current[key],
+      )
+      if (changed.length === 0) return true // 無實際變更：不消耗冷卻、不記日誌
+      policies[playerId] = next
+      lastPolicyChange[playerId] = world.tick
+      pushLog({
+        tick: world.tick,
+        layer: 'policy',
+        actor: playerId,
+        text: `政策變更：${changed
+          .map((key) => `${key} ${current[key].toFixed(2)}→${next[key].toFixed(2)}`)
+          .join('、')}（此後決策受影響）`,
+      })
+      return true
     },
     stop: (): void => {
       app.ticker.remove(onFrame)

@@ -2,8 +2,10 @@ import { fileURLToPath } from 'node:url'
 
 import { describe, expect, it, vi } from 'vitest'
 
+import { DEFAULT_POLICIES } from './ai/policy.ts'
 import { startGameSession } from './session.ts'
 import type { GameSession, UnitInfo } from './session.ts'
+import { POLICY_COOLDOWN_TICKS } from './session.ts'
 
 /** 內容來源改讀 public/data 目錄（避免相對 fetch 依賴 dev server）。 */
 vi.mock('./data/loadFromFetch.ts', () => ({
@@ -79,7 +81,7 @@ describe('組合根 getUnitInfo / getBattleStats（Prompt 9.5）', () => {
       expect(info.decision !== null && info.decision.length > 0).toBe(true)
     }
 
-    session.stop()
+      session.stop()
     expect(app.ticker.remove).toHaveBeenCalledOnce()
   })
 })
@@ -92,3 +94,118 @@ function findSquadMemberUnit(session: GameSession): UnitInfo | null {
   }
   return null
 }
+
+/* ------------------------------------------------------------------ */
+/* 政策滑桿 API（Prompt 10）                                            */
+/* ------------------------------------------------------------------ */
+
+describe('政策滑桿 getPolicies / applyPolicies（Prompt 10）', () => {
+  it('開局即可套用：值生效、日誌記政策層標記、冷卻中拒絕、600 tick 後解鎖', async () => {
+    const app = makeFakeApp()
+    const session: GameSession = await startGameSession(app as never, makeFakeScene() as never)
+
+    const initial = session.getPolicies('player')
+    expect(initial.values).toEqual(DEFAULT_POLICIES)
+    expect(initial.cooldownRemainingTicks).toBe(0)
+
+    expect(session.applyPolicies('player', { aggression: 1 })).toBe(true)
+    const after = session.getPolicies('player')
+    expect(after.values.aggression).toBe(1)
+    expect(after.cooldownRemainingTicks).toBe(POLICY_COOLDOWN_TICKS) // tick 0 套用 → 滿冷卻
+
+    // 日誌有政策層條目（含變更明細與「此後決策受影響」標記）。
+    const entry = session.getBattleStats().log.find((item) => item.layer === 'policy')
+    expect(entry !== undefined && entry.actor === 'player').toBe(true)
+    expect(entry?.text).toContain('政策變更')
+    expect(entry?.text).toContain('aggression 0.50→1.00')
+    expect(entry?.text).toContain('此後決策受影響')
+
+    // 冷卻中：再改被拒，值不變。
+    expect(session.applyPolicies('player', { aggression: 0 })).toBe(false)
+    expect(session.getPolicies('player').values.aggression).toBe(1)
+
+    // 跑 31 幀（620 tick ≥ 600）解鎖後可再改。
+    for (let frame = 0; frame < 31; frame++) {
+      await app.onFrame(1000)
+    }
+    expect(session.getPolicies('player').cooldownRemainingTicks).toBe(0)
+    expect(session.applyPolicies('player', { aggression: 0 })).toBe(true)
+    expect(session.getPolicies('player').values.aggression).toBe(0)
+
+    session.stop()
+    expect(app.ticker.remove).toHaveBeenCalledOnce()
+  })
+
+  it('超出 [0,1] 會被夾限', async () => {
+    // 兩個 session：冷卻內只能套用一次實際變更，故各測上界與下界。
+    const appHigh = makeFakeApp()
+    const sessionHigh: GameSession = await startGameSession(appHigh as never, makeFakeScene() as never)
+    expect(sessionHigh.applyPolicies('player', { aggression: 5 })).toBe(true)
+    expect(sessionHigh.getPolicies('player').values.aggression).toBe(1)
+    sessionHigh.stop()
+
+    const appLow = makeFakeApp()
+    const sessionLow: GameSession = await startGameSession(appLow as never, makeFakeScene() as never)
+    expect(sessionLow.applyPolicies('player', { clusterSpread: -3 })).toBe(true)
+    expect(sessionLow.getPolicies('player').values.clusterSpread).toBe(0)
+    sessionLow.stop()
+  })
+
+  it('無實際變更：接受但不消耗冷卻', async () => {
+    const app = makeFakeApp()
+    const session: GameSession = await startGameSession(app as never, makeFakeScene() as never)
+
+    expect(session.applyPolicies('player', { ...DEFAULT_POLICIES })).toBe(true) // 同值
+    expect(session.getPolicies('player').cooldownRemainingTicks).toBe(0) // 冷卻沒被吃掉
+    expect(session.applyPolicies('player', { unitRange: 1 })).toBe(true) // 立即仍可改
+    expect(session.getPolicies('player').values.unitRange).toBe(1)
+
+    session.stop()
+  })
+
+  it('滑桿在下一個戰術週期生效：clusterSpread 0.5→1 後小隊合併成 1 隊', async () => {
+    const appMerged = makeFakeApp()
+    const sessionMerged: GameSession = await startGameSession(
+      appMerged as never,
+      makeFakeScene() as never,
+    )
+    expect(sessionMerged.applyPolicies('player', { clusterSpread: 1 })).toBe(true)
+    for (let frame = 0; frame < 2; frame++) {
+      await appMerged.onFrame(1000) // 40 tick = 2 個戰術週期
+    }
+    const merged = sessionMerged
+      .getBattleStats()
+      .squads.filter((squad) => squad.player === 'player')
+    expect(merged.length).toBe(1)
+    sessionMerged.stop()
+
+    // 對照組：預設 clusterSpread 0.5 → 多隊。
+    const appDefault = makeFakeApp()
+    const sessionDefault: GameSession = await startGameSession(
+      appDefault as never,
+      makeFakeScene() as never,
+    )
+    for (let frame = 0; frame < 2; frame++) {
+      await appDefault.onFrame(1000)
+    }
+    const defaultSquads = sessionDefault
+      .getBattleStats()
+      .squads.filter((squad) => squad.player === 'player')
+    expect(defaultSquads.length).toBeGreaterThan(1)
+    sessionDefault.stop()
+  })
+
+  it('政策摘要：套用後輪詢可讀到最後一條戰略日誌', async () => {
+    const app = makeFakeApp()
+    const session: GameSession = await startGameSession(app as never, makeFakeScene() as never)
+    expect(session.getPolicies('player').summary).toBeNull() // 尚無戰略決策
+
+    for (let frame = 0; frame < 3; frame++) {
+      await app.onFrame(1000) // 60 tick ≥ 戰略週期 40
+    }
+    const summary = session.getPolicies('player').summary
+    expect(summary !== null && summary.length > 0).toBe(true)
+
+    session.stop()
+  })
+})
