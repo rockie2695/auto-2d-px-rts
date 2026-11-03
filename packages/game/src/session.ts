@@ -6,6 +6,7 @@ import { DEFAULT_POLICIES, resolvePolicies } from './ai/policy.ts'
 import type { PolicyValues } from './ai/policy.ts'
 import { runStrategicCycle, STRATEGIC_INTERVAL_TICKS } from './ai/strategy.ts'
 import type { DecisionRecord } from './ai/strategy.ts'
+import { pickMostUrgentThreat } from './ai/influence.ts'
 import { computeTacticalPlan, TACTICAL_INTERVAL_TICKS } from './ai/tactics.ts'
 import type { Squad, TacticalPlan } from './ai/tactics.ts'
 import { loadContentPackFromFetch } from './data/loadFromFetch.ts'
@@ -292,10 +293,17 @@ export async function startGameSession(app: Application, scene: GameScene): Prom
   }
 
   /** 戰術任務變動的原因句（規則式、確定性）。 */
-  const missionChangeReason = (from: Squad['mission'], to: Squad['mission']): string => {
+  const missionChangeReason = (playerId: PlayerId, from: Squad['mission'], to: Squad['mission']): string => {
     if (to === 'retreat') return '戰力處於劣勢'
     if (to === 'harass') return '軍事建築不足，騷擾敵方經濟'
     if (to === 'attack') return from === 'retreat' ? '重新取得戰力優勢' : '兵力充足，鎖定目標建築'
+    if (to === 'defend') {
+      // 主動防禦（Prompt 10.6）：攻轉守且建築受威脅 → 是「回防攔截」而非「無目標轉守」。
+      if (from !== 'retreat' && pickMostUrgentThreat(world, playerId) !== null) {
+        return '敵軍壓境，回防攔截（保護建築與水晶）'
+      }
+      return from === 'retreat' ? '解除了兵力劣勢' : '無合適進攻目標，轉為守備'
+    }
     return from === 'retreat' ? '解除了兵力劣勢' : '無合適進攻目標，轉為守備'
   }
 
@@ -314,7 +322,7 @@ export async function startGameSession(app: Application, scene: GameScene): Prom
             tick,
             layer: 'tactical',
             actor: player.id,
-            text: `小隊 #${squad.index} ${before.mission}→${squad.mission}（${missionChangeReason(before.mission, squad.mission)}）`,
+            text: `小隊 #${squad.index} ${before.mission}→${squad.mission}（${missionChangeReason(player.id, before.mission, squad.mission)}）`,
           })
         } else if (before.target.x !== squad.target.x || before.target.y !== squad.target.y) {
           pushLog({

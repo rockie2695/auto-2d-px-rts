@@ -1,6 +1,6 @@
 import { getPlayer, isBlockedAt, tileOf, UNITS_PER_TILE } from '../sim/types.ts'
 import type { Building, PlayerId, TilePos, Unit, World } from '../sim/types.ts'
-import { computeInfluenceMap, enemyThreatAtPoint, enemyThreatAtTile } from './influence.ts'
+import { computeInfluenceMap, enemyThreatAtPoint, enemyThreatAtTile, pickMostUrgentThreat } from './influence.ts'
 import type { InfluenceMap } from './influence.ts'
 import { clampSlider } from './policy.ts'
 import type { PolicyValues } from './policy.ts'
@@ -22,6 +22,16 @@ import type { PolicyValues } from './policy.ts'
  * - `attackCount = round(squadCount × aggression)`；`attackCount ≥ 2` 且隊數 ≥ 3 時
  *   其中 1 隊為 `harass`（打敵方經濟），其餘 `attack`，剩下的 `defend`。
  * - 進攻目標評分 = `建築value × 1/(敵方格威脅+1) × 1/(1+距離)`（價值高 × 防守弱 × 距離近）。
+ * - **主動防禦（Prompt 10.6）**：敵軍進入我方建築守備半徑（`DEFENSE_RADIUS_TILES`
+ *   = 6 格）→ 受威脅建築（平手優先水晶礦場）旁的來襲敵軍重心成為**攔截目標**：
+ *   守備隊前出接敵，保護建築與水晶收入；全軍出擊（無守備隊）時把離威脅最近的
+ *   一支攻擊隊拉回守備。同時戰略層生產軌加 **壓境防守加權**（`THREAT_DEFENSE_BONUS`
+ *   = 1.0，保護建築與水晶 → 持續產兵回防）。
+ *
+ * 主動防禦（Prompt 10.6）：
+ * - 敵軍進入我方建築守備半徑（`DEFENSE_RADIUS_TILES`）→ 受威脅建築（平手優先
+ *   水晶礦場）旁的來襲敵軍重心成為**攔截目標**：守備隊前出接敵，保護建築與
+ *   水晶收入；全軍出擊時把離威脅最近的一支攻擊隊拉回守備。
  *
  * 撤退（MVP 簡化版）：
  * - 隊級：`squadPower < 敵方在重心的即時威脅 × 0.7` → 本循環全隊 `retreat` 回集結點
@@ -44,7 +54,7 @@ export interface Squad {
   index: number
   mission: SquadMission
   memberIds: number[]
-  /** 任務目標格（attack/harass = 目標建築旁可走格；defend/retreat = 集結點）。 */
+  /** 任務目標格（attack/harass = 目標建築旁可走格；defend = 集結點或攔截點；retreat = 集結點）。 */
   target: TilePos
   /** attack/harass 的目標建築 id；其餘為 null。 */
   targetBuildingId: number | null
@@ -302,6 +312,40 @@ export function computeTacticalPlan(
     squad.target = approach ?? { x: rally.x, y: rally.y }
     if (approach === null) {
       squad.mission = 'defend'
+      squad.targetBuildingId = null
+    }
+  }
+
+  // 主動防禦（Prompt 10.6）：敵軍進入守備半徑（DEFENSE_RADIUS_TILES）→ 攔截。
+  // - 受威脅建築（平手時優先水晶礦場）旁的來襲敵軍重心成為守備隊的攔截目標——
+  //   保護建築與水晶收入，而不是窩在集結點等敵人打上門。
+  // - 全軍出擊（沒有守備隊）時：把離受威脅建築最近的一支攻擊／騷擾隊拉回守備；
+  //   retreat 隊不拉（已在撤）。
+  const threat = pickMostUrgentThreat(world, playerId)
+  if (threat !== null) {
+    const intercept = nearestWalkable(world, threat.centroid) ?? { x: rally.x, y: rally.y }
+    let defenders = squads.filter((squad) => squad.mission === 'defend')
+    if (defenders.length === 0) {
+      let closest: Squad | null = null
+      let closestDistance = Number.POSITIVE_INFINITY
+      for (const squad of squads) {
+        if (squad.mission !== 'attack' && squad.mission !== 'harass') continue
+        const dx = squad.centroid.x - threat.buildingCenterTile.x
+        const dy = squad.centroid.y - threat.buildingCenterTile.y
+        const distance = dx * dx + dy * dy
+        if (distance < closestDistance) {
+          closestDistance = distance
+          closest = squad
+        }
+      }
+      if (closest !== null) {
+        closest.mission = 'defend'
+        defenders = [closest]
+      }
+    }
+    for (const squad of defenders) {
+      squad.mission = 'defend'
+      squad.target = intercept
       squad.targetBuildingId = null
     }
   }

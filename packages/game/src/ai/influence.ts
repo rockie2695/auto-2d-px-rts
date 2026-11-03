@@ -87,6 +87,110 @@ export function ownThreatAtTile(map: InfluenceMap, tile: TilePos): number {
   return map.own[cellIndexOf(map, tile)] ?? 0
 }
 
+/* ------------------------------------------------------------------ */
+/* 主動防禦：受威脅建築偵測（Prompt 10.6）                              */
+/* ------------------------------------------------------------------ */
+
+/** 守備半徑（tile）：敵人進入守備建築中心此距離內即視為「來襲」。 */
+export const DEFENSE_RADIUS_TILES = 6
+
+/** 一座受威脅建築的快照（主動防禦的偵測結果）。 */
+export interface BuildingThreat {
+  buildingId: number
+  buildingDefId: string
+  /** 受威脅建築中心（格座標）。 */
+  buildingCenterTile: TilePos
+  /** 是否經濟建築（礦場＝水晶收入來源；平手時優先守）。 */
+  isEconomic: boolean
+  /** 半徑內來襲敵軍戰力合（milli）。 */
+  threatPower: number
+  /** 來襲敵軍重心（格座標）＝攔截目標。 */
+  centroid: TilePos
+  /** 來襲敵軍 unit ids（id 升冪）。 */
+  enemyIds: number[]
+}
+
+/**
+ * 偵測受威脅建築：我方存活建築的守備半徑內有存活敵軍者。
+ * 回傳依來襲戰力**降冪**（平手取 buildingId 小者），純函式、確定性。
+ */
+export function detectBuildingThreats(world: World, playerId: PlayerId): BuildingThreat[] {
+  const radiusFixed = DEFENSE_RADIUS_TILES * UNITS_PER_TILE
+  const limit = radiusFixed * radiusFixed
+  const threats: BuildingThreat[] = []
+
+  for (const building of world.buildings) {
+    if (building.player !== playerId || building.hp <= 0) continue
+    const centerX = building.x * UNITS_PER_TILE + (building.w * UNITS_PER_TILE) / 2
+    const centerY = building.y * UNITS_PER_TILE + (building.h * UNITS_PER_TILE) / 2
+
+    let threatPower = 0
+    let sumX = 0
+    let sumY = 0
+    const enemyIds: number[] = []
+    for (const unit of world.units) {
+      if (unit.player === playerId || unit.hp <= 0) continue
+      const dx = unit.x - centerX
+      const dy = unit.y - centerY
+      if (dx * dx + dy * dy > limit) continue
+      const milli = unitThreatMilli(world, unit)
+      if (milli <= 0) continue
+      threatPower += milli
+      sumX += unit.x
+      sumY += unit.y
+      enemyIds.push(unit.id)
+    }
+    if (enemyIds.length === 0) continue
+
+    threats.push({
+      buildingId: building.id,
+      buildingDefId: building.defId,
+      buildingCenterTile: {
+        x: Math.floor(centerX / UNITS_PER_TILE),
+        y: Math.floor(centerY / UNITS_PER_TILE),
+      },
+      isEconomic: world.defs.buildings[building.defId]?.requiresResourceNode === true,
+      threatPower,
+      centroid: {
+        x: Math.floor(sumX / enemyIds.length / UNITS_PER_TILE),
+        y: Math.floor(sumY / enemyIds.length / UNITS_PER_TILE),
+      },
+      enemyIds: [...enemyIds].sort((a, b) => a - b),
+    })
+  }
+
+  // 來襲戰力降冪；平手取 buildingId 小者（確定性）。
+  threats.sort((a, b) => b.threatPower - a.threatPower || a.buildingId - b.buildingId)
+  return threats
+}
+
+/**
+ * 最急迫的威脅：來襲戰力最高者；**平手時經濟建築（礦場＝水晶收入）優先**，
+ * 再取 buildingId 小者。無任何威脅回傳 null。
+ */
+export function pickMostUrgentThreat(world: World, playerId: PlayerId): BuildingThreat | null {
+  const threats = detectBuildingThreats(world, playerId)
+  let best = threats[0]
+  for (const threat of threats) {
+    if (best === undefined) {
+      best = threat
+      continue
+    }
+    if (threat.threatPower > best.threatPower) {
+      best = threat
+      continue
+    }
+    if (
+      threat.threatPower === best.threatPower &&
+      threat.isEconomic &&
+      !best.isEconomic
+    ) {
+      best = threat
+    }
+  }
+  return best ?? null
+}
+
 /** 由玩家視角重算整張影響力地圖（純函式）。 */
 export function computeInfluenceMap(world: World, playerId: PlayerId): InfluenceMap {
   const cellTiles = CELL_TILES

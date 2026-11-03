@@ -13,6 +13,7 @@ import {
 } from './tactics.ts'
 import type { TacticalPlan } from './tactics.ts'
 import { MICRO_INTERVAL_TICKS, runMicroCycle } from './micro.ts'
+import { DEFENSE_RADIUS_TILES, pickMostUrgentThreat } from './influence.ts'
 import { DEFAULT_POLICIES, resolvePolicies } from './policy.ts'
 import type { PolicyValues } from './policy.ts'
 import { runStrategicCycle, STRATEGIC_INTERVAL_TICKS } from './strategy.ts'
@@ -155,6 +156,90 @@ describe('進攻目標選擇（Prompt 7）', () => {
       world.buildings.find((building) => building.id === harass?.targetBuildingId)?.defId ?? ''
     ]
     expect(def?.requiresResourceNode).toBe(true)
+  })
+})
+
+describe('主動防禦（保護建築與水晶，Prompt 10.6）', () => {
+  it('守備半徑常數 6 格', () => {
+    expect(DEFENSE_RADIUS_TILES).toBe(6)
+  })
+
+  it('敵軍進入守備半徑 → 守備隊目標改為來襲敵軍重心（攔截點，不再窩在集結點）', () => {
+    const world = worldWithBases()
+    addBuilding(world, 'player', 'mine', { x: 8, y: 8 }, { built: true, nodeId: null })
+    putUnit(world, 'enemy', 'u', { x: 11, y: 8 }) // 距礦場中心 3 格 < 6
+    putUnit(world, 'enemy', 'u', { x: 11, y: 9 })
+    putUnit(world, 'player', 'u', { x: 3, y: 3 })
+    putUnit(world, 'player', 'u', { x: 3, y: 4 })
+
+    const plan = computeTacticalPlan(world, 'player', resolvePolicies({ aggression: 0 }))
+    const defendSquads = plan.squads.filter((squad) => squad.mission === 'defend')
+    expect(defendSquads.length).toBeGreaterThan(0)
+    for (const squad of defendSquads) {
+      expect(squad.target).not.toEqual(plan.rally) // 不再窩在集結點
+      // 攔截點 = 來襲敵軍重心附近（(11,8)–(11,9)）。
+      expect(Math.abs(squad.target.x - 11)).toBeLessThanOrEqual(1)
+      expect(Math.abs(squad.target.y - 8)).toBeLessThanOrEqual(1)
+    }
+  })
+
+  it('敵軍在守備半徑外 → 無威脅，守備隊留在集結點', () => {
+    const world = worldWithBases()
+    addBuilding(world, 'player', 'mine', { x: 8, y: 8 }, { built: true, nodeId: null })
+    putUnit(world, 'enemy', 'u', { x: 16, y: 8 }) // 距礦場 8 格 > 6
+    putUnit(world, 'player', 'u', { x: 3, y: 3 })
+    putUnit(world, 'player', 'u', { x: 3, y: 4 })
+
+    expect(pickMostUrgentThreat(world, 'player')).toBeNull()
+    const plan = computeTacticalPlan(world, 'player', resolvePolicies({ aggression: 0 }))
+    for (const squad of plan.squads) {
+      expect(squad.target).toEqual(plan.rally)
+    }
+  })
+
+  it('全軍出擊（無守備隊）→ 離受威脅建築最近的一支攻擊隊轉守備攔截', () => {
+    const world = worldWithBases()
+    addBuilding(world, 'player', 'mine', { x: 8, y: 8 }, { built: true, nodeId: null })
+    putUnit(world, 'enemy', 'u', { x: 11, y: 8 })
+    putUnit(world, 'player', 'u', { x: 3, y: 3 })
+    putUnit(world, 'player', 'u', { x: 3, y: 4 }) // 離礦場較近 → 這隊被拉回
+
+    const plan = computeTacticalPlan(world, 'player', resolvePolicies({ aggression: 1 }))
+    const defenders = plan.squads.filter((squad) => squad.mission === 'defend')
+    expect(defenders).toHaveLength(1)
+    expect(defenders[0]?.memberIds).toEqual([3]) // (3,4) 的單位（id 3）被拉回
+    const targetX = defenders[0]?.target.x ?? -99
+    const targetY = defenders[0]?.target.y ?? -99
+    expect(Math.abs(targetX - 11)).toBeLessThanOrEqual(1)
+    expect(Math.abs(targetY - 8)).toBeLessThanOrEqual(1)
+    // 其餘仍是攻擊隊，照樣鎖定敵方建築。
+    const attacks = plan.squads.filter((squad) => squad.mission === 'attack')
+    expect(attacks).toHaveLength(1)
+    expect(attacks[0]?.targetBuildingId).not.toBeNull()
+  })
+
+  it('威脅優先序：來襲戰力高者優先', () => {
+    const world = worldPlayerBaseOnly()
+    const mine = addBuilding(world, 'player', 'mine', { x: 10, y: 2 }, { built: true, nodeId: null })
+    putUnit(world, 'enemy', 'u', { x: 5, y: 2 }) // keep 旁 1 敵
+    putUnit(world, 'enemy', 'u', { x: 11, y: 2 }) // mine 旁 3 敵
+    putUnit(world, 'enemy', 'u', { x: 11, y: 3 })
+    putUnit(world, 'enemy', 'u', { x: 12, y: 2 })
+
+    const threat = pickMostUrgentThreat(world, 'player')
+    expect(threat?.buildingId).toBe(mine.id)
+    expect(threat?.threatPower).toBeGreaterThan(0)
+  })
+
+  it('威脅優先序：同戰力時水晶礦場（經濟）優先於主堡', () => {
+    const world = worldPlayerBaseOnly()
+    const mine = addBuilding(world, 'player', 'mine', { x: 10, y: 2 }, { built: true, nodeId: null })
+    putUnit(world, 'enemy', 'u', { x: 5, y: 2 }) // keep 旁
+    putUnit(world, 'enemy', 'u', { x: 11, y: 2 }) // mine 旁
+
+    const threat = pickMostUrgentThreat(world, 'player')
+    expect(threat?.buildingId).toBe(mine.id) // 同戰力 → 經濟（水晶）優先
+    expect(threat?.isEconomic).toBe(true)
   })
 })
 

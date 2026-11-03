@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest'
 import type { UnitDef } from '@auto-2d-px-rts/shared'
 
 import { DEFAULT_POLICIES, resolvePolicies } from './policy.ts'
-import { runStrategicCycle, STRATEGIC_INTERVAL_TICKS } from './strategy.ts'
+import { runStrategicCycle, STRATEGIC_INTERVAL_TICKS, THREAT_DEFENSE_BONUS } from './strategy.ts'
 import type { DecisionRecord, StrategicAction } from './strategy.ts'
 import { loadContentPackFromDir } from '../data/loadFromDir.ts'
 import {
@@ -58,6 +58,36 @@ function runCycleRecords(
   }
   return records
 }
+
+describe('主動防禦：壓境防守加權（保護建築與水晶，Prompt 10.6）', () => {
+  const BARRACKS_PROD = makeBuildingDef({ id: 'barracks', produces: ['u'] })
+
+  /** 我方 keep＋兵營＋1 單位；threatened 時敵軍壓境（keep 守備半徑內）。 */
+  function worldWith(threatened: boolean): World {
+    const world = createTestWorld({
+      size: 32,
+      units: [makeUnitDef({ id: 'u' })],
+      buildings: [makeBuildingDef({ id: 'keep', size: [3, 3], ai: { value: 1000 } }), BARRACKS_PROD],
+    })
+    addBuilding(world, 'player', 'keep', { x: 2, y: 2 }, { built: true, nodeId: null })
+    addBuilding(world, 'player', 'barracks', { x: 6, y: 2 }, { built: true, nodeId: null })
+    putUnit(world, 'player', 'u', { x: 3, y: 6 })
+    if (threatened) putUnit(world, 'enemy', 'u', { x: 5, y: 5 }) // 距 keep／barracks < 6 格
+    return world
+  }
+
+  it('加權常數 1.0；壓境時生產候選分數恰 +1.0（突破稀缺性懲罰持續產兵）', () => {
+    expect(THREAT_DEFENSE_BONUS).toBe(1.0)
+    const trainScore = (threatened: boolean): number | undefined => {
+      const records = runCycleRecords(worldWith(threatened), 'player', resolvePolicies({ econMilitary: 1 }), 1)
+      const train = records.find((record) => record.action === 'train')
+      return train?.reason.candidates[0]?.score
+    }
+    const base = trainScore(false)
+    expect(base).toBeDefined()
+    expect(trainScore(true)).toBeCloseTo((base ?? 0) + THREAT_DEFENSE_BONUS, 6)
+  })
+})
 
 function countBuildings(world: World, playerId: PlayerId, defId: string): number {
   return world.buildings.filter((b) => b.player === playerId && b.defId === defId).length

@@ -1,5 +1,6 @@
 import type { PolicyValues } from './policy.ts'
 import { buildEconWeight, buildMilitaryWeight } from './policy.ts'
+import { pickMostUrgentThreat } from './influence.ts'
 import type { DecisionTopFactor, ExplainState } from './explain.ts'
 import { explainBuild, explainTrain } from './explain.ts'
 import type { Role } from '@auto-2d-px-rts/shared'
@@ -28,6 +29,14 @@ export const STRATEGIC_INTERVAL_TICKS = 40
 
 /** 同種單位每多 1 個的稀缺性懲罰（防止鎖死單一種，同分時自然均攤）。 */
 const SCARCITY_PENALTY = 0.05
+
+/**
+ * 敵軍壓境時的防守生產加權（Prompt 10.6，保護建築與水晶）：
+ * 我方建築守備半徑內有敵軍（`pickMostUrgentThreat` 非 null）時，
+ * 每個單位候選分數 +1.0——即使重經濟（econMilitary=1）或稀缺性懲罰偏高，
+ * 也會持續產兵回防，而不是眼看礦場被拆。
+ */
+export const THREAT_DEFENSE_BONUS = 1.0
 
 /** tier 由小到大的序數（unitSize 滑桿目標：0 → large、1 → small）。 */
 const TIER_ORDER: Record<string, number> = { small: 0, medium: 1, large: 2 }
@@ -222,10 +231,12 @@ function ownedCountOf(world: World, playerId: PlayerId, defId: string): number {
   return alive + queued
 }
 
-/** 評估生產候選：克制 + tier + range − 稀缺性；不可負擔或無產能者剔除。 */
+/** 評估生產候選：克制 + tier + range − 稀缺性 ＋ 壓境防守加權；不可負擔或無產能者剔除。 */
 function evaluateUnits(world: World, playerId: PlayerId, policies: PolicyValues): UnitCandidate[] {
   const player = getPlayer(world, playerId)
   const share = enemyRoleShare(world, playerId)
+  // 主動防禦（Prompt 10.6）：我方建築受威脅 → 防守生產加權（保護建築與水晶）。
+  const threatened = pickMostUrgentThreat(world, playerId) !== null
 
   const candidates: UnitCandidate[] = []
   for (const defId of world.faction.roster) {
@@ -244,7 +255,8 @@ function evaluateUnits(world: World, playerId: PlayerId, policies: PolicyValues)
       counterScoreOf(world, def.role, share) +
       tierScoreOf(world, defId, policies) +
       rangeScoreOf(world, defId, policies) -
-      ownedCountOf(world, playerId, defId) * SCARCITY_PENALTY
+      ownedCountOf(world, playerId, defId) * SCARCITY_PENALTY +
+      (threatened ? THREAT_DEFENSE_BONUS : 0)
     candidates.push({ defId, score })
   }
 
