@@ -38,7 +38,9 @@ packages/
       render/             PixiJS 渲染
       ai/                 傳統 AI（效用函數、行為樹、影響力地圖）
       data/               JSON 載入與 Zod 驗證
-      ui/                 React UI 覆蓋層
+      session.ts          組合根（data + sim + ai + render 匯合；政策 API / 復盤）
+      replay.ts           戰後復盤紀錄（純資料層，可重播）
+      ui/                 React UI 覆蓋層（四角 HUD、政策面板、復盤頁）
 ```
 
 ## 分層規則
@@ -55,14 +57,14 @@ packages/
 ## 模擬約束
 
 - 固定 tick **20Hz**（`TICK_INTERVAL_MS = 50`）。
-- 種子化 RNG，相同輸入必得相同輸出。
+- 種子化 RNG：**同一場內**相同輸入必得相同輸出（對局種子每場隨機、記錄進 replay 可重播）。
 - AI 只用傳統演算法，禁止 LLM。
 - 玩家只能調整 Policy 滑桿，不得對單位下直接指令。
 
 ## MVP 範圍
 
 只做：1 種資源（藍水晶）、2 個單位（melee / ranged）、2 個建築（主堡 / 兵營）、
-5 個 Policy 滑桿、1 張 32x32 地圖、1 個 AI 對手。
+5 個 Policy 滑桿、1 張 32x32 地圖、1 個 AI 對手、戰後復盤頁（資源／單位／戰力曲線）。
 
 **不做**（MVP 驗證通過後才加）：裝甲、三資源、編輯器、平衡工具、元 AI、
 反事實建議、統計檢定、像素風 uPlot。

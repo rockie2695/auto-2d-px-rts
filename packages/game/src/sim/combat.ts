@@ -162,7 +162,7 @@ function removeDead(world: World): void {
 }
 
 /**
- * 跑一個 tick 的戰鬥（在移動之後、下一 tick 的經濟之前，見 SPEC §11 順序）。
+ * 跑一個 tick 的戰鬥（在移動之後、下一 tick 的經濟之前，見 SPEC §2.3 順序）。
  *
  * **同時結算（Prompt 10.9）**：先以 tick 開始時的狀態收集本 tick 所有攻擊
  * （攻擊者 → 目標 → 傷害），最後統一結算——消除 unit id 順序帶來的先手優勢

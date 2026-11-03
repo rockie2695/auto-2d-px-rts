@@ -401,7 +401,7 @@ function stepRegeneration(world: World): void {
 /* tick 入口                                                           */
 /* ------------------------------------------------------------------ */
 
-/** 推進一個 tick（SPEC §11 順序）。 */
+/** 推進一個 tick（SPEC §2.3 順序）。 */
 export function stepWorld(world: World): void {
   world.tick += 1
   stepEconomy(world)
