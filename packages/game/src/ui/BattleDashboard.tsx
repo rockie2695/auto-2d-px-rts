@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 
+import type { PolicyValues } from '../ai/policy.ts'
 import { getActiveSession } from '../session.ts'
-import type { BattleStats } from '../session.ts'
+import type { BattleStats, PolicySnapshot } from '../session.ts'
 import { ResourceSeries } from './collector.ts'
 import type { SamplePoint } from './collector.ts'
 import { DecisionLogPanel } from './DecisionLogPanel.tsx'
+import { PolicyPanel } from './PolicyPanel.tsx'
 import { ResourceChart } from './ResourceChart.tsx'
 import { ResourcePanel } from './ResourcePanel.tsx'
 import { SquadPanel } from './SquadPanel.tsx'
@@ -26,13 +28,15 @@ function powerRatio(playerPower: number, enemyPower: number): number {
  */
 export function BattleDashboard({ children }: { children?: ReactNode }) {
   const [stats, setStats] = useState<BattleStats | null>(null)
+  const [policy, setPolicy] = useState<PolicySnapshot | null>(null)
   // 取樣器只活在 effect 內（ref 僅在 effect 存取，避免渲染期讀 ref）；
-  // 曲線樣本與收入在 refresh 內由同一實例一次算好存進 state。
+  // 曲線樣本與雙方收入在 refresh 內由同一實例一次算好存進 state。
   const seriesRef = useRef<ResourceSeries | null>(null)
-  const [curve, setCurve] = useState<{ samples: readonly SamplePoint[]; income: number | null }>({
-    samples: [],
-    income: null,
-  })
+  const [curve, setCurve] = useState<{
+    samples: readonly SamplePoint[]
+    playerIncome: number | null
+    enemyIncome: number | null
+  }>({ samples: [], playerIncome: null, enemyIncome: null })
 
   useEffect(() => {
     if (seriesRef.current === null) seriesRef.current = new ResourceSeries()
@@ -42,14 +46,27 @@ export function BattleDashboard({ children }: { children?: ReactNode }) {
       if (active === null) return
       const next = active.getBattleStats()
       setStats(next)
-      series.push(next.tick, next.playerCrystal)
-      setCurve({ samples: series.chart(), income: series.incomePerSec() })
+      setPolicy(active.getPolicies('player'))
+      series.push(next.tick, next.playerCrystal, next.enemyCrystal)
+      setCurve({
+        samples: series.chart(),
+        playerIncome: series.playerIncome(),
+        enemyIncome: series.enemyIncome(),
+      })
     }
     const timer = window.setInterval(refresh, POLL_MS)
     return () => {
       window.clearInterval(timer)
     }
   }, [])
+
+  const applySlider = (key: keyof PolicyValues, value: number): void => {
+    const active = getActiveSession()
+    if (active === null) return
+    active.applyPolicies('player', { [key]: value })
+    // 立即反映冷卻與新值（不等下一次 250ms 輪詢）。
+    setPolicy(active.getPolicies('player'))
+  }
 
   const ratio = powerRatio(stats?.playerPower ?? 0, stats?.enemyPower ?? 0)
 
@@ -60,14 +77,15 @@ export function BattleDashboard({ children }: { children?: ReactNode }) {
         <ResourcePanel
           playerCrystal={stats?.playerCrystal ?? 0}
           enemyCrystal={stats?.enemyCrystal ?? 0}
-          playerIncome={curve.income}
-          enemyIncome={curve.income}
+          playerIncome={curve.playerIncome}
+          enemyIncome={curve.enemyIncome}
           ratio={ratio}
         />
         {children}
       </div>
       <DecisionLogPanel entries={stats?.log ?? []} />
       <SquadPanel squads={stats?.squads ?? []} />
+      <PolicyPanel policy={policy} onSliderChange={applySlider} />
     </>
   )
 }

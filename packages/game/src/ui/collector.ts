@@ -1,7 +1,8 @@
 /**
- * 戰況面板的純邏輯層（Prompt 9.5）：
- * - `ResourceSeries` 只收樣本（500ms 一推、120 點 ≈ 60s 滾動窗），
- *   ui 元件只餵 `(tick, crystal)`、取曲線座標，不做任何計算。
+ * 戰況面板的純邏輯層（Prompt 9.5 / Prompt 10）：
+ * - `ResourceSeries` 收雙陣營樣本（500ms 一推、120 點 ≈ 60s 滾動窗），
+ *   ui 元件只餵 `(tick, player, enemy)`、取曲線座標，不做任何計算。
+ *   兩條線共用同一絕對值域（同一 y 軸直接比較），收入各自估算。
  * - `ratioTone`：戰力比上色門檻（< 0.7 紅、0.7–1.4 黃、> 1.4 綠）。
  * - `chartPoints`：樣本 → 0..1 正規化曲線座標（畫在 canvas 用）。
  */
@@ -9,8 +10,10 @@
 export interface SamplePoint {
   /** 邏輯 tick（20Hz）。 */
   tick: number
-  /** 當下的水晶存量。 */
-  crystal: number
+  /** 玩家（藍）水晶存量。 */
+  player: number
+  /** 敵方（紅）水晶存量。 */
+  enemy: number
 }
 
 export interface ChartPoint {
@@ -20,7 +23,7 @@ export interface ChartPoint {
   y: number
 }
 
-/** 水晶曲線：120 點環（60 秒）＋ 200 tick 窗口收入估算。 */
+/** 水晶曲線：雙陣營各 120 點環（60 秒）＋ 200 tick 窗口收入估算。 */
 export class ResourceSeries {
   private readonly points: SamplePoint[] = []
 
@@ -38,9 +41,9 @@ export class ResourceSeries {
     this.incomeWindowTicks = incomeWindowTicks
   }
 
-  /** 推進一個樣本；過期（超出滾動窗）的舊樣本在此淘汰。 */
-  push(tick: number, crystal: number): void {
-    this.points.push({ tick, crystal })
+  /** 推進一個雙陣營樣本；過期（超出滾動窗）的舊樣本在此淘汰。 */
+  push(tick: number, player: number, enemy: number): void {
+    this.points.push({ tick, player, enemy })
     const cutoff = tick - this.spanTicks
     while (this.points.length > 0) {
       const oldest = this.points[0]
@@ -65,7 +68,7 @@ export class ResourceSeries {
    * 收入速率（水晶/秒）：以 200 tick（10 秒）窗口的首尾差除以實際跨度。
    * 樣本不足 2 點回傳 null（曲線還沒成形，不硬估）。
    */
-  incomePerSec(): number | null {
+  private incomePerSecOf(get: (point: SamplePoint) => number): number | null {
     const count = this.points.length
     if (count < 2) return null
     const latest = this.points[count - 1]
@@ -83,16 +86,31 @@ export class ResourceSeries {
     }
     const deltaTicks = Math.max(1, latest.tick - windowStart.tick)
     const ticksPerSec = 20
-    const income = ((latest.crystal - windowStart.crystal) / deltaTicks) * ticksPerSec
+    const income = ((get(latest) - get(windowStart)) / deltaTicks) * ticksPerSec
     return Math.round(income * 10) / 10
+  }
+
+  /** 玩家（藍）收入速率（水晶/秒）；樣本不足回 null。 */
+  playerIncome(): number | null {
+    return this.incomePerSecOf((point) => point.player)
+  }
+
+  /** 敵方（紅）收入速率（水晶/秒）；樣本不足回 null。 */
+  enemyIncome(): number | null {
+    return this.incomePerSecOf((point) => point.enemy)
   }
 }
 
 /** 值域取整用的極小常數（樣本全平行時避免除以 0）。 */
 const VALUE_EPSILON = 1
 
-/** 樣本 → 0..1 曲線座標（x 右端 = 現在；y 下小上大、值域 = min..max±10%）。 */
-export function chartPoints(samples: readonly SamplePoint[]): ChartPoint[] {
+/** 樣本 → 0..1 曲線座標（x 右端 = 現在；y 下小上大）。
+ *  `pick` 選擇取哪一條線的值；值域固定為雙線共用的絕對 min..max±10%
+ *  （兩條線畫在同一軸上直接比較，各自歸一會失真）。 */
+export function chartPoints(
+  samples: readonly SamplePoint[],
+  pick: (point: SamplePoint) => number,
+): ChartPoint[] {
   const count = samples.length
   if (count === 0) return []
   const latest = samples[count - 1]
@@ -101,8 +119,8 @@ export function chartPoints(samples: readonly SamplePoint[]): ChartPoint[] {
   let minValue = Number.POSITIVE_INFINITY
   let maxValue = Number.NEGATIVE_INFINITY
   for (const sample of samples) {
-    minValue = Math.min(minValue, sample.crystal)
-    maxValue = Math.max(maxValue, sample.crystal)
+    minValue = Math.min(minValue, sample.player, sample.enemy)
+    maxValue = Math.max(maxValue, sample.player, sample.enemy)
   }
   const span = Math.max(maxValue - minValue, VALUE_EPSILON)
   const pad = span * 0.1
@@ -110,7 +128,7 @@ export function chartPoints(samples: readonly SamplePoint[]): ChartPoint[] {
   const top = maxValue + pad
   return samples.map((sample) => ({
     x: Math.max(0, Math.min(1, (sample.tick - startX) / sampleSpan(samples))),
-    y: Math.max(0, Math.min(1, (sample.crystal - bottom) / (top - bottom))),
+    y: Math.max(0, Math.min(1, (pick(sample) - bottom) / (top - bottom))),
   }))
 }
 
@@ -127,7 +145,7 @@ function sampleSpan(samples: readonly SamplePoint[]): number {
 export type RatioTone = 'red' | 'yellow' | 'green'
 
 /** 決策層標籤的來源型別（與 session 的 DecisionLogEntry.layer 同構）。 */
-export type DecisionLayerTag = 'strategic' | 'tactical'
+export type DecisionLayerTag = 'strategic' | 'tactical' | 'policy'
 
 /** tick（20Hz）→ `m:ss` 時鐘（日誌／小隊面板共用）。 */
 export function formatClock(tick: number): string {
@@ -137,9 +155,10 @@ export function formatClock(tick: number): string {
   return `${minutes}:${String(rest).padStart(2, '0')}`
 }
 
-/** 層級中文名：戰略／戰術。 */
+/** 層級中文名：戰略／戰術／政策。 */
 export function layerLabel(layer: DecisionLayerTag): string {
-  return layer === 'strategic' ? '戰略' : '戰術'
+  if (layer === 'strategic') return '戰略'
+  return layer === 'policy' ? '政策' : '戰術'
 }
 
 /**

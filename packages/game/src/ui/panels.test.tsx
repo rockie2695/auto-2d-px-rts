@@ -10,10 +10,11 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { ResourceSeries } from './collector.ts'
 import { DecisionLogPanel } from './DecisionLogPanel.tsx'
 import { formatClock, layerLabel } from './collector.ts'
+import { PolicyPanel } from './PolicyPanel.tsx'
 import { ResourceChart } from './ResourceChart.tsx'
 import { ResourcePanel } from './ResourcePanel.tsx'
 import { SquadPanel } from './SquadPanel.tsx'
-import type { DecisionLogEntry, SquadInfo } from '../session.ts'
+import type { DecisionLogEntry, PolicySnapshot, SquadInfo } from '../session.ts'
 
 /**
  * 四角 HUD 展示面板測試（Prompt 9.5 驗收）：
@@ -49,6 +50,19 @@ const squadOf = (
   memberCount: 2,
   power: 84,
   distTiles: dist,
+})
+
+const policyOf = (overrides?: Partial<PolicySnapshot>): PolicySnapshot => ({
+  values: {
+    econMilitary: 0.5,
+    unitSize: 0.5,
+    unitRange: 0.5,
+    aggression: 0.5,
+    clusterSpread: 0.5,
+  },
+  cooldownRemainingTicks: 0,
+  summary: null,
+  ...overrides,
 })
 
 /* ---------- 掛載工具 ---------- */
@@ -195,8 +209,8 @@ describe('SquadPanel（右下）', () => {
 describe('ResourceChart（左上）', () => {
   it('有樣本時掛出 canvas 且畫折線（不出等待文案）', () => {
     const series = new ResourceSeries()
-    series.push(0, 10)
-    series.push(100, 12)
+    series.push(0, 10, 8)
+    series.push(100, 12, 9)
     const container = render(<ResourceChart samples={series.chart()} />)
     expect(container.querySelector('canvas')).not.toBeNull()
     expect(textOf(container)).not.toContain('等待資料')
@@ -206,5 +220,89 @@ describe('ResourceChart（左上）', () => {
     const container = render(<ResourceChart samples={[]} />)
     const canvas = container.querySelector('canvas')
     expect(canvas).not.toBeNull() // 空樣本 → 折線分支跳過，畫「等待資料」文字於 canvas 上
+  })
+})
+
+/* ---------- AI 政策滑桿（Prompt 10） ---------- */
+
+describe('PolicyPanel（底部中央）', () => {
+  it('顯示 5 個滑桿（名稱／0–1 範圍／數值）＋決策摘要＋可調整狀態', () => {
+    const container = render(
+      <PolicyPanel
+        policy={policyOf({ summary: 'build mine（收入不足）' })}
+        onSliderChange={() => {}}
+      />,
+    )
+    // 5 個滑桿、範圍 0–1。
+    const sliders = container.querySelectorAll('input[type="range"]')
+    expect(sliders.length).toBe(5)
+    for (const slider of sliders) {
+      expect((slider as HTMLInputElement).min).toBe('0')
+      expect((slider as HTMLInputElement).max).toBe('1')
+      expect((slider as HTMLInputElement).disabled).toBe(false)
+    }
+    // 名稱與數值。
+    expect(textOf(container)).toContain('經濟↔軍事')
+    expect(textOf(container)).toContain('單位規模')
+    expect(textOf(container)).toContain('單位射程')
+    expect(textOf(container)).toContain('侵略性')
+    expect(textOf(container)).toContain('集結密度')
+    expect(container.querySelector('[data-testid="slider-aggression"]')?.getAttribute('value')).toBe('0.5')
+    expect(textOf(container)).toContain('0.50')
+    // 決策摘要與冷卻狀態。
+    expect(container.querySelector('[data-testid="policy-summary"]')?.textContent).toBe(
+      'build mine（收入不足）',
+    )
+    expect(container.querySelector('[data-testid="policy-cooldown"]')?.textContent).toContain('可調整')
+  })
+
+  it('冷卻中：滑桿禁用、顯示倒數秒數（600 tick → 30s）', () => {
+    const container = render(
+      <PolicyPanel policy={policyOf({ cooldownRemainingTicks: 600 })} onSliderChange={() => {}} />,
+    )
+    for (const slider of container.querySelectorAll('input[type="range"]')) {
+      expect((slider as HTMLInputElement).disabled).toBe(true)
+    }
+    expect(container.querySelector('[data-testid="policy-cooldown"]')?.textContent).toContain('冷卻中 30s')
+  })
+
+  it('拖動滑桿 → onSliderChange 帶 key 與數值', () => {
+    const changes: Array<[string, number]> = []
+    const container = render(
+      <PolicyPanel policy={policyOf()} onSliderChange={(key, value) => changes.push([key, value])} />,
+    )
+    const slider = container.querySelector('[data-testid="slider-aggression"]') as HTMLInputElement
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+    act(() => {
+      setter?.call(slider, '0.9')
+      slider.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    expect(changes).toEqual([['aggression', 0.9]])
+  })
+
+  it('收合 → 只剩收合鈕；再點展開恢復 5 個滑桿', () => {
+    const container = render(<PolicyPanel policy={policyOf()} onSliderChange={() => {}} />)
+    const collapseButton = container.querySelector('.hud-panel-title button') as HTMLButtonElement
+    act(() => {
+      collapseButton.click()
+    })
+    expect(textOf(container)).toContain('收合中')
+    expect(container.querySelectorAll('input[type="range"]').length).toBe(0)
+
+    const expandButton = container.querySelector(
+      '[data-testid="policy-panel-collapsed"]',
+    ) as HTMLButtonElement
+    act(() => {
+      expandButton.click()
+    })
+    expect(container.querySelectorAll('input[type="range"]').length).toBe(5)
+  })
+
+  it('無對局（policy null）→ 滑桿禁用、摘要走空狀態', () => {
+    const container = render(<PolicyPanel policy={null} onSliderChange={() => {}} />)
+    for (const slider of container.querySelectorAll('input[type="range"]')) {
+      expect((slider as HTMLInputElement).disabled).toBe(true)
+    }
+    expect(container.querySelector('[data-testid="policy-summary"]')?.textContent).toContain('尚未有戰略決策')
   })
 })
