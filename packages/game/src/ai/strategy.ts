@@ -88,12 +88,18 @@ interface BuildingCandidate {
   tile: TilePos
 }
 
-/** 玩家的錨點：keep 佔地左上角；無 keep（合成世界）用出生點。 */
+/** 玩家的錨點：keep **中心格**（Prompt 10.9：點鏡射不變量——紅藍錨點互為精確鏡像，
+ *  配合 mirrorOrder 平手裁決，兩側的建築位置決策逐項鏡像）。無 keep（合成世界）用出生點。 */
 function anchorOf(world: World, playerId: PlayerId): TilePos {
   const keep = world.buildings.find(
     (building) => building.player === playerId && building.defId === 'keep',
   )
-  if (keep !== undefined) return { x: keep.x, y: keep.y }
+  if (keep !== undefined) {
+    return {
+      x: keep.x + Math.floor(keep.w / 2),
+      y: keep.y + Math.floor(keep.h / 2),
+    }
+  }
   return getPlayer(world, playerId).spawn
 }
 
@@ -123,6 +129,8 @@ function evaluateBuildings(world: World, playerId: PlayerId, policies: PolicyVal
   const anchor = anchorOf(world, playerId)
   const econ = buildEconWeight(policies)
   const military = buildMilitaryWeight(policies)
+  // 幾何掃描序鏡像（Prompt 10.9）：敵方側平手裁決反轉，紅藍建築位置互為鏡像。
+  const mirrorOrder = playerId === 'enemy'
 
   const candidates: BuildingCandidate[] = []
   for (const defId of world.faction.buildings) {
@@ -133,9 +141,9 @@ function evaluateBuildings(world: World, playerId: PlayerId, policies: PolicyVal
     const [w, h] = def.size
     let tile: TilePos | null
     if (def.requiresResourceNode === true) {
-      tile = tryFindNearestFreeNode(world, anchor)?.tile ?? null
+      tile = tryFindNearestFreeNode(world, anchor, mirrorOrder)?.tile ?? null
     } else {
-      tile = findNearestPlacement(world, anchor, w, h)
+      tile = findNearestPlacement(world, anchor, w, h, mirrorOrder)
     }
     if (tile === null) continue
 

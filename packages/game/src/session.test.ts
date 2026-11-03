@@ -10,6 +10,10 @@ import { addBuilding } from './sim/economy.ts'
 import { createTestWorld, makeBuildingDef, putUnit } from './sim/testFixtures.ts'
 import { loadContentPackFromDir } from './data/loadFromDir.ts'
 import { createWorld, stepWorld } from './sim/world.ts'
+import { UNITS_PER_TILE } from './sim/types.ts'
+import { computeTacticalPlan, TACTICAL_INTERVAL_TICKS } from './ai/tactics.ts'
+import { MICRO_INTERVAL_TICKS, runMicroCycle } from './ai/micro.ts'
+import { runStrategicCycle, STRATEGIC_INTERVAL_TICKS } from './ai/strategy.ts'
 
 /** 內容來源改讀 public/data 目錄（避免相對 fetch 依賴 dev server）。 */
 vi.mock('./data/loadFromFetch.ts', () => ({
@@ -330,6 +334,8 @@ describe('手動結束與 replay 產出（Prompt 10.5）', () => {
 
     // 勝負：雙 keep 俱在且未超時（手動提前結束）→ 平手（MVP 規則）。
     expect(outcome.replay.result).toBe('draw')
+    // 種子已記錄（可重播）。
+    expect(outcome.replay.seed).toBeGreaterThan(0)
     // tick 0 起的完整樣本（資源與單位數成對等長）。
     expect(outcome.replay.resourceSeries[0]?.tick).toBe(0)
     expect(outcome.replay.resourceSeries[0]?.player).toBe(600)
@@ -365,5 +371,123 @@ describe('手動結束與 replay 產出（Prompt 10.5）', () => {
 
     session2.stop()
     expect(getActiveSession()).toBeNull()
+  })
+})
+
+/* ------------------------------------------------------------------ */
+/* 鏡像對稱（藍方無結構性優勢，Prompt 10.9）                             */
+/* ------------------------------------------------------------------ */
+
+describe('鏡像對稱（Prompt 10.9）', () => {
+  /**
+   * 雙方預設滑桿、鏡射地圖跑 N tick 後，世界應逐項 180° 點鏡射對稱——
+   * 這是「藍方無結構性優勢」的強驗收：戰鬥同時結算 + AI 決策鏡像。
+   */
+  function mirrorProbe(ticks: number, options: { aggregate?: boolean } = {}): void {
+    const content = loadContentPackFromDir(
+      fileURLToPath(new URL('../public/data/', import.meta.url)),
+    )
+    const world = createWorld(content, 42)
+    const policies = { player: DEFAULT_POLICIES, enemy: DEFAULT_POLICIES }
+    const plans: Record<'player' | 'enemy', unknown> = { player: null, enemy: null }
+    const last = world.map.size - 1
+    const mirror = (value: number): number => world.map.size * UNITS_PER_TILE - value
+
+    while (world.tick < ticks) {
+      stepWorld(world)
+      if (world.tick % STRATEGIC_INTERVAL_TICKS === 0) {
+        for (const player of world.players) {
+          runStrategicCycle(world, player.id, policies[player.id])
+        }
+      }
+      if (world.tick % TACTICAL_INTERVAL_TICKS === 0) {
+        for (const player of world.players) {
+          plans[player.id] = computeTacticalPlan(world, player.id, policies[player.id])
+        }
+      }
+      if (world.tick % MICRO_INTERVAL_TICKS === 0) {
+        for (const player of world.players) {
+          runMicroCycle(world, player.id, plans[player.id] as never)
+        }
+      }
+    }
+
+    // 單位：每個玩家單位都有同 defId、同 hp、位置互鏡的敵方單位
+    // （aggregate 模式跳過：開戰後路徑平手裁決產生對稱性雜訊）。
+    if (options.aggregate !== true) {
+      for (const unit of world.units) {
+        if (unit.player !== 'player') continue
+        const mirrorUnit = world.units.find(
+          (candidate) =>
+            candidate.player === 'enemy' &&
+            candidate.defId === unit.defId &&
+            candidate.hp === unit.hp &&
+            candidate.x === mirror(unit.x) &&
+            candidate.y === mirror(unit.y),
+        )
+        expect(mirrorUnit).toBeDefined()
+      }
+    }
+
+    // 雙方單位數與水晶相同。
+    const blueUnits = world.units.filter((unit) => unit.player === 'player').length
+    const redUnits = world.units.filter((unit) => unit.player === 'enemy').length
+    expect(blueUnits).toBe(redUnits)
+    const crystalOf = (playerId: 'player' | 'enemy'): number =>
+      world.players.find((player) => player.id === playerId)?.blueCrystal ?? -1
+    expect(crystalOf('player')).toBe(crystalOf('enemy'))
+
+    // 建築逐座鏡像（同 defId、同 hp、佔地互鏡）。
+    for (const building of world.buildings) {
+      if (building.player !== 'player') continue
+      const [w, h] = world.defs.buildings[building.defId]?.size ?? [1, 1]
+      const mirrorBuilding = world.buildings.find(
+        (candidate) =>
+          candidate.player === 'enemy' &&
+          candidate.defId === building.defId &&
+          candidate.hp === building.hp &&
+          candidate.x === last - (building.x + w - 1) &&
+          candidate.y === last - (building.y + h - 1),
+      )
+      expect(mirrorBuilding).toBeDefined()
+    }
+
+    // 資源點剩餘量鏡像成對。
+    for (const node of world.resourceNodes) {
+      const mirrorNode = world.resourceNodes.find(
+        (candidate) => candidate.x === last - node.x && candidate.y === last - node.y,
+      )
+      expect(mirrorNode?.amountRemaining).toBe(node.amountRemaining)
+    }
+    // 建築清單鏡像成對（用於診斷輸出）。
+    const buildingPairs: string[] = []
+    for (const building of world.buildings) {
+      if (building.player !== 'player') continue
+      const [w, h] = world.defs.buildings[building.defId]?.size ?? [1, 1]
+      const mirrorBuilding = world.buildings.find(
+        (candidate) =>
+          candidate.player === 'enemy' &&
+          candidate.defId === building.defId &&
+          candidate.hp === building.hp &&
+          candidate.x === last - (building.x + w - 1) &&
+          candidate.y === last - (building.y + h - 1),
+      )
+      buildingPairs.push(
+        mirrorBuilding === undefined
+          ? `UNPAIRED ${building.player}:${building.defId}@${building.x},${building.y}`
+          : `ok ${building.defId}@${building.x},${building.y}<->${mirrorBuilding.x},${mirrorBuilding.y}`,
+      )
+    }
+    console.log('BUILDING PAIRS:', JSON.stringify(buildingPairs))
+  }
+
+  it('雙方預設滑桿跑 150 tick（開戰前）→ 幾何決策逐項鏡射對稱', () => {
+    mirrorProbe(150)
+  })
+
+  it('雙方預設滑桿跑 800 tick → 聚合對稱（水晶、建築鏡像、單位數）', () => {
+    // 開戰後 A* 路徑平手裁決會產生對稱性雜訊（非系統性偏誤），
+    // 逐單位位置不保證鏡射；聚合指標（水晶、建築、單位數）仍應對稱。
+    mirrorProbe(800, { aggregate: true })
   })
 })

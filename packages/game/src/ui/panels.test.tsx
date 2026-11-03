@@ -437,6 +437,7 @@ describe('PolicyPanel（底部中央）', () => {
 /* ---------- 戰後復盤（Prompt 10.5） ---------- */
 
 const replayFixture: ReplayRecord = {
+  seed: 42,
   result: 'player',
   durationTicks: 2400,
   finalCrystal: { player: 830, enemy: 410 },

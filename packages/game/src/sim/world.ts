@@ -13,6 +13,7 @@ import {
   speedToFixedPerTick,
   tileCenter,
   tileOf,
+  UNITS_PER_TILE,
 } from './types.ts'
 import type { PlayerId, TilePos, World } from './types.ts'
 
@@ -24,7 +25,7 @@ import type { PlayerId, TilePos, World } from './types.ts'
  * 敵方側取玩家佈局的 180° 點鏡射——地圖、出生點、資源點與開局全部鏡射對稱。
  */
 
-/** 距離排序的候選（平手依 y、x、index，保證跨平台一致）。 */
+/** 距離排序的候選（平手依 y、x，保證跨平台一致）。 */
 interface ScoredTile {
   distance: number
   y: number
@@ -37,19 +38,26 @@ function nearestFirst(a: ScoredTile, b: ScoredTile): number {
   return a.x - b.x
 }
 
+/** 敵方側（Prompt 10.9）：平手裁決取 y、x 降冪——對鏡射位置排出互為鏡像的候選順序。 */
+function nearestFirstMirrored(a: ScoredTile, b: ScoredTile): number {
+  if (a.distance !== b.distance) return a.distance - b.distance
+  if (a.y !== b.y) return b.y - a.y
+  return b.x - a.x
+}
+
 function manhattan(a: TilePos, b: TilePos): number {
   return Math.abs(a.x - b.x) + Math.abs(a.y - b.y)
 }
 
-/** 依離 anchor 的距離列出所有格（確定性排序）。 */
-function tilesByDistance(size: number, anchor: TilePos): TilePos[] {
+/** 依離 anchor 的距離列出所有格（確定性排序；mirrorOrder 反轉平手裁決，Prompt 10.9）。 */
+function tilesByDistance(size: number, anchor: TilePos, mirrorOrder = false): TilePos[] {
   const scored: ScoredTile[] = []
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
       scored.push({ distance: manhattan({ x, y }, anchor), y, x })
     }
   }
-  scored.sort(nearestFirst)
+  scored.sort(mirrorOrder ? nearestFirstMirrored : nearestFirst)
   return scored.map((tile) => ({ x: tile.x, y: tile.y }))
 }
 
@@ -73,33 +81,70 @@ function isFootprintValid(world: World, tile: TilePos, w: number, h: number): bo
 }
 
 /**
- * 找離 anchor 最近的有效建築位置（界內、無岩石、無重疊、未壓資源點）。
- * 找不到回傳 null（地圖塞滿時）；確定性排序：距離 → y → x。
+ * 找離 anchor 最近的建築位置：以**佔地中心**到 anchor 的距離排序
+ * （Prompt 10.9：中心距對鏡射等距——top-left 距離在鏡射下會平移 (w−1,h−1) 而失稱）。
+ * 平手裁決：鏡像序 y、x 降冪（敵方）或升冪（我方）。找不到回傳 null。
  */
 export function findNearestPlacement(
   world: World,
   anchor: TilePos,
   w: number,
   h: number,
+  mirrorOrder = false,
 ): TilePos | null {
-  for (const tile of tilesByDistance(world.map.size, anchor)) {
-    if (isFootprintValid(world, tile, w, h)) return tile
+  const size = world.map.size
+  const anchorFixed = tileCenter(anchor)
+  const candidates: Array<{ tile: TilePos; distance: number; y: number; x: number }> = []
+  for (let y = 0; y + h <= size; y++) {
+    for (let x = 0; x + w <= size; x++) {
+      const centerX = x * UNITS_PER_TILE + (w * UNITS_PER_TILE) / 2
+      const centerY = y * UNITS_PER_TILE + (h * UNITS_PER_TILE) / 2
+      const distance = Math.abs(centerX - anchorFixed.x) + Math.abs(centerY - anchorFixed.y)
+      candidates.push({ tile: { x, y }, distance, y, x })
+    }
+  }
+  candidates.sort((a, b) => {
+    if (a.distance !== b.distance) return a.distance - b.distance
+    if (mirrorOrder) {
+      if (a.y !== b.y) return b.y - a.y
+      return b.x - a.x
+    }
+    if (a.y !== b.y) return a.y - b.y
+    return a.x - b.x
+  })
+  for (const candidate of candidates) {
+    if (isFootprintValid(world, candidate.tile, w, h)) return candidate.tile
   }
   return null
 }
 
-/** 找離 anchor 最近的空閒資源點；無空閒資源點回傳 null。 */
+/** 找離 anchor 最近的空閒資源點；無空閒資源點回傳 null。
+ *  `mirrorOrder`（Prompt 10.9）：平手（同距離節點成對鏡像）時敵方取 y、x 較大者，
+ *  讓紅藍對鏡射位置選出互為鏡像的節點。 */
 export function tryFindNearestFreeNode(
   world: World,
   anchor: TilePos,
+  mirrorOrder = false,
 ): { tile: TilePos; nodeIndex: number } | null {
   let best: { tile: TilePos; nodeIndex: number } | null = null
   let bestDistance = Number.POSITIVE_INFINITY
   world.resourceNodes.forEach((node, index) => {
     if (node.buildingId !== null) return
     const distance = manhattan(anchor, { x: node.x, y: node.y })
+    if (distance > bestDistance) return
     if (distance < bestDistance) {
       bestDistance = distance
+      best = { tile: { x: node.x, y: node.y }, nodeIndex: index }
+      return
+    }
+    // 同距離平手：座標制裁決（鏡像序取 y、x 較大者）。
+    const bestTile = best?.tile
+    if (bestTile === undefined) return
+    const better =
+      mirrorOrder
+        ? node.y > bestTile.y || (node.y === bestTile.y && node.x > bestTile.x)
+        : node.y < bestTile.y || (node.y === bestTile.y && node.x < bestTile.x)
+    if (better) {
       best = { tile: { x: node.x, y: node.y }, nodeIndex: index }
     }
   })

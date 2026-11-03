@@ -10,6 +10,7 @@ import type { ReplayRecord } from './replay.ts'
  */
 
 const FIXTURE: ReplayRecord = {
+  seed: 42,
   result: 'player',
   durationTicks: 2400,
   finalCrystal: { player: 830, enemy: 410 },
@@ -30,8 +31,9 @@ describe('ReplayRecorder', () => {
     recorder.sample(0, 600, 600, 3, 3)
     recorder.sample(20, 605, 610, 3, 4)
     recorder.recordPolicy({ tick: 10, key: 'aggression', from: 0.5, to: 0.8 })
-    const record = recorder.finish('player', { player: 605, enemy: 610 }, 20)
+    const record = recorder.finish(42, 'player', { player: 605, enemy: 610 }, 20)
 
+    expect(record.seed).toBe(42)
     expect(record.result).toBe('player')
     expect(record.durationTicks).toBe(20)
     expect(record.finalCrystal).toEqual({ player: 605, enemy: 610 })
@@ -88,6 +90,7 @@ describe('parseReplay（replay 檔驗證）', () => {
 
   it('空 policyEvents / 空序列合法（極短局）', () => {
     const record = parseReplay({
+      seed: 7,
       result: 'draw',
       durationTicks: 0,
       finalCrystal: { player: 600, enemy: 600 },

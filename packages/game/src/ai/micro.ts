@@ -43,11 +43,15 @@ export const KITE_MARGIN = 0.7
 /** 追擊門檻：射程外但 ≤ `range + CHASE_MARGIN`（格）就前壓接戰（SPEC §9.3 第 4 節）。 */
 export const CHASE_MARGIN = 1.0
 
-/**
- * 追擊支援半徑（tile，Prompt 10.8）：追擊**風箏型遠程**敵人（在我方射程外）時，
- * 需有其他友軍位於該敵人此半徑內作支援——單兵追風箏 = 被射死，不追、守在建築旁等支援。
- */
+/** 追擊支援半徑（tile，Prompt 10.8）：追擊**風箏型遠程**敵人（在我方射程外）時，
+ * 需有其他友軍位於該敵人此半徑內作支援——單兵追風箏 = 被射死，不追、守在建築旁等支援。 */
 export const CHASE_SUPPORT_RADIUS_TILES = 4
+
+/**
+ * 撤退安全半徑（tile，Prompt 10.9）：傷兵只在**附近此半徑內有敵人**時撤退——
+ * 附近無敵人時照常跟隊推進（途中回血），不再無限期蹲集結點造成後期呆滯。
+ */
+export const SAFE_RETREAT_RADIUS_TILES = 8
 
 export type MicroAction = 'retreat' | 'attack' | 'kite' | 'chase' | 'formation' | 'rally'
 
@@ -165,13 +169,21 @@ function squadFocus(world: World, playerId: PlayerId, squad: Squad): Unit | null
   return best ?? nearest
 }
 
-/** 隊形位置：以 squad.target 為基準，依成員序取環狀 slot（擋路則順移）。 */
-function formationSlot(world: World, base: TilePos, index: number): TilePos {
+/** 隊形位置：以 squad.target 為基準，依成員序取環狀 slot（擋路則順移）。
+ *  `mirrorOrder`（Prompt 10.9）：敵方側 slot 取**負偏移**——紅藍隊形互為鏡像。 */
+function formationSlot(
+  world: World,
+  base: TilePos,
+  index: number,
+  mirrorOrder = false,
+): TilePos {
   const size = world.map.size
   for (let attempt = 0; attempt < FORMATION_OFFSETS.length; attempt++) {
     const offset = FORMATION_OFFSETS[(index + attempt) % FORMATION_OFFSETS.length]
     if (offset === undefined) continue
-    const tile = { x: base.x + offset.x, y: base.y + offset.y }
+    const tile = mirrorOrder
+      ? { x: base.x - offset.x, y: base.y - offset.y }
+      : { x: base.x + offset.x, y: base.y + offset.y }
     if (tile.x < 0 || tile.y < 0 || tile.x >= size || tile.y >= size) continue
     if (!isBlockedAt(world, tile)) return tile
   }
@@ -179,13 +191,20 @@ function formationSlot(world: World, base: TilePos, index: number): TilePos {
 }
 
 /** 風箏後退格：往遠離敵人的方向退 2 格（對角 → 主軸 → 朝集結點退）。 */
-function kiteDest(world: World, unit: Unit, enemy: Unit, rally: TilePos): TilePos {
+function kiteDest(
+  world: World,
+  playerId: PlayerId,
+  unit: Unit,
+  enemy: Unit,
+  rally: TilePos,
+): TilePos {
   const from = tileOf(unit.x, unit.y)
   const enemyTile = tileOf(enemy.x, enemy.y)
   const dx = Math.sign(from.x - enemyTile.x)
   const dy = Math.sign(from.y - enemyTile.y)
   const step = 2
   const size = world.map.size
+  const mirrorOrder = playerId === 'enemy'
   const candidates: TilePos[] = []
   if (dx !== 0 || dy !== 0) {
     candidates.push({ x: from.x + dx * step, y: from.y + dy * step })
@@ -200,7 +219,11 @@ function kiteDest(world: World, unit: Unit, enemy: Unit, rally: TilePos): TilePo
   const rdx = Math.sign(rally.x - from.x)
   const rdy = Math.sign(rally.y - from.y)
   if (rdx !== 0 || rdy !== 0) {
-    const fallback = nearestWalkable(world, { x: from.x + rdx * step, y: from.y + rdy * step })
+    const fallback = nearestWalkable(
+      world,
+      { x: from.x + rdx * step, y: from.y + rdy * step },
+      mirrorOrder,
+    )
     if (fallback !== null) return fallback
   }
   return { x: from.x, y: from.y }
@@ -261,6 +284,8 @@ export function computeMicroPlan(
   const units = world.units
     .filter((unit) => unit.player === playerId && unit.hp > 0)
     .sort((a, b) => a.id - b.id)
+  // 敵方側的幾何掃描序鏡像（Prompt 10.9）：紅藍對鏡射位置挑出互為鏡像的格。
+  const mirrorOrder = playerId === 'enemy'
 
   for (const unit of units) {
     const def = world.defs.units[unit.defId]
@@ -273,11 +298,16 @@ export function computeMicroPlan(
     // 1. 撤退：hp < retreatHpPct × maxHp（JSON）→ 移往集結點；射程內有敵人 →
     //    邊退邊打（保持最近射程內敵人為攻擊目標，每微操循環更新；移動仍朝集結點——
     //    後撤本身即拉開距離，Prompt 10 修：不再是「清空攻擊目標的靜默撤退」）。
+    //    撤退安全距離（Prompt 10.9）：附近 SAFE_RETREAT_RADIUS_TILES 內**有敵人**才撤退——
+    //    無近距離威脅時傷兵照常跟隊推進（途中回血），不再無限期蹲集結點。
     //    抵達集結點後落回行為樹（守備隊 slot＋sim 自動接戰）——傷兵補位不永久停擺。
     const maxHp = def.stats.hp
     const rangeFixed = Math.round(def.stats.range * UNITS_PER_TILE)
-    if (maxHp > 0 && unit.hp < maxHp * def.ai.retreatHpPct) {
-      if (!atRally) {
+    if (maxHp > 0 && unit.hp < maxHp * def.ai.retreatHpPct && !atRally) {
+      const near = nearestEnemy(world, unit)
+      const safeLimit = SAFE_RETREAT_RADIUS_TILES * UNITS_PER_TILE
+      const threatened = near !== null && near.distSq <= safeLimit * safeLimit
+      if (threatened) {
         const hpPct = Math.floor((unit.hp / maxHp) * 100)
         const thresholdPct = Math.round(def.ai.retreatHpPct * 100)
         const target = nearestEnemyWithin(world, unit, rangeFixed)
@@ -294,7 +324,7 @@ export function computeMicroPlan(
         })
         continue
       }
-      // 在集結點：繼續走下面的分支（編隊／攻擊），僅清空攻擊目標由 sim 自動接戰接手。
+      // 附近無敵人：落入下方編隊分支照常跟隊（途中回血）。
     }
 
     // 2. 敵在射程內 → 攻擊（遠程被貼近時風箏）。
@@ -317,7 +347,7 @@ export function computeMicroPlan(
         const nearest = nearestEnemy(world, unit)
         const threshold = def.ai.preferredRange * KITE_MARGIN * UNITS_PER_TILE
         if (nearest !== null && nearest.distSq < threshold * threshold) {
-          const dest = kiteDest(world, unit, nearest.unit, rally)
+          const dest = kiteDest(world, playerId, unit, nearest.unit, rally)
           decisions.push({
             unitId: unit.id,
             action: 'kite',
@@ -384,7 +414,7 @@ export function computeMicroPlan(
 
     // 3. 有小隊 → 移往隊形位置（attack／harass 同時對目標建築聚火）。
     if (squad !== undefined) {
-      const slot = formationSlot(world, squad.target, slotByUnit.get(unit.id) ?? 0)
+      const slot = formationSlot(world, squad.target, slotByUnit.get(unit.id) ?? 0, mirrorOrder)
       decisions.push({
         unitId: unit.id,
         action: 'formation',

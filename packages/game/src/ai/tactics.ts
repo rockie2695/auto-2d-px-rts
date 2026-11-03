@@ -227,18 +227,28 @@ function unitPower(world: World, unit: Unit): number {
   return Math.round((def.ai.value * Math.max(0, unit.hp)) / def.stats.hp)
 }
 
-/** 由指定格往外找最近的可走格（環狀搜尋，固定順序）。微操層亦共用。 */
-export function nearestWalkable(world: World, tile: TilePos): TilePos | null {
+/** 由指定格往外找最近的可走格（環狀搜尋）。微操層亦共用。
+ *  `mirrorOrder`（Prompt 10.9）：敵方側用**鏡像掃描序**（候選取負偏移）——
+ *  讓紅藍雙方對鏡射位置挑出互為鏡像的格，消除「兩邊都往左上找」的幾何偏誤。 */
+export function nearestWalkable(
+  world: World,
+  tile: TilePos,
+  mirrorOrder = false,
+): TilePos | null {
   const { size } = world.map
   const inBounds = (candidate: TilePos): boolean =>
     candidate.x >= 0 && candidate.y >= 0 && candidate.x < size && candidate.y < size
+  const candidateOf = (offset: TilePos): TilePos =>
+    mirrorOrder
+      ? { x: tile.x - offset.x, y: tile.y - offset.y }
+      : { x: tile.x + offset.x, y: tile.y + offset.y }
 
   if (inBounds(tile) && !isBlockedAt(world, tile)) return { x: tile.x, y: tile.y }
   for (let radius = 1; radius < size * 2; radius++) {
     for (let dy = -radius; dy <= radius; dy++) {
       for (let dx = -radius; dx <= radius; dx++) {
         if (Math.max(Math.abs(dx), Math.abs(dy)) !== radius) continue
-        const candidate = { x: tile.x + dx, y: tile.y + dy }
+        const candidate = candidateOf({ x: dx, y: dy })
         if (!inBounds(candidate)) continue
         if (!isBlockedAt(world, candidate)) return candidate
       }
@@ -250,6 +260,7 @@ export function nearestWalkable(world: World, tile: TilePos): TilePos | null {
 /** 集結點：自己 keep 旁的可走格；沒有 keep 時退回出生點附近。 */
 export function rallyPoint(world: World, playerId: PlayerId): TilePos {
   const spawn = getPlayer(world, playerId).spawn
+  const mirrorOrder = playerId === 'enemy'
   const keep = world.buildings.find(
     (building) => building.player === playerId && building.hp > 0 && building.defId === 'keep',
   )
@@ -257,7 +268,7 @@ export function rallyPoint(world: World, playerId: PlayerId): TilePos {
     keep === undefined
       ? spawn
       : { x: keep.x + Math.floor(keep.w / 2), y: keep.y + Math.floor(keep.h / 2) }
-  return nearestWalkable(world, base) ?? { x: spawn.x, y: spawn.y }
+  return nearestWalkable(world, base, mirrorOrder) ?? { x: spawn.x, y: spawn.y }
 }
 
 /** 建築中心（固定點）。 */
@@ -326,14 +337,23 @@ function squadSpreadSquared(unitById: Map<number, Unit>, squad: Squad): number {
 }
 
 /** 集結點：從隊重心朝目標格方向前進 `REGROUP_DISTANCE_TILES` 的最近可走格（整數比例，確定性）。 */
-function stagingPoint(world: World, centroid: TilePos, targetTile: TilePos): TilePos | null {
+function stagingPoint(
+  world: World,
+  playerId: PlayerId,
+  centroid: TilePos,
+  targetTile: TilePos,
+): TilePos | null {
   const dx = targetTile.x - centroid.x
   const dy = targetTile.y - centroid.y
   const steps = Math.max(Math.abs(dx), Math.abs(dy))
-  if (steps === 0) return nearestWalkable(world, centroid)
+  if (steps === 0) return nearestWalkable(world, centroid, playerId === 'enemy')
   const stepX = Math.round((dx * REGROUP_DISTANCE_TILES) / steps)
   const stepY = Math.round((dy * REGROUP_DISTANCE_TILES) / steps)
-  return nearestWalkable(world, { x: centroid.x + stepX, y: centroid.y + stepY })
+  return nearestWalkable(
+    world,
+    { x: centroid.x + stepX, y: centroid.y + stepY },
+    playerId === 'enemy',
+  )
 }
 
 /** 目標附近的敵方守軍（守備半徑內）與其戰力（milli）。 */
@@ -403,7 +423,6 @@ export function computeTacticalPlan(
   ready.sort((a, b) => a.id - b.id)
 
   const sizing = squadSizing(policies)
-  const rawCount = countSquads(ready.length, sizing)
 
   // 全體存活單位索引（含傷兵，供補位與重心計算共用）。
   const unitById = new Map<number, Unit>()
@@ -411,9 +430,17 @@ export function computeTacticalPlan(
     if (unit.player === playerId && unit.hp > 0) unitById.set(unit.id, unit)
   }
 
+  // 後期呆滯修復（Prompt 10.9）：全部單位都受傷（ready 為 0）時，傷兵也照常編隊——
+  // 否則小隊數 = 0、全軍蹲集結點不推進；微操層的安全距離撤退規則會保護他們。
+  const disengagedUnits = disengaged
+    .map((id) => unitById.get(id))
+    .filter((unit): unit is Unit => unit !== undefined)
+  const groupable = ready.length > 0 ? ready : disengagedUnits
+  const rawCount = countSquads(groupable.length, sizing)
+
   // 就近聚類編組（Prompt 10.7）：同區域的兵編成同一隊——小隊是地理群而非名冊，
   // 行軍自然成團。空群丟棄、重新編號（0..n-1）。
-  const groups = groupByProximity(ready, rawCount, sizing.size)
+  const groups = groupByProximity(groupable, rawCount, sizing.size)
   const missions = assignMissions(
     groups.filter((group) => group.length > 0).length,
     policies,
@@ -444,7 +471,8 @@ export function computeTacticalPlan(
   // 傷兵補位（SPEC §9.2 補註，Prompt 9.4）：脫離戰鬥的單位不閒置——
   // round-robin 補進**守備隊**尾端（attack／harass 隊不收傷兵，避免拖累行軍）。
   // 已在守備隊佔位 → micro 層撤退抵達集結點後落回行為樹，照常吃 slot 並自動接戰。
-  if (disengaged.length > 0) {
+  // （ready 為 0 時傷兵已直接作為編組成員，不重複補位——Prompt 10.9。）
+  if (disengaged.length > 0 && ready.length > 0) {
     const defendSquads = squads.filter((squad) => squad.mission === 'defend')
     defendSquads.forEach((squad, index) => {
       const id = disengaged[index]
@@ -492,7 +520,7 @@ export function computeTacticalPlan(
       continue
     }
     const center = buildingCenter(target)
-    const approach = nearestWalkable(world, tileOf(center.x, center.y))
+    const approach = nearestWalkable(world, tileOf(center.x, center.y), playerId === 'enemy')
     if (approach === null) {
       squad.mission = 'defend'
       squad.targetBuildingId = null
@@ -520,7 +548,7 @@ export function computeTacticalPlan(
         const econ = pickTarget(world, influence, centroidFixed, econCandidates)
         if (econ !== null) {
           const econCenter = buildingCenter(econ)
-          const econApproach = nearestWalkable(world, tileOf(econCenter.x, econCenter.y))
+          const econApproach = nearestWalkable(world, tileOf(econCenter.x, econCenter.y), playerId === 'enemy')
           if (econApproach !== null) {
             squad.mission = 'harass'
             squad.targetBuildingId = econ.id
@@ -538,7 +566,7 @@ export function computeTacticalPlan(
     // 集結再攻（Prompt 10.7）：成員鬆散（最遠成員離重心 > REGROUP_DISTANCE_TILES）
     // → 先往「重心→目標」方向的集結點聚攏；到齊後直接鎖定目標建築。
     if (squadSpreadSquared(unitById, squad) > REGROUP_LIMIT_SQUARED) {
-      const staging = stagingPoint(world, squad.centroid, tileOf(center.x, center.y))
+      const staging = stagingPoint(world, playerId, squad.centroid, tileOf(center.x, center.y))
       if (staging !== null) {
         squad.target = staging
         continue
@@ -554,7 +582,8 @@ export function computeTacticalPlan(
   //   retreat 隊不拉（已在撤）。
   const threat = pickMostUrgentThreat(world, playerId)
   if (threat !== null) {
-    const intercept = nearestWalkable(world, threat.centroid) ?? { x: rally.x, y: rally.y }
+    const intercept =
+      nearestWalkable(world, threat.centroid, playerId === 'enemy') ?? { x: rally.x, y: rally.y }
     let defenders = squads.filter((squad) => squad.mission === 'defend')
     if (defenders.length === 0) {
       let closest: Squad | null = null
@@ -590,7 +619,10 @@ export function computeTacticalPlan(
       raiders,
     )
     const holdTarget = hold
-      ? (nearestWalkable(world, threat.buildingCenterTile) ?? { x: rally.x, y: rally.y })
+      ? (nearestWalkable(world, threat.buildingCenterTile, playerId === 'enemy') ?? {
+          x: rally.x,
+          y: rally.y,
+        })
       : null
     for (const squad of defenders) {
       squad.mission = 'defend'

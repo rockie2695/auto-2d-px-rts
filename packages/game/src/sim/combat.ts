@@ -163,8 +163,13 @@ function removeDead(world: World): void {
 
 /**
  * 跑一個 tick 的戰鬥（在移動之後、下一 tick 的經濟之前，見 SPEC §11 順序）。
+ *
+ * **同時結算（Prompt 10.9）**：先以 tick 開始時的狀態收集本 tick 所有攻擊
+ * （攻擊者 → 目標 → 傷害），最後統一結算——消除 unit id 順序帶來的先手優勢
+ * （藍方 id 較小、每 tick 先開火的結構性偏誤；被擊殺的單位在死亡 tick 仍能還手）。
  */
 export function stepCombat(world: World): void {
+  const pending: Array<{ attackerId: number; targetUnitId: number | null; targetBuildingId: number | null; dmg: number }> = []
   for (const unit of world.units) {
     if (unit.hp <= 0) continue
     const def = world.defs.units[unit.defId]
@@ -186,14 +191,21 @@ export function stepCombat(world: World): void {
     // 出手即交戰（脫戰回血計時重置；Prompt 10.8）。
     unit.lastCombatTick = world.tick
     if (target.kind === 'unit') {
-      const victim = world.units.find((candidate) => candidate.id === target.unit.id)
-      if (victim !== undefined) {
-        victim.hp = Math.max(0, victim.hp - def.stats.dmg)
-        // 受傷也是交戰（被打的單位同樣不回血）。
-        victim.lastCombatTick = world.tick
-      }
+      pending.push({ attackerId: unit.id, targetUnitId: target.unit.id, targetBuildingId: null, dmg: def.stats.dmg })
     } else {
-      damageBuilding(world, target.building.id, def.stats.dmg)
+      pending.push({ attackerId: unit.id, targetUnitId: null, targetBuildingId: target.building.id, dmg: def.stats.dmg })
+    }
+  }
+
+  for (const attack of pending) {
+    if (attack.targetUnitId !== null) {
+      const victim = world.units.find((candidate) => candidate.id === attack.targetUnitId)
+      if (victim === undefined) continue
+      victim.hp = Math.max(0, victim.hp - attack.dmg)
+      // 受傷也是交戰（被打的單位同樣不回血）。
+      victim.lastCombatTick = world.tick
+    } else if (attack.targetBuildingId !== null) {
+      damageBuilding(world, attack.targetBuildingId, attack.dmg)
     }
   }
 

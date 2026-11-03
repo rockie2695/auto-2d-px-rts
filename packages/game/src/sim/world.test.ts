@@ -116,11 +116,11 @@ describe('戰鬥（SPEC §10）', () => {
 
     for (let tick = 0; tick < 6; tick++) stepWorld(world)
 
-    // 60hp ÷ 10dmg = 6 下死；依單位陣列順序结算，第 6 下出招前已被擊殺者不再反擊，
-    // 所以存活者只挨了 5 下 → 剩 50。
+    // 60hp ÷ 10dmg = 6 下死。同時結算（Prompt 10.9）：第 6 下雙方同時出招——
+    // 弱者臨死前仍能還手（無先手優勢），所以存活者挨滿 6 下 → 剩 40。
     expect(world.units.some((unit) => unit.id === weakId)).toBe(false)
     const survivor = world.units.find((unit) => unit.id === strongId)
-    expect(survivor?.hp).toBe(50)
+    expect(survivor?.hp).toBe(40)
     expect(getPlayer(world, 'enemy').unitCount).toBe(0)
   })
 

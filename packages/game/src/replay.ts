@@ -26,6 +26,8 @@ export interface ReplayPolicyEvent {
 }
 
 export interface ReplayRecord {
+  /** 對局種子（同一種子 + 同一滑桿序列 → 可逐 tick 重播）。 */
+  readonly seed: number
   readonly result: MatchResult
   /** 對局總時長（tick，20Hz）。 */
   readonly durationTicks: number
@@ -70,11 +72,13 @@ export class ReplayRecorder {
 
   /** 對局結束：組出不可變的完整紀錄（陣列複本，之後再動紀錄器不影響已產出者）。 */
   finish(
+    seed: number,
     result: MatchResult,
     finalCrystal: { player: number; enemy: number },
     durationTicks: number,
   ): ReplayRecord {
     return {
+      seed,
       result,
       durationTicks,
       finalCrystal: { player: finalCrystal.player, enemy: finalCrystal.enemy },
@@ -145,6 +149,7 @@ export function parseReplay(json: unknown): ReplayRecord {
   })
   return {
     result: raw.result,
+    seed: requireFiniteNumber(raw.seed, 'seed'),
     durationTicks: requireFiniteNumber(raw.durationTicks, 'durationTicks'),
     finalCrystal: {
       player: requireFiniteNumber(finalCrystalRaw.player, 'finalCrystal.player'),

@@ -19,8 +19,13 @@ import { GameLoop } from './sim/gameLoop.ts'
 import { createWorld, snapshotWorld } from './sim/world.ts'
 import type { WorldSnapshot } from './sim/world.ts'
 
-/** 對局種子（與 `pnpm sim` 相同，方便對照）。 */
+/** 對局預設種子（CLI 對照用；瀏覽器對局每場隨機取種，見 `matchSeed`）。 */
 export const SEED = 42
+
+/** 本場對局的種子：每場隨機（同一場內確定性不變，種子記錄進 replay 可重播）。 */
+function matchSeed(): number {
+  return Math.floor(Math.random() * 2 ** 31)
+}
 
 /** 決策日誌單條（Prompt 9.5：左下面板顯示；戰略紀錄＋戰術小隊變動＋政策變更）。 */
 export interface DecisionLogEntry {
@@ -216,7 +221,8 @@ export interface GameSession {
  */
 export async function startGameSession(app: Application, scene: GameScene): Promise<GameSession> {
   const content = await loadContentPackFromFetch('/data')
-  const world = createWorld(content, SEED)
+  const seed = matchSeed()
+  const world = createWorld(content, seed)
   scene.initialize(world)
 
   const loop = new GameLoop(world)
@@ -272,6 +278,7 @@ export async function startGameSession(app: Application, scene: GameScene): Prom
     outcome = {
       result,
       replay: recorder.finish(
+        seed,
         result,
         { player: crystalOf('player'), enemy: crystalOf('enemy') },
         world.tick,
