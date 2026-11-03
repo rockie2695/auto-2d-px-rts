@@ -53,6 +53,9 @@ export interface BattleStats {
   readonly tick: number
   readonly playerCrystal: number
   readonly enemyCrystal: number
+  /** 雙方存活單位數（圖表「單位數量」模式取樣用）。 */
+  readonly playerUnits: number
+  readonly enemyUnits: number
   /** Σ hp × dmg × attackSpeed（SPEC §12.1）；雙方存活單位合計。 */
   readonly playerPower: number
   readonly enemyPower: number
@@ -468,6 +471,8 @@ export async function startGameSession(app: Application, scene: GameScene): Prom
         tick: world.tick,
         playerCrystal: crystal('player'),
         enemyCrystal: crystal('enemy'),
+        playerUnits: world.units.filter((unit) => unit.player === 'player' && unit.hp > 0).length,
+        enemyUnits: world.units.filter((unit) => unit.player === 'enemy' && unit.hp > 0).length,
         playerPower: power('player'),
         enemyPower: power('enemy'),
         log: [...decisionLog],

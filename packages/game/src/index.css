@@ -167,6 +167,18 @@ body,
   image-rendering: pixelated;
 }
 
+/* 圖表指標切換（資源曲線／單位數量／戰力）。 */
+.chart-mode-select {
+  font: inherit;
+  font-size: 11px;
+  color: #dfe5ec;
+  background: #262c35;
+  border: 1px solid #4a5568;
+  cursor: pointer;
+  padding: 0 2px;
+  max-width: 96px;
+}
+
 /* 右上資源面板（放在 .hud-top-right 直欄內，本身不用絕對定位）。 */
 .hud-top-right .hud-panel {
   position: static;

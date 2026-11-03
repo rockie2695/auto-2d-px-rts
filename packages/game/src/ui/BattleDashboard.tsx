@@ -30,28 +30,44 @@ export function BattleDashboard({ children }: { children?: ReactNode }) {
   const [stats, setStats] = useState<BattleStats | null>(null)
   const [policy, setPolicy] = useState<PolicySnapshot | null>(null)
   // 取樣器只活在 effect 內（ref 僅在 effect 存取，避免渲染期讀 ref）；
-  // 曲線樣本與雙方收入在 refresh 內由同一實例一次算好存進 state。
-  const seriesRef = useRef<ResourceSeries | null>(null)
+  // 三種指標各自一個取樣環，同一輪詢一次推齊，曲線樣本存進 state。
+  const seriesRef = useRef<{
+    crystal: ResourceSeries
+    units: ResourceSeries
+    power: ResourceSeries
+  } | null>(null)
   const [curve, setCurve] = useState<{
-    samples: readonly SamplePoint[]
+    crystal: readonly SamplePoint[]
+    units: readonly SamplePoint[]
+    power: readonly SamplePoint[]
     playerIncome: number | null
     enemyIncome: number | null
-  }>({ samples: [], playerIncome: null, enemyIncome: null })
+  }>({ crystal: [], units: [], power: [], playerIncome: null, enemyIncome: null })
 
   useEffect(() => {
-    if (seriesRef.current === null) seriesRef.current = new ResourceSeries()
-    const series = seriesRef.current
+    if (seriesRef.current === null) {
+      seriesRef.current = {
+        crystal: new ResourceSeries(),
+        units: new ResourceSeries(),
+        power: new ResourceSeries(),
+      }
+    }
+    const { crystal, units, power } = seriesRef.current
     const refresh = (): void => {
       const active = getActiveSession()
       if (active === null) return
       const next = active.getBattleStats()
       setStats(next)
       setPolicy(active.getPolicies('player'))
-      series.push(next.tick, next.playerCrystal, next.enemyCrystal)
+      crystal.push(next.tick, next.playerCrystal, next.enemyCrystal)
+      units.push(next.tick, next.playerUnits, next.enemyUnits)
+      power.push(next.tick, next.playerPower, next.enemyPower)
       setCurve({
-        samples: series.chart(),
-        playerIncome: series.playerIncome(),
-        enemyIncome: series.enemyIncome(),
+        crystal: crystal.chart(),
+        units: units.chart(),
+        power: power.chart(),
+        playerIncome: crystal.playerIncome(),
+        enemyIncome: crystal.enemyIncome(),
       })
     }
     const timer = window.setInterval(refresh, POLL_MS)
@@ -79,7 +95,11 @@ export function BattleDashboard({ children }: { children?: ReactNode }) {
 
   return (
     <>
-      <ResourceChart samples={curve.samples} />
+      <ResourceChart
+        crystalSamples={curve.crystal}
+        unitSamples={curve.units}
+        powerSamples={curve.power}
+      />
       <div className="hud-top-right">
         <ResourcePanel
           playerCrystal={stats?.playerCrystal ?? 0}

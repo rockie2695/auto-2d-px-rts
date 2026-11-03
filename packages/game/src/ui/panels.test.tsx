@@ -7,7 +7,6 @@ import type { ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { ResourceSeries } from './collector.ts'
 import { DecisionLogPanel } from './DecisionLogPanel.tsx'
 import { formatClock, layerLabel } from './collector.ts'
 import { PolicyPanel } from './PolicyPanel.tsx'
@@ -216,20 +215,69 @@ describe('SquadPanel（右下）', () => {
 
 /* ---------- 資源曲線 ---------- */
 
-describe('ResourceChart（左上）', () => {
-  it('有樣本時掛出 canvas 且畫折線（不出等待文案）', () => {
-    const series = new ResourceSeries()
-    series.push(0, 10, 8)
-    series.push(100, 12, 9)
-    const container = render(<ResourceChart samples={series.chart()} />)
+describe('ResourceChart（左上，三指標切換）', () => {
+  const crystalSamples = [
+    { tick: 0, player: 10, enemy: 8 },
+    { tick: 100, player: 12, enemy: 9 },
+  ]
+  const unitSamples = [
+    { tick: 0, player: 3, enemy: 3 },
+    { tick: 100, player: 5, enemy: 4 },
+  ]
+  const powerSamples = [
+    { tick: 0, player: 1440, enemy: 1440 },
+    { tick: 100, player: 2000, enemy: 960 },
+  ]
+
+  it('預設資源曲線：select 有三個選項、標題隨模式變化', () => {
+    const container = render(
+      <ResourceChart
+        crystalSamples={crystalSamples}
+        unitSamples={unitSamples}
+        powerSamples={powerSamples}
+      />,
+    )
     expect(container.querySelector('canvas')).not.toBeNull()
     expect(textOf(container)).not.toContain('等待資料')
+    const select = container.querySelector('[data-testid="chart-mode"]') as HTMLSelectElement
+    expect(select).not.toBeNull()
+    expect(select.value).toBe('crystal')
+    const options = [...select.querySelectorAll('option')].map((option) => option.value)
+    expect(options).toEqual(['crystal', 'units', 'power'])
+    expect(textOf(container)).toContain('資源曲線（60 秒）')
+  })
+
+  it('切換模式 → 標題變為單位數量／戰力（canvas 仍在）', () => {
+    const container = render(
+      <ResourceChart
+        crystalSamples={crystalSamples}
+        unitSamples={unitSamples}
+        powerSamples={powerSamples}
+      />,
+    )
+    const select = container.querySelector('[data-testid="chart-mode"]') as HTMLSelectElement
+    const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set
+    act(() => {
+      setter?.call(select, 'units')
+      select.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    expect(textOf(container)).toContain('單位數量（60 秒）')
+    expect(container.querySelector('canvas')).not.toBeNull()
+
+    act(() => {
+      setter?.call(select, 'power')
+      select.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    expect(textOf(container)).toContain('戰力（60 秒）')
   })
 
   it('空樣本：canvas 仍在，畫面走等待分支不擲錯', () => {
-    const container = render(<ResourceChart samples={[]} />)
+    const container = render(
+      <ResourceChart crystalSamples={[]} unitSamples={[]} powerSamples={[]} />,
+    )
     const canvas = container.querySelector('canvas')
     expect(canvas).not.toBeNull() // 空樣本 → 折線分支跳過，畫「等待資料」文字於 canvas 上
+    expect(textOf(container)).toContain('資源曲線（60 秒）')
   })
 })
 

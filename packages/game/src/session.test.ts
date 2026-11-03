@@ -65,6 +65,8 @@ describe('組合根 getUnitInfo / getBattleStats（Prompt 9.5）', () => {
     expect(stats.playerCrystal).toBeGreaterThanOrEqual(0)
     expect(stats.playerPower).toBeGreaterThan(0)
     expect(stats.enemyPower).toBeGreaterThan(0)
+    expect(stats.playerUnits).toBeGreaterThan(0)
+    expect(stats.enemyUnits).toBeGreaterThan(0)
     expect(stats.squads.length).toBeGreaterThan(0)
     for (const squad of stats.squads) {
       expect(squad.mission).toMatch(/defend|attack|harass|retreat/)
