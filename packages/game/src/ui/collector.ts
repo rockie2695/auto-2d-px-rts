@@ -104,18 +104,19 @@ export class ResourceSeries {
 /** 值域取整用的極小常數（樣本全平行時避免除以 0）。 */
 const VALUE_EPSILON = 1
 
-/** 樣本 → 0..1 曲線座標（x 右端 = 現在；y 下小上大）。
- *  `pick` 選擇取哪一條線的值；值域固定為雙線共用的絕對 min..max±10%
- *  （兩條線畫在同一軸上直接比較，各自歸一會失真）。 */
-export function chartPoints(
-  samples: readonly SamplePoint[],
-  pick: (point: SamplePoint) => number,
-): ChartPoint[] {
-  const count = samples.length
-  if (count === 0) return []
-  const latest = samples[count - 1]
-  if (latest === undefined) return []
-  const startX = latest.tick - sampleSpan(samples)
+/** 雙線共用值域（y 軸標籤與曲線座標單一真相來源）。 */
+export interface ChartDomain {
+  /** 資料實際最小／最大值（雙陣營合併）。 */
+  min: number
+  max: number
+  /** 加 10% 邊距後的繪圖範圍（0 與 1 對應的值）。 */
+  bottom: number
+  top: number
+}
+
+/** 樣本 → 雙線共用值域；空樣本回 null。 */
+export function chartDomain(samples: readonly SamplePoint[]): ChartDomain | null {
+  if (samples.length === 0) return null
   let minValue = Number.POSITIVE_INFINITY
   let maxValue = Number.NEGATIVE_INFINITY
   for (const sample of samples) {
@@ -124,11 +125,25 @@ export function chartPoints(
   }
   const span = Math.max(maxValue - minValue, VALUE_EPSILON)
   const pad = span * 0.1
-  const bottom = minValue - pad
-  const top = maxValue + pad
+  return { min: minValue, max: maxValue, bottom: minValue - pad, top: maxValue + pad }
+}
+
+/** 樣本 → 0..1 曲線座標（x 右端 = 現在；y 下小上大）。
+ *  `pick` 選擇取哪一條線的值；值域固定為雙線共用的絕對 min..max±10%
+ *  （兩條線畫在同一軸上直接比較，各自歸一會失真）。 */
+export function chartPoints(
+  samples: readonly SamplePoint[],
+  pick: (point: SamplePoint) => number,
+): ChartPoint[] {
+  const domain = chartDomain(samples)
+  if (domain === null) return []
+  const latest = samples[samples.length - 1]
+  if (latest === undefined) return []
+  const span = Math.max(domain.top - domain.bottom, VALUE_EPSILON)
+  const startX = latest.tick - sampleSpan(samples)
   return samples.map((sample) => ({
     x: Math.max(0, Math.min(1, (sample.tick - startX) / sampleSpan(samples))),
-    y: Math.max(0, Math.min(1, (pick(sample) - bottom) / (top - bottom))),
+    y: Math.max(0, Math.min(1, (pick(sample) - domain.bottom) / span)),
   }))
 }
 

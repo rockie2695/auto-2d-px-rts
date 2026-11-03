@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { chartPoints, ratioTone, ResourceSeries } from './collector.ts'
+import { chartDomain, chartPoints, ratioTone, ResourceSeries } from './collector.ts'
 
 /**
  * 戰況面板純邏輯測試（Prompt 9.5 / Prompt 10）：
@@ -60,6 +60,25 @@ describe('ratioTone 戰力比色階（Prompt 9.5 邊界）', () => {
     expect(ratioTone(1.0)).toBe('yellow')
     expect(ratioTone(1.4)).toBe('yellow')
     expect(ratioTone(1.41)).toBe('green')
+  })
+})
+
+describe('chartDomain 共用值域', () => {
+  it('空樣本回 null；min/max 取雙陣營合併，±10% 邊距', () => {
+    expect(chartDomain([])).toBeNull()
+    const domain = chartDomain([
+      { tick: 0, player: 100, enemy: 200 },
+      { tick: 100, player: 150, enemy: 180 },
+    ])
+    expect(domain?.min).toBe(100)
+    expect(domain?.max).toBe(200)
+    expect(domain?.bottom).toBeCloseTo(90, 6)
+    expect(domain?.top).toBeCloseTo(210, 6)
+  })
+
+  it('樣本完全水平：top > bottom（不塌縮；除以 0 由 chartPoints 的 span ≥ 1 夾限保證）', () => {
+    const domain = chartDomain([{ tick: 0, player: 50, enemy: 50 }])
+    expect(domain !== null && domain.top > domain.bottom).toBe(true)
   })
 })
 
