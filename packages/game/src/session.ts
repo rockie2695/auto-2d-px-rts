@@ -56,6 +56,8 @@ export interface SquadInfo {
 /** 戰況快查（Prompt 9.5：四角面板一次取齊，500ms 級輪詢夠用）。 */
 export interface BattleStats {
   readonly tick: number
+  /** 對局長度上限（tick，時鐘倒數用）。 */
+  readonly maxTicks: number
   readonly playerCrystal: number
   readonly enemyCrystal: number
   /** 雙方存活單位數（圖表「單位數量」模式取樣用）。 */
@@ -480,6 +482,7 @@ export async function startGameSession(app: Application, scene: GameScene): Prom
       }
       return {
         tick: world.tick,
+        maxTicks: world.match.maxTicks,
         playerCrystal: crystal('player'),
         enemyCrystal: crystal('enemy'),
         playerUnits: world.units.filter((unit) => unit.player === 'player' && unit.hp > 0).length,

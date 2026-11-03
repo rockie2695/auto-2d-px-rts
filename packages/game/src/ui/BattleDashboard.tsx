@@ -4,7 +4,7 @@ import type { ReactNode } from 'react'
 import type { PolicyValues } from '../ai/policy.ts'
 import { getActiveSession } from '../session.ts'
 import type { BattleStats, PolicySnapshot } from '../session.ts'
-import { ResourceSeries } from './collector.ts'
+import { formatClock, ResourceSeries } from './collector.ts'
 import type { SamplePoint } from './collector.ts'
 import { DecisionLogPanel } from './DecisionLogPanel.tsx'
 import { PolicyPanel } from './PolicyPanel.tsx'
@@ -95,6 +95,12 @@ export function BattleDashboard({ children }: { children?: ReactNode }) {
 
   return (
     <>
+      <div className="game-clock" data-testid="game-clock">
+        遊戲時間 {formatClock(stats?.tick ?? 0)}
+        {stats !== null
+          ? `（剩餘 ${formatClock(Math.max(0, stats.maxTicks - stats.tick))}）`
+          : ''}
+      </div>
       <ResourceChart
         crystalSamples={curve.crystal}
         unitSamples={curve.units}

@@ -1,6 +1,6 @@
 import { Container, Graphics } from 'pixi.js'
 
-import { isRockAt } from '../sim/types.ts'
+import { isRockAt, UNITS_PER_TILE } from '../sim/types.ts'
 import type { World, WorldDefs } from '../sim/types.ts'
 import type { WorldSnapshot } from '../sim/world.ts'
 
@@ -40,14 +40,18 @@ export class GameScene {
 
   private readonly tilesG = new Graphics()
   private readonly objG = new Graphics()
+  private readonly fxG = new Graphics()
 
   private readonly mapSizeTiles: number
   private defs: WorldDefs | null = null
   private selected: SelectionTarget | null = null
+  /** 攻擊特效（Prompt 10.10）：開火 → 彈丸／揮擊＋受擊閃光，短暫存在後過期。 */
+  private effects: AttackEffect[] = []
+  private lastFxTick = -1
 
   constructor(mapSizeTiles: number) {
     this.mapSizeTiles = mapSizeTiles
-    this.root.addChild(this.tilesG, this.objG)
+    this.root.addChild(this.tilesG, this.objG, this.fxG)
   }
 
   /** ui（選取）→ render 的單向設定。 */
@@ -173,6 +177,54 @@ export class GameScene {
           .stroke({ width: 1, color: COLOR_SELECTED })
       }
     }
+
+    // 攻擊特效（Prompt 10.10）：每個新 tick 以快照 diff 偵測開火一次
+    // （attackAcc 由 ≥1 掉落 → 本 tick 開火），加入特效佇列後逐幀衰減重畫。
+    const now = performance.now()
+    if (prev !== null && prev.tick !== this.lastFxTick) {
+      this.lastFxTick = prev.tick
+      const currById = new Map<number, WorldSnapshot['units'][number]>()
+      for (const unit of curr.units) currById.set(unit.id, unit)
+      for (const before of prev.units) {
+        const after = currById.get(before.id)
+        if (after === undefined || after.hp <= 0) continue
+        if (!(before.attackAcc >= 1 && after.attackAcc < before.attackAcc)) continue
+        const def = this.defs.units[after.defId]
+        if (def === undefined) continue
+        const victim = victimOf(this.defs, after, currById)
+        if (victim === null) continue
+        this.effects.push({
+          kind: def.role === 'ranged' ? 'shot' : 'melee',
+          fromX: fixedToPx(after.x),
+          fromY: fixedToPx(after.y),
+          toX: fixedToPx(victim.x),
+          toY: fixedToPx(victim.y),
+          color: after.player === 'player' ? COLOR_UNIT_PLAYER : COLOR_UNIT_ENEMY,
+          born: now,
+        })
+      }
+    }
+    this.effects = this.effects.filter((fx) => now - fx.born < ATTACK_FX_MS)
+    this.fxG.clear()
+    for (const fx of this.effects) {
+      const age = Math.min(1, (now - fx.born) / ATTACK_FX_MS)
+      if (fx.kind === 'shot') {
+        // 遠程：彈丸從攻擊者飛向受擊者。
+        const x = Math.round(fx.fromX + (fx.toX - fx.fromX) * age)
+        const y = Math.round(fx.fromY + (fx.toY - fx.fromY) * age)
+        this.fxG.rect(x - 1, y - 1, 3, 3).fill(fx.color)
+      } else {
+        // 近戰：揮擊斜線。
+        this.fxG
+          .moveTo(fx.toX - 4, fx.toY - 4)
+          .lineTo(fx.toX + 4, fx.toY + 4)
+          .stroke({ width: 1, color: 0xffffff, alpha: 1 - age })
+      }
+      // 受擊閃光（兩種開火都閃）。
+      this.fxG
+        .rect(fx.toX - 5, fx.toY - 5, 10, 10)
+        .fill({ color: 0xffffff, alpha: (1 - age) * 0.5 })
+    }
   }
 
   /** 血條：底 + 按比例填充（綠 / 黃 / 紅）。 */
@@ -192,4 +244,53 @@ function hpColor(ratio: number): number {
   if (ratio > 0.66) return COLOR_HP_HIGH
   if (ratio > 0.33) return COLOR_HP_MID
   return COLOR_HP_LOW
+}
+
+/* ------------------------------------------------------------------ */
+/* 攻擊特效（Prompt 10.10：讓「誰在打誰」看得見）                        */
+/* ------------------------------------------------------------------ */
+
+/** 單次開火特效：近戰 = 受擊閃光＋揮擊斜線；遠程 = 飛行彈丸＋受擊閃光。 */
+interface AttackEffect {
+  kind: 'melee' | 'shot'
+  fromX: number
+  fromY: number
+  toX: number
+  toY: number
+  color: number
+  born: number
+}
+
+/** 特效壽命（ms）：短於一次攻擊間隔，疊加不混亂。 */
+const ATTACK_FX_MS = 160
+
+/** 開火受害者：顯式目標（敵方、存活）；否則射程內最近敵人（自動接戰近似）。 */
+function victimOf(
+  defs: WorldDefs,
+  attacker: WorldSnapshot['units'][number],
+  byId: Map<number, WorldSnapshot['units'][number]>,
+): WorldSnapshot['units'][number] | null {
+  const def = defs.units[attacker.defId]
+  if (def === undefined) return null
+  if (attacker.targetId !== null) {
+    const explicit = byId.get(attacker.targetId)
+    if (explicit !== undefined && explicit.hp > 0 && explicit.player !== attacker.player) {
+      return explicit
+    }
+  }
+  const rangePx = def.stats.range * TILE_SIZE
+  const pxPerFixed = TILE_SIZE / UNITS_PER_TILE
+  let best: WorldSnapshot['units'][number] | null = null
+  let bestDist = rangePx * rangePx
+  for (const candidate of byId.values()) {
+    if (candidate.player === attacker.player || candidate.hp <= 0) continue
+    const dx = (candidate.x - attacker.x) * pxPerFixed
+    const dy = (candidate.y - attacker.y) * pxPerFixed
+    const distance = dx * dx + dy * dy
+    if (distance <= bestDist) {
+      bestDist = distance
+      best = candidate
+    }
+  }
+  return best
 }

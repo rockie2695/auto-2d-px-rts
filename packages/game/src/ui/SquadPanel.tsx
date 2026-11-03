@@ -1,4 +1,5 @@
 import type { SquadInfo } from '../session.ts'
+import { useDraggable } from './useDraggable.ts'
 
 /** 任務中文名。 */
 const MISSION_LABEL: Record<string, string> = {
@@ -9,13 +10,21 @@ const MISSION_LABEL: Record<string, string> = {
 }
 
 /**
- * 右下：小隊狀態（Prompt 9.5）。
- * 一隊一行：任務 + 人數 + 戰力 + 距目標距離。
+ * 右下：小隊狀態（Prompt 9.5 / 10.10）。
+ * 一隊一行：任務 + 人數 + 戰力 + 距目標距離；標題列可拖曳移動面板。
  */
 export function SquadPanel({ squads }: { squads: readonly SquadInfo[] }) {
+  const { position, panelRef, handleProps } = useDraggable()
   return (
-    <aside className="hud-panel panel-bottom-right" data-testid="squad-panel">
-      <div className="hud-panel-title">小隊狀態</div>
+    <aside
+      ref={panelRef}
+      className="hud-panel panel-bottom-right draggable"
+      data-testid="squad-panel"
+      style={position === null ? undefined : { left: position.x, top: position.y, bottom: 'auto' }}
+    >
+      <div className="hud-panel-title drag-handle" {...handleProps}>
+        <span>小隊狀態</span>
+      </div>
       {squads.length === 0 ? (
         <div className="hud-empty">尚未編隊</div>
       ) : (

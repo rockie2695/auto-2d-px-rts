@@ -2,6 +2,7 @@ import { useState } from 'react'
 
 import type { PolicyValues } from '../ai/policy.ts'
 import type { PolicySnapshot } from '../session.ts'
+import { useDraggable } from './useDraggable.ts'
 
 /**
  * 底部中央：AI 政策滑桿（Prompt 10，規則 10：玩家只調這 5 個滑桿，不得直接指揮單位）。
@@ -42,6 +43,7 @@ export function PolicyPanel({
   onEndMatch: () => void
 }) {
   const [open, setOpen] = useState(true)
+  const { position, panelRef, handleProps } = useDraggable()
   // 草稿：null = 與最後生效值一致（拖動才建立）。生效值只會被本面板的
   // 「套用變更」改動，所以在該事件裡重置草稿即可（不用 effect 同步）。
   const [draft, setDraft] = useState<PolicyValues | null>(null)
@@ -68,8 +70,17 @@ export function PolicyPanel({
   const applyDisabled = policy === null || cooling || !hasChanges
 
   return (
-    <aside className="hud-panel panel-bottom-center" data-testid="policy-panel">
-      <div className="hud-panel-title">
+    <aside
+      ref={panelRef}
+      className="hud-panel panel-bottom-center draggable"
+      data-testid="policy-panel"
+      style={
+        position === null
+          ? undefined
+          : { left: position.x, top: position.y, bottom: 'auto', transform: 'none' }
+      }
+    >
+      <div className="hud-panel-title drag-handle" {...handleProps}>
         <span>AI 政策滑桿</span>
         <button type="button" aria-label="收合政策面板" onClick={() => setOpen(false)}>
           ▾

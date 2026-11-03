@@ -200,6 +200,8 @@ body,
   margin: 0;
   padding-left: 16px;
   list-style: none;
+  max-height: 200px;
+  overflow-y: auto;
 }
 
 .decision-log li {
@@ -234,6 +236,29 @@ body,
 
 .squad-list .enemy {
   color: #ff9f7a;
+}
+
+/* ---- 面板拖曳（Prompt 10.10：標題列為把手）---- */
+.hud-panel-title.drag-handle {
+  cursor: move;
+  user-select: none;
+  touch-action: none;
+}
+
+/* ---- 遊戲時鐘（Prompt 10.10：上方中央）---- */
+.game-clock {
+  position: absolute;
+  top: 6px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 10;
+  padding: 2px 12px;
+  font-family: 'Courier New', monospace;
+  font-size: 13px;
+  color: #dfe5ec;
+  background: rgba(16, 18, 22, 0.85);
+  border: 1px solid #4a5568;
+  user-select: none;
 }
 
 /* ---- AI 政策滑桿（Prompt 10：底部中央、可收合；四角已被 HUD 佔用）---- */
