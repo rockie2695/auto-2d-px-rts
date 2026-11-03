@@ -28,13 +28,21 @@ body,
   image-rendering: pixelated;
 }
 
-/* ---- 單位資訊面板（Prompt 9：覆蓋在畫布右上的文字面板）---- */
-.info-panel {
+/* ---- 單位資訊面板（Prompt 9／9.1／9.4：右上直欄，位於資源面板下方）---- */
+.hud-top-right {
   position: absolute;
   top: 12px;
   right: 12px;
-  width: 220px;
   z-index: 10;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: flex-end;
+}
+
+.info-panel {
+  position: static;
+  width: 220px;
   padding: 8px 10px;
   font-family: 'Courier New', monospace;
   font-size: 13px;
@@ -43,6 +51,12 @@ body,
   background: rgba(16, 18, 22, 0.88);
   border: 1px solid #4a5568;
   user-select: none;
+}
+
+.info-panel-decision dd {
+  text-align: right;
+  flex: 1;
+  margin-left: 8px;
 }
 
 .info-panel-title {
@@ -91,10 +105,7 @@ body,
 }
 
 .info-panel-collapsed {
-  position: absolute;
-  top: 12px;
-  right: 12px;
-  z-index: 10;
+  position: static;
   padding: 6px 10px;
   font-family: 'Courier New', monospace;
   font-size: 13px;
@@ -102,4 +113,113 @@ body,
   background: rgba(16, 18, 22, 0.88);
   border: 1px solid #4a5568;
   cursor: pointer;
+}
+
+/* ---- 四角 HUD（Prompt 9.5：資源曲線／資源面板／決策日誌／小隊狀態）---- */
+.hud-panel {
+  position: absolute;
+  z-index: 10;
+  min-width: 200px;
+  max-width: 280px;
+  padding: 6px 10px;
+  font-family: 'Courier New', monospace;
+  font-size: 12px;
+  line-height: 1.7;
+  color: #dfe5ec;
+  background: rgba(16, 18, 22, 0.88);
+  border: 1px solid #4a5568;
+  user-select: none;
+}
+
+.hud-panel-title {
+  font-weight: bold;
+  font-size: 12px;
+  color: #9aa5b1;
+  border-bottom: 1px solid #4a5568;
+  margin-bottom: 4px;
+  padding-bottom: 2px;
+}
+
+.hud-empty {
+  color: #808a96;
+}
+
+.panel-top-left {
+  top: 12px;
+  left: 12px;
+}
+
+.panel-bottom-left {
+  bottom: 12px;
+  left: 12px;
+}
+
+.panel-bottom-right {
+  bottom: 12px;
+  right: 12px;
+}
+
+/* 左上曲線：2px 硬邊折線畫在小 canvas 上，瀏覽器縮放走最近鄰。 */
+.resource-chart-canvas {
+  display: block;
+  width: 240px;
+  height: 64px;
+  image-rendering: pixelated;
+}
+
+/* 右上資源面板（放在 .hud-top-right 直欄內，本身不用絕對定位）。 */
+.hud-top-right .hud-panel {
+  position: static;
+  width: 220px;
+  min-width: 0;
+  max-width: none;
+}
+
+.resource-row {
+  display: flex;
+  justify-content: space-between;
+}
+
+.resource-row span:first-child {
+  color: #9aa5b1;
+}
+
+.decision-log {
+  margin: 0;
+  padding-left: 16px;
+  list-style: none;
+}
+
+.decision-log li {
+  margin-bottom: 2px;
+}
+
+.decision-log-time {
+  color: #6f8ecf;
+  margin-right: 4px;
+}
+
+.decision-log-layer {
+  color: #8d9aa8;
+  margin-right: 2px;
+}
+
+.squad-list {
+  margin: 0;
+  padding-left: 0;
+  list-style: none;
+}
+
+.squad-list li {
+  display: flex;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.squad-list .player {
+  color: #7ec7ff;
+}
+
+.squad-list .enemy {
+  color: #ff9f7a;
 }

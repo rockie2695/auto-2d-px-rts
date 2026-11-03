@@ -8,9 +8,10 @@ import { useUiStore } from './uiStore.ts'
 const POLL_MS = 200
 
 /**
- * 資訊面板（Prompt 9 點單位；Prompt 9.1 點建築）。
+ * 資訊面板（Prompt 9 點單位；Prompt 9.1 點建築；Prompt 9.4 顯示微操決策原因）。
  * 讀 zustand 的選取目標（UI 狀態），遊戲資料經組合根
  * `getUnitInfo`/`getBuildingInfo` 取得；面板本身不做任何遊戲計算。
+ * 位置由 App 的 `.hud-top-right` 直欄控制（疊在資源面板下方）。
  */
 export function InfoPanel() {
   const selected = useUiStore((state) => state.selected)
@@ -92,6 +93,18 @@ export function InfoPanel() {
               ({unitInfo.tileX}, {unitInfo.tileY})
             </dd>
           </div>
+          {unitInfo.squadMission !== null ? (
+            <div>
+              <dt>小隊</dt>
+              <dd>{unitInfo.squadMission}</dd>
+            </div>
+          ) : null}
+          {unitInfo.decision !== null ? (
+            <div className="info-panel-decision">
+              <dt>決策</dt>
+              <dd>{unitInfo.decision}</dd>
+            </div>
+          ) : null}
         </dl>
       ) : selected.kind === 'building' && buildingInfo !== null ? (
         <dl className="info-panel-rows">
