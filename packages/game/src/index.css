@@ -20,6 +20,9 @@ body,
   position: absolute;
   inset: 0;
   background: #1c1c1c;
+  /* 地圖可拖曳平移（Prompt 10.12）：抓取游標；觸控不捲動頁面。 */
+  cursor: grab;
+  touch-action: none;
 }
 
 /* 像素風：canvas 被瀏覽器縮放時走最近鄰，不做插值 */

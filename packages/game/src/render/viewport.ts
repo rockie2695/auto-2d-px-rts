@@ -1,12 +1,12 @@
-import { TILE_SIZE } from './constants.ts'
+import { fitCamera, worldPxOf } from './camera.ts'
 
 /**
- * 視窗排佈（純函式，Prompt 9 像素完美）：整數縮放 + 置中。
- * 地圖世界 1024×1024 px 按 `floor` 縮放，剩餘空間 floor 後置中；
- * 視窗小於地圖時從左上起（offset 夾在 ≥ 0）。
+ * 視窗排佈（Prompt 9 / 10.12）：**預設完整入鏡**（見 `camera.ts`）。
+ * 地圖世界 1024×1024 px——視窗足夠大時整數倍（像素完美）、小於地圖時縮到剛好入鏡；
+ * 兩軸各自置中。互動（拖曳平移／游標縮放）由 `GameScene` 的相機負責。
  */
 export interface Viewport {
-  /** 整數縮放倍率（≥ 1）。 */
+  /** 縮放倍率。 */
   readonly scale: number
   /** 地圖在畫布中的左上角偏移（px）。 */
   readonly offsetX: number
@@ -16,14 +16,9 @@ export interface Viewport {
   readonly worldPx: number
 }
 
-/**
- * 計算地圖（正方形）在視窗中的排佈：
- * `scale = max(1, floor(min(viewW, viewH) / worldPx))`。
- */
+/** 計算地圖（正方形）預設排佈：完整入鏡＋置中。 */
 export function computeViewport(mapSizeTiles: number, viewW: number, viewH: number): Viewport {
-  const worldPx = mapSizeTiles * TILE_SIZE
-  const scale = Math.max(1, Math.floor(Math.min(viewW / worldPx, viewH / worldPx)))
-  const offsetX = Math.max(0, Math.floor((viewW - worldPx * scale) / 2))
-  const offsetY = Math.max(0, Math.floor((viewH - worldPx * scale) / 2))
-  return { scale, offsetX, offsetY, worldPx }
+  const worldPx = worldPxOf(mapSizeTiles)
+  const camera = fitCamera(worldPx, viewW, viewH)
+  return { scale: camera.scale, offsetX: camera.offsetX, offsetY: camera.offsetY, worldPx }
 }

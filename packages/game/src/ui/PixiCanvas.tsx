@@ -6,7 +6,6 @@ import { MAP_SIZE } from '@auto-2d-px-rts/shared'
 import { createGameApp, destroyGameApp } from '../render/pixiApp.ts'
 import { pickTarget, screenToWorld } from '../render/hitTest.ts'
 import { GameScene } from '../render/scene.ts'
-import { computeViewport } from '../render/viewport.ts'
 import { startGameSession } from '../session.ts'
 import type { GameSession } from '../session.ts'
 import { useUiStore } from './uiStore.ts'
@@ -37,16 +36,77 @@ export function PixiCanvas() {
     // 各個 await 點之間都要擋住已被卸載的情況。
     let disposed = false
 
-    const handleClick = (event: PointerEvent): void => {
+    // 拖曳平移（Prompt 10.12）：超過 4px 門檻才算拖曳（否則視為點擊選取）。
+    const DRAG_THRESHOLD_PX = 4
+    let pointerDown = false
+    let dragging = false
+    let downX = 0
+    let downY = 0
+    let lastX = 0
+    let lastY = 0
+
+    const selectAt = (clientX: number, clientY: number): void => {
       if (canvas === null || session === null) return
       const snapshot = session.getSnapshot()
       if (snapshot === null) return
       const rect = canvas.getBoundingClientRect()
-      const viewport = computeViewport(MAP_SIZE, rect.width, rect.height)
-      const world = screenToWorld(event.clientX - rect.left, event.clientY - rect.top, viewport)
-      // 建築佔地由 scene 的 defs 查表（建築快照無 w/h 欄位）。
+      // 打點用 scene 的相機（縮放／平移後仍精準）。
+      const viewport = session.scene.viewportOf(rect.width, rect.height)
+      const world = screenToWorld(clientX - rect.left, clientY - rect.top, viewport)
       const sizeOf = (defId: string) => session?.scene.buildingSizeOf(defId) ?? null
       useUiStore.getState().select(pickTarget(snapshot, world.x, world.y, sizeOf))
+    }
+
+    const handlePointerDown = (event: PointerEvent): void => {
+      if (event.button !== 0) return
+      pointerDown = true
+      dragging = false
+      downX = lastX = event.clientX
+      downY = lastY = event.clientY
+    }
+
+    const handlePointerMove = (event: PointerEvent): void => {
+      if (!pointerDown || canvas === null || session === null) return
+      if (!dragging) {
+        const moved = Math.hypot(event.clientX - downX, event.clientY - downY)
+        if (moved <= DRAG_THRESHOLD_PX) return
+        dragging = true
+        if (host !== null) host.style.cursor = 'grabbing'
+      }
+      const rect = canvas.getBoundingClientRect()
+      session.scene.panBy(event.clientX - lastX, event.clientY - lastY, rect.width, rect.height)
+      lastX = event.clientX
+      lastY = event.clientY
+    }
+
+    const handlePointerUp = (event: PointerEvent): void => {
+      if (!pointerDown) return
+      pointerDown = false
+      if (dragging) {
+        dragging = false
+        if (host !== null) host.style.cursor = 'grab'
+        return
+      }
+      // 未拖曳 → 點擊選取。
+      selectAt(event.clientX, event.clientY)
+    }
+
+    const handleWheel = (event: WheelEvent): void => {
+      if (canvas === null || session === null) return
+      event.preventDefault()
+      const rect = canvas.getBoundingClientRect()
+      const factor = event.deltaY < 0 ? 1.15 : 1 / 1.15
+      session.scene.zoomAt(
+        event.clientX - rect.left,
+        event.clientY - rect.top,
+        factor,
+        rect.width,
+        rect.height,
+      )
+    }
+
+    const handleDoubleClick = (): void => {
+      session?.scene.resetView()
     }
 
     void (async () => {
@@ -67,7 +127,12 @@ export function PixiCanvas() {
 
         app = created
         canvas = created.canvas
-        canvas.addEventListener('pointerdown', handleClick)
+        canvas.addEventListener('pointerdown', handlePointerDown)
+        canvas.addEventListener('pointermove', handlePointerMove)
+        canvas.addEventListener('pointerup', handlePointerUp)
+        canvas.addEventListener('wheel', handleWheel, { passive: false })
+        canvas.addEventListener('dblclick', handleDoubleClick)
+        if (host !== null) host.style.cursor = 'grab'
         session = started
         // 選取狀態（zustand）→ render API 的單向推入（畫選取框）。
         started.scene.setSelected(useUiStore.getState().selected)
@@ -87,7 +152,11 @@ export function PixiCanvas() {
         unsubscribe = null
       }
       if (canvas !== null) {
-        canvas.removeEventListener('pointerdown', handleClick)
+        canvas.removeEventListener('pointerdown', handlePointerDown)
+        canvas.removeEventListener('pointermove', handlePointerMove)
+        canvas.removeEventListener('pointerup', handlePointerUp)
+        canvas.removeEventListener('wheel', handleWheel)
+        canvas.removeEventListener('dblclick', handleDoubleClick)
         canvas = null
       }
       if (session !== null) {

@@ -31,10 +31,13 @@ describe('computeViewport（Prompt 9）', () => {
     expect(viewport.offsetY).toBe(Math.floor((2100 - 2048) / 2))
   })
 
-  it('視窗小於世界 → 仍維持最整數縮放 1（offset 夾在 ≥ 0，從左上起）', () => {
+  it('視窗小於世界 → 縮到剛好入鏡（Prompt 10.12：整張地圖看得見，不再被切掉）', () => {
     const viewport = computeViewport(MAP_TILES, 800, 600)
-    expect(viewport.scale).toBe(1)
-    expect(viewport.offsetX).toBe(0)
+    expect(viewport.scale).toBeCloseTo(600 / 1024, 6) // 高 600 為限制軸
+    expect(viewport.offsetX).toBe(Math.round((800 - 600) / 2))
     expect(viewport.offsetY).toBe(0)
+    // 地圖完整落在視窗內。
+    expect(viewport.worldPx * viewport.scale).toBeLessThanOrEqual(600 + 0.001)
+    expect(viewport.worldPx * viewport.scale).toBeLessThanOrEqual(800 + 0.001)
   })
 })

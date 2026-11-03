@@ -22,8 +22,16 @@ import {
   UNIT_RENDER_SIZE,
 } from './constants.ts'
 import { clamp01, fixedToPx, interpolateDisplay } from './interpolate.ts'
-import { computeViewport } from './viewport.ts'
+import {
+  clampCamera,
+  fitCamera,
+  panBy as panCamera,
+  worldPxOf,
+  zoomAt as zoomCamera,
+} from './camera.ts'
+import type { Camera } from './camera.ts'
 import type { SelectionTarget } from './hitTest.ts'
+import type { Viewport } from './viewport.ts'
 
 /**
  * 遊戲場景（render 層，Prompt 9）：持有 PixiJS 顯示物件，把世界快照畫成像素風。
@@ -48,6 +56,10 @@ export class GameScene {
   /** 攻擊特效（Prompt 10.10）：開火 → 彈丸／揮擊＋受擊閃光，短暫存在後過期。 */
   private effects: AttackEffect[] = []
   private lastFxTick = -1
+  /** 視角相機（Prompt 10.12）：預設完整入鏡，可拖曳平移／游標縮放。 */
+  private camera: Camera | null = null
+  /** 使用者調過視角（縮放／平移）→ resize 時保留其視角（僅重新夾限）。 */
+  private userAdjusted = false
 
   constructor(mapSizeTiles: number) {
     this.mapSizeTiles = mapSizeTiles
@@ -57,6 +69,52 @@ export class GameScene {
   /** ui（選取）→ render 的單向設定。 */
   setSelected(target: SelectionTarget | null): void {
     this.selected = target
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* 視角相機（Prompt 10.12）：完整入鏡為預設；ui 經以下 API 平移／縮放。 */
+  /* ---------------------------------------------------------------- */
+
+  /** 目前視埠（供 ui 的打點換算；與 `update` 用同一份相機）。 */
+  viewportOf(viewW: number, viewH: number): Viewport {
+    const worldPx = worldPxOf(this.mapSizeTiles)
+    const camera = this.camera ?? fitCamera(worldPx, viewW, viewH)
+    return { scale: camera.scale, offsetX: camera.offsetX, offsetY: camera.offsetY, worldPx }
+  }
+
+  /** 拖曳平移（含邊界夾限）。 */
+  panBy(dx: number, dy: number, viewW: number, viewH: number): void {
+    const worldPx = worldPxOf(this.mapSizeTiles)
+    this.camera = panCamera(
+      this.camera ?? fitCamera(worldPx, viewW, viewH),
+      dx,
+      dy,
+      worldPx,
+      viewW,
+      viewH,
+    )
+    this.userAdjusted = true
+  }
+
+  /** 以螢幕點為中心滾輪縮放（游標下的世界點固定；下限＝完整入鏡）。 */
+  zoomAt(screenX: number, screenY: number, factor: number, viewW: number, viewH: number): void {
+    const worldPx = worldPxOf(this.mapSizeTiles)
+    this.camera = zoomCamera(
+      this.camera ?? fitCamera(worldPx, viewW, viewH),
+      screenX,
+      screenY,
+      factor,
+      worldPx,
+      viewW,
+      viewH,
+    )
+    this.userAdjusted = true
+  }
+
+  /** 重置視角：回完整入鏡。（雙擊畫布） */
+  resetView(): void {
+    this.camera = null
+    this.userAdjusted = false
   }
 
   /**
@@ -108,9 +166,15 @@ export class GameScene {
     viewH: number,
   ): void {
     if (this.defs === null) return
-    const { scale, offsetX, offsetY } = computeViewport(this.mapSizeTiles, viewW, viewH)
-    this.root.scale.set(scale)
-    this.root.position.set(offsetX, offsetY)
+    // 相機：未調過＝跟隨視窗（完整入鏡）；調過＝保留視角、resize 僅重新夾限。
+    const worldPx = worldPxOf(this.mapSizeTiles)
+    if (this.camera === null || !this.userAdjusted) {
+      this.camera = fitCamera(worldPx, viewW, viewH)
+    } else {
+      this.camera = clampCamera(this.camera, worldPx, viewW, viewH)
+    }
+    this.root.scale.set(this.camera.scale)
+    this.root.position.set(this.camera.offsetX, this.camera.offsetY)
 
     const t = clamp01(alpha)
     // 前一份快照的單位显示位置（px），插值用。
