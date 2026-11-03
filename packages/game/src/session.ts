@@ -1,11 +1,13 @@
 import type { Application, Ticker } from 'pixi.js'
 
 import { MICRO_INTERVAL_TICKS, runMicroCycle } from './ai/micro.ts'
+import type { MicroDecision } from './ai/micro.ts'
 import { DEFAULT_POLICIES } from './ai/policy.ts'
 import type { PolicyValues } from './ai/policy.ts'
 import { runStrategicCycle, STRATEGIC_INTERVAL_TICKS } from './ai/strategy.ts'
+import type { DecisionRecord } from './ai/strategy.ts'
 import { computeTacticalPlan, TACTICAL_INTERVAL_TICKS } from './ai/tactics.ts'
-import type { TacticalPlan } from './ai/tactics.ts'
+import type { Squad, TacticalPlan } from './ai/tactics.ts'
 import { loadContentPackFromFetch } from './data/loadFromFetch.ts'
 import type { GameScene } from './render/scene.ts'
 import type { PlayerId, World } from './sim/types.ts'
@@ -16,6 +18,42 @@ import type { WorldSnapshot } from './sim/world.ts'
 
 /** 對局種子（與 `pnpm sim` 相同，方便對照）。 */
 export const SEED = 42
+
+/** 決策日誌單條（Prompt 9.5：左下面板顯示；戰略紀錄＋戰術小隊變動）。 */
+export interface DecisionLogEntry {
+  readonly tick: number
+  readonly layer: 'strategic' | 'tactical'
+  readonly actor: PlayerId
+  /** 一行中文：動作＋原因（戰略例 `build mine（…）`）。 */
+  readonly text: string
+}
+
+/** 小隊狀態單條（Prompt 9.5：右下面板，一行一隊）。 */
+export interface SquadInfo {
+  readonly player: PlayerId
+  readonly index: number
+  readonly mission: string
+  /** 任務目標格（defend = 集結點）。 */
+  readonly targetX: number
+  readonly targetY: number
+  readonly memberCount: number
+  /** 隊伍戰力（戰術層 Σ value × hp/maxHp）。 */
+  readonly power: number
+  /** 隊伍重心到目標格的距離（格，里程整數）。 */
+  readonly distTiles: number
+}
+
+/** 戰況快查（Prompt 9.5：四角面板一次取齊，500ms 級輪詢夠用）。 */
+export interface BattleStats {
+  readonly tick: number
+  readonly playerCrystal: number
+  readonly enemyCrystal: number
+  /** Σ hp × dmg × attackSpeed（SPEC §12.1）；雙方存活單位合計。 */
+  readonly playerPower: number
+  readonly enemyPower: number
+  readonly log: readonly DecisionLogEntry[]
+  readonly squads: readonly SquadInfo[]
+}
 
 /** 目前生效的對局（由 `startGameSession` 註冊、stop 或換局時清除）。 */
 let activeSession: GameSession | null = null
@@ -34,6 +72,10 @@ export interface UnitInfo {
   readonly maxHp: number
   readonly tileX: number
   readonly tileY: number
+  /** 最新的微操決策原因（中文）；無決策為 null。 */
+  readonly decision: string | null
+  /** 所屬小隊任務；未編隊為 null。 */
+  readonly squadMission: string | null
 }
 
 /** 建築資訊（ui 面板顯示用，Prompt 9.1 驗收：點建築看到資訊）。 */
@@ -60,6 +102,8 @@ export interface GameSession {
   getSnapshot(): WorldSnapshot | null
   getUnitInfo(unitId: number): UnitInfo | null
   getBuildingInfo(buildingId: number): BuildingInfo | null
+  /** 四角面板（Prompt 9.5）一次取齊的戰況。 */
+  getBattleStats(): BattleStats
   /** 停止 ticker 迴圈（卸載 PixiCanvas 前呼叫）。 */
   stop(): void
 }
@@ -89,21 +133,83 @@ export async function startGameSession(app: Application, scene: GameScene): Prom
   for (const player of world.players) {
     plans[player.id] = computeTacticalPlan(world, player.id, policies[player.id])
   }
+  // 每玩家最新的微操決策（Prompt 9.4：點單位顯示 AI 當下在想什麼）。
+  const latestMicro: Record<PlayerId, MicroDecision[]> = { player: [], enemy: [] }
+  // 決策日誌（Prompt 9.5：戰略紀錄＋戰術小隊變動；面板取最後 5 條）。
+  const decisionLog: DecisionLogEntry[] = []
+  const LOG_LIMIT = 32
+  const pushLog = (entry: DecisionLogEntry): void => {
+    decisionLog.push(entry)
+    while (decisionLog.length > LOG_LIMIT) {
+      decisionLog.shift()
+    }
+  }
 
   let prev: WorldSnapshot = snapshotWorld(world)
   let curr: WorldSnapshot = prev
 
-  const onTick = (w: World): void => {
-    if (w.tick % STRATEGIC_INTERVAL_TICKS === 0) {
-      for (const player of w.players) runStrategicCycle(w, player.id, policies[player.id])
+  /** 戰略紀錄 → 日誌一行（動作＋一行中文原因）。 */
+  const logDecisionRecords = (records: readonly DecisionRecord[]): void => {
+    for (const record of records) {
+      pushLog({
+        tick: record.tick,
+        layer: 'strategic',
+        actor: record.actor,
+        text: `${record.action} ${record.target}（${record.reason.explanation}）`,
+      })
     }
-    if (w.tick % TACTICAL_INTERVAL_TICKS === 0) {
-      for (const player of w.players) {
-        plans[player.id] = computeTacticalPlan(w, player.id, policies[player.id])
+  }
+
+  /** 戰術任務變動的原因句（規則式、確定性）。 */
+  const missionChangeReason = (from: Squad['mission'], to: Squad['mission']): string => {
+    if (to === 'retreat') return '戰力處於劣勢'
+    if (to === 'harass') return '軍事建築不足，騷擾敵方經濟'
+    if (to === 'attack') return from === 'retreat' ? '重新取得戰力優勢' : '兵力充足，鎖定目標建築'
+    return from === 'retreat' ? '解除了兵力劣勢' : '無合適進攻目標，轉為守備'
+  }
+
+  /** 戰術層：重算前後比較，任務／目標變動才進日誌（每 10 tick 一次）。 */
+  const refreshPlans = (tick: number): void => {
+    for (const player of world.players) {
+      const previous = plans[player.id]
+      const next = computeTacticalPlan(world, player.id, policies[player.id])
+      plans[player.id] = next
+      if (previous === null) continue
+      for (const squad of next.squads) {
+        const before = previous.squads.find((candidate) => candidate.index === squad.index)
+        if (before === undefined) continue
+        if (before.mission !== squad.mission) {
+          pushLog({
+            tick,
+            layer: 'tactical',
+            actor: player.id,
+            text: `小隊 #${squad.index} ${before.mission}→${squad.mission}（${missionChangeReason(before.mission, squad.mission)}）`,
+          })
+        } else if (before.target.x !== squad.target.x || before.target.y !== squad.target.y) {
+          pushLog({
+            tick,
+            layer: 'tactical',
+            actor: player.id,
+            text: `小隊 #${squad.index} 目標改為 (${squad.target.x},${squad.target.y})`,
+          })
+        }
       }
     }
+  }
+
+  const onTick = (w: World): void => {
+    if (w.tick % STRATEGIC_INTERVAL_TICKS === 0) {
+      for (const player of w.players) {
+        logDecisionRecords(runStrategicCycle(w, player.id, policies[player.id]).records)
+      }
+    }
+    if (w.tick % TACTICAL_INTERVAL_TICKS === 0) {
+      refreshPlans(w.tick)
+    }
     if (w.tick % MICRO_INTERVAL_TICKS === 0) {
-      for (const player of w.players) runMicroCycle(w, player.id, plans[player.id])
+      for (const player of w.players) {
+        latestMicro[player.id] = runMicroCycle(w, player.id, plans[player.id])
+      }
     }
     prev = curr
     curr = snapshotWorld(w)
@@ -124,6 +230,11 @@ export async function startGameSession(app: Application, scene: GameScene): Prom
       const def = world.defs.units[unit.defId]
       if (def === undefined) return null
       const tile = tileOf(unit.x, unit.y)
+      const decision =
+        latestMicro[unit.player].find((candidate) => candidate.unitId === unitId)?.reason ?? null
+      const squadMission =
+        plans[unit.player]?.squads.find((squad) => squad.memberIds.includes(unit.id))?.mission ??
+        null
       return {
         id: unit.id,
         defId: unit.defId,
@@ -132,6 +243,8 @@ export async function startGameSession(app: Application, scene: GameScene): Prom
         maxHp: def.stats.hp,
         tileX: tile.x,
         tileY: tile.y,
+        decision,
+        squadMission,
       }
     },
     getBuildingInfo: (buildingId: number): BuildingInfo | null => {
@@ -156,6 +269,59 @@ export async function startGameSession(app: Application, scene: GameScene): Prom
         h,
         tileX: building.x,
         tileY: building.y,
+      }
+    },
+    getBattleStats: (): BattleStats => {
+      const crystal = (id: PlayerId): number => world.players.find((p) => p.id === id)?.blueCrystal ?? 0
+      const power = (id: PlayerId): number =>
+        world.units.reduce((total, unit) => {
+          if (unit.player !== id || unit.hp <= 0) return total
+          const def = world.defs.units[unit.defId]
+          if (def === undefined) return total
+          return total + unit.hp * def.stats.dmg * def.stats.attackSpeed
+        }, 0)
+      const squads: SquadInfo[] = []
+      for (const player of world.players) {
+        const plan = plans[player.id]
+        if (plan === null) continue
+        for (const squad of plan.squads) {
+          const [sumX, sumY] = squad.memberIds.reduce<[number, number]>(
+            (acc, id) => {
+              const unit = world.units.find((candidate) => candidate.id === id)
+              if (unit === undefined) return acc
+              return [acc[0] + unit.x, acc[1] + unit.y]
+            },
+            [0, 0],
+          )
+          const memberCount = Math.max(1, squad.memberIds.length)
+          const cx = Math.floor(sumX / memberCount / 200)
+          const cy = Math.floor(sumY / memberCount / 200)
+          const dist = Math.floor(
+            Math.sqrt(
+              (squad.target.x - cx) * (squad.target.x - cx) +
+                (squad.target.y - cy) * (squad.target.y - cy),
+            ),
+          )
+          squads.push({
+            player: player.id,
+            index: squad.index,
+            mission: squad.mission,
+            targetX: squad.target.x,
+            targetY: squad.target.y,
+            memberCount: squad.memberIds.length,
+            power: squad.power,
+            distTiles: dist,
+          })
+        }
+      }
+      return {
+        tick: world.tick,
+        playerCrystal: crystal('player'),
+        enemyCrystal: crystal('enemy'),
+        playerPower: power('player'),
+        enemyPower: power('enemy'),
+        log: [...decisionLog],
+        squads,
       }
     },
     stop: (): void => {
