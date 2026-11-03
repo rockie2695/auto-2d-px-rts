@@ -298,7 +298,11 @@ export async function startGameSession(app: Application, scene: GameScene): Prom
   /** 戰術任務變動的原因句（規則式、確定性）。 */
   const missionChangeReason = (playerId: PlayerId, from: Squad['mission'], to: Squad['mission']): string => {
     if (to === 'retreat') return '戰力處於劣勢'
-    if (to === 'harass') return '軍事建築不足，騷擾敵方經濟'
+    if (to === 'harass') {
+      // attack → harass 可能是交戰評估降級（打不贏轉騷擾等支援，Prompt 10.8）。
+      if (from === 'attack') return '戰力不足以正面交戰，轉為騷擾等待支援'
+      return '軍事建築不足，騷擾敵方經濟'
+    }
     if (to === 'attack') return from === 'retreat' ? '重新取得戰力優勢' : '兵力充足，鎖定目標建築'
     if (to === 'defend') {
       // 主動防禦（Prompt 10.6）：攻轉守且建築受威脅 → 是「回防攔截」而非「無目標轉守」。

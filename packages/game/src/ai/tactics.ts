@@ -1,6 +1,6 @@
 import { getPlayer, isBlockedAt, tileOf, UNITS_PER_TILE } from '../sim/types.ts'
 import type { Building, PlayerId, TilePos, Unit, World } from '../sim/types.ts'
-import { computeInfluenceMap, enemyThreatAtPoint, enemyThreatAtTile, pickMostUrgentThreat } from './influence.ts'
+import { computeInfluenceMap, DEFENSE_RADIUS_TILES, enemyThreatAtPoint, enemyThreatAtTile, pickMostUrgentThreat, unitThreatMilli } from './influence.ts'
 import type { InfluenceMap } from './influence.ts'
 import { clampSlider } from './policy.ts'
 import type { PolicyValues } from './policy.ts'
@@ -62,6 +62,12 @@ const REGROUP_LIMIT_SQUARED =
 
 /** 集火半徑（tile）：斬殺集火只在小隊重心此距離內的敵人裡挑（維持協同）。 */
 export const FOCUS_RADIUS_TILES = 8
+
+/**
+ * 戰力評估比例（Prompt 10.8）：我方戰力（milli）≥ 敵方戰力 × 此值才承諾
+ * 進攻／攔截；打不贏 → 降級騷擾或守在原處等待支援。
+ */
+export const ENGAGE_POWER_RATIO = 0.9
 
 export type SquadMission = 'defend' | 'attack' | 'harass' | 'retreat'
 
@@ -330,6 +336,50 @@ function stagingPoint(world: World, centroid: TilePos, targetTile: TilePos): Til
   return nearestWalkable(world, { x: centroid.x + stepX, y: centroid.y + stepY })
 }
 
+/** 目標附近的敵方守軍（守備半徑內）與其戰力（milli）。 */
+function defendersNear(
+  world: World,
+  playerId: PlayerId,
+  centerFixed: { x: number; y: number },
+): { enemies: Unit[]; powerMilli: number } {
+  const radiusFixed = DEFENSE_RADIUS_TILES * UNITS_PER_TILE
+  const limit = radiusFixed * radiusFixed
+  const enemies: Unit[] = []
+  let powerMilli = 0
+  for (const unit of world.units) {
+    if (unit.player === playerId || unit.hp <= 0) continue
+    const dx = unit.x - centerFixed.x
+    const dy = unit.y - centerFixed.y
+    if (dx * dx + dy * dy > limit) continue
+    enemies.push(unit)
+    powerMilli += unitThreatMilli(world, unit)
+  }
+  return { enemies, powerMilli }
+}
+
+/**
+ * 交戰評估（Prompt 10.8）：這群我們殺得掉嗎？
+ * 1. 戰力：我方總戰力（milli）≥ 敵方戰力 × `ENGAGE_POWER_RATIO`。
+ * 2. 角色：敵方**全遠程**而我方無遠程 → 會被風箏到死，判為殺不掉
+ *    （打不贏就騷擾／守建築等待支援）。
+ */
+function canKillGroup(
+  world: World,
+  unitById: Map<number, Unit>,
+  memberIds: readonly number[],
+  totalPowerMilli: number,
+  enemyPowerMilli: number,
+  enemies: readonly Unit[],
+): boolean {
+  if (totalPowerMilli < enemyPowerMilli * ENGAGE_POWER_RATIO) return false
+  const allRanged = enemies.length > 0 && enemies.every((enemy) => enemy.role === 'ranged')
+  if (!allRanged) return true
+  return memberIds.some((id) => {
+    const unit = unitById.get(id)
+    return unit !== undefined && world.defs.units[unit.defId]?.role === 'ranged'
+  })
+}
+
 /** 純計算：編組、任務、目標、撤退判斷（不修改世界）。 */
 export function computeTacticalPlan(
   world: World,
@@ -443,12 +493,48 @@ export function computeTacticalPlan(
     }
     const center = buildingCenter(target)
     const approach = nearestWalkable(world, tileOf(center.x, center.y))
-    squad.targetBuildingId = target.id
     if (approach === null) {
       squad.mission = 'defend'
       squad.targetBuildingId = null
       continue
     }
+    squad.targetBuildingId = target.id
+
+    // 交戰評估（Prompt 10.8）：目標處守軍殺不掉 → 降級等待支援。
+    // attack 打不贏 → 轉 harass（改打敵方經濟）；harass 也打不贏 → 轉 defend（守家等兵）。
+    const defense = defendersNear(world, playerId, center)
+    if (
+      !canKillGroup(
+        world,
+        unitById,
+        squad.memberIds,
+        squad.power * 1000,
+        defense.powerMilli,
+        defense.enemies,
+      )
+    ) {
+      if (squad.mission === 'attack') {
+        const econCandidates = enemyTargets(world, playerId, true).filter(
+          (candidate) => candidate.id !== target.id,
+        )
+        const econ = pickTarget(world, influence, centroidFixed, econCandidates)
+        if (econ !== null) {
+          const econCenter = buildingCenter(econ)
+          const econApproach = nearestWalkable(world, tileOf(econCenter.x, econCenter.y))
+          if (econApproach !== null) {
+            squad.mission = 'harass'
+            squad.targetBuildingId = econ.id
+            squad.target = econApproach
+            continue
+          }
+        }
+      }
+      squad.mission = 'defend'
+      squad.target = { x: rally.x, y: rally.y }
+      squad.targetBuildingId = null
+      continue
+    }
+
     // 集結再攻（Prompt 10.7）：成員鬆散（最遠成員離重心 > REGROUP_DISTANCE_TILES）
     // → 先往「重心→目標」方向的集結點聚攏；到齊後直接鎖定目標建築。
     if (squadSpreadSquared(unitById, squad) > REGROUP_LIMIT_SQUARED) {
@@ -488,9 +574,27 @@ export function computeTacticalPlan(
         defenders = [closest]
       }
     }
+    // 交戰評估（Prompt 10.8）：攔截打不贏來襲群 → 不前出，守在受威脅建築旁
+    // （自動接戰近身敵人 + 脫戰回血 + 壓境產兵加權），等戰力翻轉再攔截包夾。
+    const raiders = threat.enemyIds
+      .map((id) => world.units.find((unit) => unit.id === id))
+      .filter((unit): unit is Unit => unit !== undefined && unit.hp > 0)
+    const totalPowerMilli = defenders.reduce((total, squad) => total + squad.power * 1000, 0)
+    const memberIds = defenders.flatMap((squad) => squad.memberIds)
+    const hold = !canKillGroup(
+      world,
+      unitById,
+      memberIds,
+      totalPowerMilli,
+      threat.threatPower,
+      raiders,
+    )
+    const holdTarget = hold
+      ? (nearestWalkable(world, threat.buildingCenterTile) ?? { x: rally.x, y: rally.y })
+      : null
     for (const squad of defenders) {
       squad.mission = 'defend'
-      squad.target = intercept
+      squad.target = holdTarget ?? intercept
       squad.targetBuildingId = null
     }
   }

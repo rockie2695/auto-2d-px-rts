@@ -6,6 +6,7 @@ import {
   assignMissions,
   computeTacticalPlan,
   countSquads,
+  ENGAGE_POWER_RATIO,
   FOCUS_RADIUS_TILES,
   lerp,
   REGROUP_DISTANCE_TILES,
@@ -316,6 +317,68 @@ describe('地緣重編組與集結再攻（Prompt 10.7）', () => {
   it('常數：集結門檻 5 格、集火半徑 8 格', () => {
     expect(REGROUP_DISTANCE_TILES).toBe(5)
     expect(FOCUS_RADIUS_TILES).toBe(8)
+  })
+})
+
+describe('交戰評估（打不贏就騷擾／守家，Prompt 10.8）', () => {
+  it('評估比例常數 0.9', () => {
+    expect(ENGAGE_POWER_RATIO).toBe(0.9)
+  })
+
+  it('攔截打不贏（1 守 vs 3 來襲）→ 守在受威脅建築旁（不前出攔截）', () => {
+    const world = worldWithBases()
+    addBuilding(world, 'player', 'mine', { x: 8, y: 8 }, { built: true, nodeId: null })
+    putUnit(world, 'player', 'u', { x: 3, y: 3 })
+    putUnit(world, 'enemy', 'u', { x: 11, y: 8 })
+    putUnit(world, 'enemy', 'u', { x: 11, y: 9 })
+    putUnit(world, 'enemy', 'u', { x: 12, y: 8 })
+
+    const plan = computeTacticalPlan(world, 'player', resolvePolicies({ aggression: 0 }))
+    const squad = plan.squads[0]
+    expect(squad?.mission).toBe('defend')
+    const tx = squad?.target.x ?? -99
+    const ty = squad?.target.y ?? -99
+    // 守在礦場 (8,8) 旁（1 v 3 殺不掉，等待支援），不是攔截點 (11,8)。
+    expect(Math.abs(tx - 8)).toBeLessThanOrEqual(2)
+    expect(Math.abs(ty - 8)).toBeLessThanOrEqual(2)
+    expect(squad?.target).not.toEqual({ x: 11, y: 8 })
+  })
+
+  it('全近戰 vs 全遠程來襲 → 殺不掉（會被風箏），守建築等待遠程支援', () => {
+    const RAIDER = makeUnitDef({ id: 'raider', role: 'ranged' })
+    const world = createTestWorld({ size: 32, units: [UNIT, RAIDER], buildings: [KEEP, MINE] })
+    addBuilding(world, 'player', 'keep', { x: 2, y: 2 }, { built: true, nodeId: null })
+    addBuilding(world, 'player', 'mine', { x: 8, y: 8 }, { built: true, nodeId: null })
+    putUnit(world, 'player', 'u', { x: 3, y: 3 })
+    putUnit(world, 'player', 'u', { x: 3, y: 4 })
+    putUnit(world, 'enemy', 'raider', { x: 11, y: 8 })
+    putUnit(world, 'enemy', 'raider', { x: 11, y: 9 })
+
+    const plan = computeTacticalPlan(world, 'player', resolvePolicies({ aggression: 0 }))
+    expect(plan.squads.length).toBeGreaterThan(0)
+    for (const squad of plan.squads) {
+      expect(squad.mission).toBe('defend')
+      expect(Math.abs(squad.target.x - 8)).toBeLessThanOrEqual(2) // 守在礦場旁
+      expect(Math.abs(squad.target.y - 8)).toBeLessThanOrEqual(2)
+      expect(squad.target).not.toEqual({ x: 11, y: 8 }) // 不前出攔截
+    }
+  })
+
+  it('attack 打不贏守軍 → 降級 harass 打敵方經濟（等待支援）', () => {
+    const world = worldWithBases()
+    const econMine = addBuilding(world, 'enemy', 'mine', { x: 24, y: 24 }, { built: true, nodeId: null })
+    putUnit(world, 'player', 'u', { x: 4, y: 4 }) // 1 兵 vs 敵 keep 旁 3 守軍
+    for (const tile of [{ x: 26, y: 26 }, { x: 27, y: 26 }, { x: 26, y: 27 }]) {
+      putUnit(world, 'enemy', 'u', tile)
+    }
+    // 敵礦場旁 2 守軍（第一目標評分仍選 keep，評估後降級改打礦場）。
+    putUnit(world, 'enemy', 'u', { x: 25, y: 24 })
+    putUnit(world, 'enemy', 'u', { x: 24, y: 25 })
+
+    const plan = computeTacticalPlan(world, 'player', resolvePolicies({ aggression: 1, clusterSpread: 1 }))
+    const squad = plan.squads[0]
+    expect(squad?.mission).toBe('harass')
+    expect(squad?.targetBuildingId).toBe(econMine.id) // 改打敵方經濟（水晶）
   })
 })
 

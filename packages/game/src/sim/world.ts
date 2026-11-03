@@ -324,6 +324,35 @@ function stepMovement(world: World): void {
 }
 
 /* ------------------------------------------------------------------ */
+/* 回血                                                                */
+/* ------------------------------------------------------------------ */
+
+/** 回血節奏：每秒（20 tick）評估一次。 */
+export const REGEN_INTERVAL_TICKS = 20
+
+/** 脫戰寬限：最後交戰（出手或受傷）3 秒（60 tick）後開始回血。 */
+export const REGEN_GRACE_TICKS = 60
+
+/** 每次回血量（hp）。 */
+export const REGEN_HP = 1
+
+/**
+ * 脫戰回血（Prompt 10.8）：每 20 tick（1 秒）評估一次——
+ * 存活單位若最後交戰（出手或受傷）已超過寬限期 → hp +1（上限 maxHp）。
+ * 整數運算、依 world.units 順序 → 確定性。
+ */
+function stepRegeneration(world: World): void {
+  if (world.tick % REGEN_INTERVAL_TICKS !== 0) return
+  for (const unit of world.units) {
+    if (unit.hp <= 0) continue
+    const def = world.defs.units[unit.defId]
+    if (def === undefined || unit.hp >= def.stats.hp) continue
+    if (world.tick - unit.lastCombatTick < REGEN_GRACE_TICKS) continue
+    unit.hp = Math.min(def.stats.hp, unit.hp + REGEN_HP)
+  }
+}
+
+/* ------------------------------------------------------------------ */
 /* tick 入口                                                           */
 /* ------------------------------------------------------------------ */
 
@@ -331,6 +360,7 @@ function stepMovement(world: World): void {
 export function stepWorld(world: World): void {
   world.tick += 1
   stepEconomy(world)
+  stepRegeneration(world)
   stepMovement(world)
   rebuildSpatialHash(world)
   stepCombat(world)
@@ -363,6 +393,7 @@ export interface WorldSnapshot {
     attackAcc: number
     targetId: number | null
     path: TilePos[] | null
+    lastCombatTick: number
   }>
   buildings: Array<{
     id: number
@@ -410,6 +441,7 @@ export function snapshotWorld(world: World): WorldSnapshot {
       attackAcc: unit.attackAcc,
       targetId: unit.targetId,
       path: unit.path === null ? null : unit.path.map((tile) => ({ ...tile })),
+      lastCombatTick: unit.lastCombatTick,
     })),
     buildings: world.buildings.map((building) => ({
       id: building.id,

@@ -501,6 +501,53 @@ describe('GameLoop（20Hz 固定步長）', () => {
 })
 
 /* ------------------------------------------------------------------ */
+/* 脫戰回血（Prompt 10.8）                                              */
+/* ------------------------------------------------------------------ */
+
+describe('脫戰回血（Prompt 10.8）', () => {
+  it('受傷單位脫戰 60 tick 後每 20 tick +1 hp；上限 maxHp', () => {
+    const world = createTestWorld({ size: 12, units: [makeUnitDef({ id: 'u' })], buildings: [] })
+    const id = putUnit(world, 'player', 'u', { x: 3, y: 3 })
+    const unit = world.units.find((candidate) => candidate.id === id)
+    if (unit === undefined) throw new Error('找不到單位')
+    unit.hp = 50
+
+    for (let tick = 0; tick < 59; tick++) stepWorld(world)
+    expect(unit.hp).toBe(50) // 寬限期內（lastCombatTick 0，tick 59 − 0 < 60）不回血
+    stepWorld(world) // tick 60：60 − 0 ≥ 60 → 開始回血
+    expect(unit.hp).toBe(51)
+    for (let tick = 0; tick < 40; tick++) stepWorld(world) // tick 80、100 各 +1
+    expect(unit.hp).toBe(53)
+
+    unit.hp = 99 // 接近上限
+    for (let tick = 0; tick < 40; tick++) stepWorld(world)
+    expect(unit.hp).toBe(100) // 回到滿血
+    for (let tick = 0; tick < 40; tick++) stepWorld(world)
+    expect(unit.hp).toBe(100) // 不超過 maxHp
+  })
+
+  it('交戰中（出手或受傷）不回血：互毆時 hp 單調下降', () => {
+    const world = createTestWorld({
+      size: 12,
+      units: [makeUnitDef({ id: 'u' }), makeUnitDef({ id: 'e' })],
+      buildings: [],
+    })
+    const id = putUnit(world, 'player', 'u', { x: 3, y: 3 })
+    putUnit(world, 'enemy', 'e', { x: 3, y: 3 }) // 同格互毆
+    const unit = world.units.find((candidate) => candidate.id === id)
+    if (unit === undefined) throw new Error('找不到單位')
+    unit.hp = 90
+
+    let previous = 90
+    for (let tick = 0; tick < 120; tick++) {
+      stepWorld(world)
+      expect(unit.hp).toBeLessThanOrEqual(previous) // 只掉不升（交戰重置回血計時）
+      previous = unit.hp
+    }
+  })
+})
+
+/* ------------------------------------------------------------------ */
 /* 確定性（規則 8）與真實內容整合                                      */
 /* ------------------------------------------------------------------ */
 

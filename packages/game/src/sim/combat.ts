@@ -183,9 +183,15 @@ export function stepCombat(world: World): void {
     }
 
     unit.attackAcc -= 1
+    // 出手即交戰（脫戰回血計時重置；Prompt 10.8）。
+    unit.lastCombatTick = world.tick
     if (target.kind === 'unit') {
       const victim = world.units.find((candidate) => candidate.id === target.unit.id)
-      if (victim !== undefined) victim.hp = Math.max(0, victim.hp - def.stats.dmg)
+      if (victim !== undefined) {
+        victim.hp = Math.max(0, victim.hp - def.stats.dmg)
+        // 受傷也是交戰（被打的單位同樣不回血）。
+        victim.lastCombatTick = world.tick
+      }
     } else {
       damageBuilding(world, target.building.id, def.stats.dmg)
     }

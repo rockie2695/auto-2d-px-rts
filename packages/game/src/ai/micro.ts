@@ -43,6 +43,12 @@ export const KITE_MARGIN = 0.7
 /** 追擊門檻：射程外但 ≤ `range + CHASE_MARGIN`（格）就前壓接戰（SPEC §9.3 第 4 節）。 */
 export const CHASE_MARGIN = 1.0
 
+/**
+ * 追擊支援半徑（tile，Prompt 10.8）：追擊**風箏型遠程**敵人（在我方射程外）時，
+ * 需有其他友軍位於該敵人此半徑內作支援——單兵追風箏 = 被射死，不追、守在建築旁等支援。
+ */
+export const CHASE_SUPPORT_RADIUS_TILES = 4
+
 export type MicroAction = 'retreat' | 'attack' | 'kite' | 'chase' | 'formation' | 'rally'
 
 export interface MicroDecision {
@@ -340,19 +346,40 @@ export function computeMicroPlan(
 
     // 2.5 追擊：敵在射程外但 ≤ range + CHASE_MARGIN → 前壓到敵人所在格接戰
     //     （SPEC §9.3 行為樹第 4 節）。近旁敵人不會再被同速行軍「並行放走」。
+    //     追擊支援規則（Prompt 10.8）：目標是遠程（風箏型）且在我方射程外時，
+    //     需有其他友軍在其 CHASE_SUPPORT_RADIUS_TILES 內作支援才追——
+    //     單兵追風箏會被射死；無支援則不追（落回編隊分支守在建築旁等隊友，
+    //     支援到齊後一起從各自位置包夾收頭）。
     const near = nearestEnemy(world, unit)
     const chaseLimitFixed = rangeFixed + CHASE_MARGIN * UNITS_PER_TILE
     if (near !== null && near.distSq <= chaseLimitFixed * chaseLimitFixed) {
-      const enemyTile = tileOf(near.unit.x, near.unit.y)
-      decisions.push({
-        unitId: unit.id,
-        action: 'chase',
-        squadIndex,
-        moveDest: shouldIssueMove(world, unit, enemyTile) ? enemyTile : null,
-        attackTargetId: near.unit.id,
-        reason: `敵人 #${near.unit.id} 在追擊距離內（${(Math.sqrt(near.distSq) / UNITS_PER_TILE).toFixed(1)} 格，射程 ${(rangeFixed / UNITS_PER_TILE).toFixed(1)} 格）：前壓接戰`,
-      })
-      continue
+      let supported = near.unit.role !== 'ranged'
+      if (!supported) {
+        const supportLimit = CHASE_SUPPORT_RADIUS_TILES * UNITS_PER_TILE
+        const supportSq = supportLimit * supportLimit
+        for (const ally of world.units) {
+          if (ally.player !== playerId || ally.id === unit.id || ally.hp <= 0) continue
+          const dx = ally.x - near.unit.x
+          const dy = ally.y - near.unit.y
+          if (dx * dx + dy * dy <= supportSq) {
+            supported = true
+            break
+          }
+        }
+      }
+      if (supported) {
+        const enemyTile = tileOf(near.unit.x, near.unit.y)
+        decisions.push({
+          unitId: unit.id,
+          action: 'chase',
+          squadIndex,
+          moveDest: shouldIssueMove(world, unit, enemyTile) ? enemyTile : null,
+          attackTargetId: near.unit.id,
+          reason: `敵人 #${near.unit.id} 在追擊距離內（${(Math.sqrt(near.distSq) / UNITS_PER_TILE).toFixed(1)} 格，射程 ${(rangeFixed / UNITS_PER_TILE).toFixed(1)} 格）：前壓接戰`,
+        })
+        continue
+      }
+      // 無支援：不追（落回編隊分支，守在建築旁等待支援）。
     }
 
     // 3. 有小隊 → 移往隊形位置（attack／harass 同時對目標建築聚火）。

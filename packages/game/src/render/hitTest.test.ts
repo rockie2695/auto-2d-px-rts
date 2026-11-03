@@ -27,6 +27,7 @@ function snapshotWith(units: Array<{ id: number; x: number; y: number }>): World
       attackAcc: 0,
       targetId: null,
       path: null,
+      lastCombatTick: 0,
     })),
     buildings: [],
     resourceNodes: [],
@@ -167,6 +168,7 @@ describe('pickTarget（Prompt 9.1）', () => {
       attackAcc: 0,
       targetId: null,
       path: null,
+      lastCombatTick: 0,
     })
     expect(pickTarget(snapshot, 336, 368, SIZE_OF)).toEqual({ kind: 'unit', id: 2 })
   })

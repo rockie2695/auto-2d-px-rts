@@ -58,6 +58,8 @@ export interface Unit {
   path: TilePos[] | null
   /** 移動命令的最終目的格（供路徑被建築擋住時重算）。 */
   dest: TilePos | null
+  /** 最後一次出手或受傷的 tick（脫戰回血判定用；初始 −∞ 視為從未交戰）。 */
+  lastCombatTick: number
 }
 
 /** 生產佇列的工作。 */

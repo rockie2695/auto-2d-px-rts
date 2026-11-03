@@ -7,6 +7,7 @@ import {
   applyMicroPlan,
   computeMicroPlan,
   CHASE_MARGIN,
+  CHASE_SUPPORT_RADIUS_TILES,
   KITE_MARGIN,
   MICRO_INTERVAL_TICKS,
   MICRO_REPATH_TICKS,
@@ -378,8 +379,49 @@ describe('追擊（SPEC §9.3 第 4 節，Prompt 10）', () => {
     expect(decision?.moveDest).toEqual(rally)
   })
 
-  it('常數：追擊門檻 1.0 格', () => {
+  it('追擊支援：單兵遇風箏遠程 → 不追（守原位等支援，不再被射死）', () => {
+    const world = microWorld()
+    const meleeId = putUnit(world, 'player', 'melee', { x: 10, y: 10 })
+    putUnit(world, 'enemy', 'archer', { x: 11, y: 10 }) // 距 1 格：> 0.8 射程、< 1.8 追擊距
+    const plan = planWith(world, { x: 2, y: 2 }, [makeSquad(0, [meleeId], { x: 20, y: 20 })])
+
+    const decision = computeMicroPlan(world, 'player', plan).find((d) => d.unitId === meleeId)
+    expect(decision?.action).toBe('formation') // 不追擊（修正前會 chase 被風箏到死）
+    expect(decision?.attackTargetId).toBeNull() // 編隊分支不設單位目標
+  })
+
+  it('追擊支援：有隊友在敵人附近 → 一起追擊（包夾收頭）', () => {
+    const world = microWorld()
+    const melee1 = putUnit(world, 'player', 'melee', { x: 10, y: 10 })
+    const melee2 = putUnit(world, 'player', 'melee', { x: 12, y: 10 }) // 距敵 1 格 → 支援半徑內
+    const enemyId = putUnit(world, 'enemy', 'archer', { x: 11, y: 10 })
+    const plan = planWith(world, { x: 2, y: 2 }, [
+      makeSquad(0, [melee1, melee2], { x: 20, y: 10 }),
+    ])
+
+    const decisions = computeMicroPlan(world, 'player', plan)
+    const d1 = decisions.find((d) => d.unitId === melee1)
+    const d2 = decisions.find((d) => d.unitId === melee2)
+    expect(d1?.action).toBe('chase')
+    expect(d2?.action).toBe('chase')
+    expect(d1?.attackTargetId).toBe(enemyId)
+    expect(d1?.moveDest).toEqual({ x: 11, y: 10 }) // 兩面包夾到敵人所在格
+  })
+
+  it('追擊支援：近戰敵人不需要支援（照常追擊）', () => {
+    const world = microWorld()
+    const meleeId = putUnit(world, 'player', 'melee', { x: 10, y: 10 })
+    const enemyId = putUnit(world, 'enemy', 'melee', { x: 11, y: 10 })
+    const plan = planWith(world, { x: 2, y: 2 }, [makeSquad(0, [meleeId], { x: 20, y: 20 })])
+
+    const decision = computeMicroPlan(world, 'player', plan).find((d) => d.unitId === meleeId)
+    expect(decision?.action).toBe('chase')
+    expect(decision?.attackTargetId).toBe(enemyId)
+  })
+
+  it('常數：追擊門檻 1.0 格、追擊支援半徑 4 格', () => {
     expect(CHASE_MARGIN).toBe(1.0)
+    expect(CHASE_SUPPORT_RADIUS_TILES).toBe(4)
   })
 })
 

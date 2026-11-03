@@ -136,6 +136,8 @@ export function spawnUnit(
     targetId: null,
     path: null,
     dest: null,
+    // tick 0 = 對局開始視為未交戰（單位滿血出生，回血計時從此起算也無妨）。
+    lastCombatTick: 0,
   }
   world.nextUnitId += 1
   world.units.push(unit)
