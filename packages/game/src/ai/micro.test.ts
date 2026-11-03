@@ -307,12 +307,12 @@ describe('撤退（Prompt 8 / Prompt 10 邊退邊打）', () => {
 
     // 對照：附近無敵人（8 格內）→ 傷兵照常跟隊，不撤退（Prompt 10.9 安全距離）。
     const lonelyWorld = microWorld()
-    const lonelyId = putUnit(world, 'player', 'melee', { x: 10, y: 10 })
-    const lonely = world.units.find((unit) => unit.id === lonelyId)
+    const lonelyId = putUnit(lonelyWorld, 'player', 'melee', { x: 10, y: 10 })
+    const lonely = lonelyWorld.units.find((unit) => unit.id === lonelyId)
     if (lonely === undefined) throw new Error('找不到受傷單位')
     lonely.hp = 15
-    const lonelyPlan = planWith(world, { x: 2, y: 2 }, [makeSquad(0, [lonelyId], { x: 20, y: 20 })])
-    const lonelyDecision = computeMicroPlan(world, 'player', lonelyPlan).find(
+    const lonelyPlan = planWith(lonelyWorld, { x: 2, y: 2 }, [makeSquad(0, [lonelyId], { x: 20, y: 20 })])
+    const lonelyDecision = computeMicroPlan(lonelyWorld, 'player', lonelyPlan).find(
       (d) => d.unitId === lonelyId,
     )
     expect(lonelyDecision?.action).toBe('formation')
