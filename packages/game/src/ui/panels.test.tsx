@@ -23,10 +23,12 @@ import type { DecisionLogEntry, SquadInfo } from '../session.ts'
  */
 
 const logEntry = (
+  sequence: number,
   tick: number,
   text: string,
   layer: DecisionLogEntry['layer'],
 ): DecisionLogEntry => ({
+  sequence,
   tick,
   layer,
   actor: 'player',
@@ -137,12 +139,12 @@ describe('戰力比色階（0.7、1.4 邊界走黃）', () => {
 describe('DecisionLogPanel（左下）', () => {
   it('顯示最新 5 條、新的在上（時間 + 層級 + 動作原因）', () => {
     const entries: DecisionLogEntry[] = [
-      logEntry(100, 'build mine（收入不足）', 'strategic'),
-      logEntry(120, '小隊 #0 attack→defend（兵力不足）', 'tactical'),
-      logEntry(140, 'build barracks（軍事建築不足）', 'strategic'),
-      logEntry(200, 'train legionnaire（補足軍力）', 'strategic'),
-      logEntry(240, '小隊 #1 目標改為 (20,20)', 'tactical'),
-      logEntry(260, 'build mine（第二座礦場）', 'strategic'), // 應淘汰第 1 條
+      logEntry(1, 100, 'build mine（收入不足）', 'strategic'),
+      logEntry(2, 120, '小隊 #0 attack→defend（兵力不足）', 'tactical'),
+      logEntry(3, 140, 'build barracks（軍事建築不足）', 'strategic'),
+      logEntry(4, 200, 'train legionnaire（補足軍力）', 'strategic'),
+      logEntry(5, 240, '小隊 #1 目標改為 (20,20)', 'tactical'),
+      logEntry(6, 260, 'build mine（第二座礦場）', 'strategic'), // 應淘汰第 1 條
     ]
     const container = render(<DecisionLogPanel entries={entries} />)
     const items = container.querySelectorAll('ol.decision-log li')

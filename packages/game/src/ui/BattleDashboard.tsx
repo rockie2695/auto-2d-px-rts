@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 
 import { getActiveSession } from '../session.ts'
@@ -26,37 +26,42 @@ function powerRatio(playerPower: number, enemyPower: number): number {
  */
 export function BattleDashboard({ children }: { children?: ReactNode }) {
   const [stats, setStats] = useState<BattleStats | null>(null)
-  const [samples, setSamples] = useState<readonly SamplePoint[]>([])
-  // 取樣器與該元件同生命週期；惰性初始化（state 而非 ref，可於渲染期讀取收入）。
-  const [series] = useState(() => new ResourceSeries())
+  // 取樣器只活在 effect 內（ref 僅在 effect 存取，避免渲染期讀 ref）；
+  // 曲線樣本與收入在 refresh 內由同一實例一次算好存進 state。
+  const seriesRef = useRef<ResourceSeries | null>(null)
+  const [curve, setCurve] = useState<{ samples: readonly SamplePoint[]; income: number | null }>({
+    samples: [],
+    income: null,
+  })
 
   useEffect(() => {
+    if (seriesRef.current === null) seriesRef.current = new ResourceSeries()
+    const series = seriesRef.current
     const refresh = (): void => {
       const active = getActiveSession()
       if (active === null) return
       const next = active.getBattleStats()
       setStats(next)
       series.push(next.tick, next.playerCrystal)
-      setSamples(series.chart())
+      setCurve({ samples: series.chart(), income: series.incomePerSec() })
     }
     const timer = window.setInterval(refresh, POLL_MS)
     return () => {
       window.clearInterval(timer)
     }
-  }, [series])
+  }, [])
 
-  const income = series.incomePerSec()
   const ratio = powerRatio(stats?.playerPower ?? 0, stats?.enemyPower ?? 0)
 
   return (
     <>
-      <ResourceChart samples={samples} />
+      <ResourceChart samples={curve.samples} />
       <div className="hud-top-right">
         <ResourcePanel
           playerCrystal={stats?.playerCrystal ?? 0}
           enemyCrystal={stats?.enemyCrystal ?? 0}
-          playerIncome={income}
-          enemyIncome={income}
+          playerIncome={curve.income}
+          enemyIncome={curve.income}
           ratio={ratio}
         />
         {children}

@@ -16,7 +16,7 @@ export function DecisionLogPanel({ entries }: { entries: readonly DecisionLogEnt
       ) : (
         <ol className="decision-log">
           {latest.map((entry) => (
-            <li key={`${entry.tick}-${entry.text}`}>
+            <li key={entry.sequence}>
               <span className="decision-log-time">{formatClock(entry.tick)}</span>
               <span className="decision-log-layer">[{layerLabel(entry.layer)}]</span>
               <span className="decision-log-text">{entry.text}</span>

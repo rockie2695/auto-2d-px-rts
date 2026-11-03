@@ -21,6 +21,8 @@ export const SEED = 42
 
 /** 決策日誌單條（Prompt 9.5：左下面板顯示；戰略紀錄＋戰術小隊變動）。 */
 export interface DecisionLogEntry {
+  /** 單調遞增序號（面板 key 用；同 tick 同文字的兩條也不會撞）。 */
+  readonly sequence: number
   readonly tick: number
   readonly layer: 'strategic' | 'tactical'
   readonly actor: PlayerId
@@ -138,8 +140,10 @@ export async function startGameSession(app: Application, scene: GameScene): Prom
   // 決策日誌（Prompt 9.5：戰略紀錄＋戰術小隊變動；面板取最後 5 條）。
   const decisionLog: DecisionLogEntry[] = []
   const LOG_LIMIT = 32
-  const pushLog = (entry: DecisionLogEntry): void => {
-    decisionLog.push(entry)
+  let logSequence = 0
+  const pushLog = (entry: Omit<DecisionLogEntry, 'sequence'>): void => {
+    logSequence += 1
+    decisionLog.push({ ...entry, sequence: logSequence })
     while (decisionLog.length > LOG_LIMIT) {
       decisionLog.shift()
     }
