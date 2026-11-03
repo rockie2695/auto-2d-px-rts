@@ -142,6 +142,20 @@ describe('戰鬥（SPEC §10）', () => {
     expect(mine.hp).toBe(500)
   })
 
+  it('近戰貼建築外框可攻擊：相鄰格距離 = 100 ≤ 射程 160（回歸：舊版量格中心 200 打不到）', () => {
+    const world = createTestWorld({
+      size: 12,
+      units: [makeUnitDef({ id: 'melee', stats: { hp: 100, dmg: 10, range: 0.8, attackSpeed: 20, moveSpeed: 1 } })],
+      buildings: [makeBuildingDef({ id: 'mine', hp: 500, incomePerSec: { blue_crystal: 1 } })],
+    })
+    const mine = addBuilding(world, 'enemy', 'mine', { x: 4, y: 4 }, { built: true, nodeId: null })
+    putUnit(world, 'player', 'melee', { x: 4, y: 5 }) // 緊貼 1×1 外框：舊版量格中心 200 > 160，新版邊緣 100 ≤ 160
+
+    for (let tick = 0; tick < 6; tick++) stepWorld(world)
+
+    expect(mine.hp).toBe(500 - 60) // 每 tick 一發 10 傷害
+  })
+
   it('最近敵方單位優先；距離平手取 id 較小者', () => {
     const world = createTestWorld({
       size: 12,

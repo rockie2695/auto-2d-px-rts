@@ -1,7 +1,7 @@
 import { TICK_RATE_HZ } from '@auto-2d-px-rts/shared'
 
 import { queryNear } from './spatialHash.ts'
-import { buildingEffectiveMaxHp, tileOf, UNITS_PER_TILE } from './types.ts'
+import { buildingEffectiveMaxHp, UNITS_PER_TILE } from './types.ts'
 import type { CombatTarget, Unit, World } from './types.ts'
 
 /**
@@ -33,12 +33,18 @@ export function distanceSquaredToBuilding(
   unit: Unit,
   building: { x: number; y: number; w: number; h: number },
 ): number {
-  const { x: unitTileX, y: unitTileY } = tileOf(unit.x, unit.y)
-  const closestX = Math.min(Math.max(unitTileX, building.x), building.x + building.w - 1)
-  const closestY = Math.min(Math.max(unitTileY, building.y), building.y + building.h - 1)
-  // 以佔地格中心近似：差值與單位座標同一量綱（固定點）。
-  const dx = unit.x - (closestX * UNITS_PER_TILE + UNITS_PER_TILE / 2)
-  const dy = unit.y - (closestY * UNITS_PER_TILE + UNITS_PER_TILE / 2)
+  // 距離以佔地格外框**邊緣**計算：把單位固定點座標 clamp 到建築矩形
+  // `[x*200, (x+w)*200) × [y*200, (y+h)*200)` 上取實測平方距離。
+  // （舊版以佔地格中心近似：相鄰 1×1 建築中心距 = 250² 固定，近戰射程
+  //   0.8×200 = 160 永遠打不到、站外緣原地空轉；貼邊量測後相鄰距離 = 100。）
+  const x0 = building.x * UNITS_PER_TILE
+  const y0 = building.y * UNITS_PER_TILE
+  const x1 = (building.x + building.w) * UNITS_PER_TILE
+  const y1 = (building.y + building.h) * UNITS_PER_TILE
+  const closestX = Math.min(Math.max(unit.x, x0), x1)
+  const closestY = Math.min(Math.max(unit.y, y0), y1)
+  const dx = unit.x - closestX
+  const dy = unit.y - closestY
   return dx * dx + dy * dy
 }
 
