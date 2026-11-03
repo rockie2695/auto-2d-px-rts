@@ -149,7 +149,7 @@ export function matchEnded(world: World): boolean {
 
 /**
  * 勝負判定：一方主堡被毀 → 對方勝；同 tick 雙殺 → 全滅者敗（都還有部隊 → 平手）；
- * 超時（雙主堡俱在）→ 水晶多者勝、同數平手（MVP：不比戰力）。
+ * **超時（10:00 雙主堡俱在）→ 平手**（Prompt 10.10：不比水晶）。
  * 全滅（無建築且無單位）同樣判負——無建築必含主堡已毀，此為 SPEC §11.1 的另一面。
  * 手動提前結束（雙主堡俱在且未超時）→ 平手。
  */
@@ -163,14 +163,6 @@ export function resolveMatchResult(world: World): MatchResult {
     const enemyWiped = hasNoForces(world, 'enemy')
     if (playerWiped !== enemyWiped) return playerWiped ? 'enemy' : 'player'
     return 'draw'
-  }
-  if (playerAlive && enemyAlive && world.tick >= world.match.maxTicks) {
-    const crystal = (id: PlayerId): number =>
-      world.players.find((player) => player.id === id)?.blueCrystal ?? 0
-    const playerCrystal = crystal('player')
-    const enemyCrystal = crystal('enemy')
-    if (playerCrystal > enemyCrystal) return 'player'
-    if (enemyCrystal > playerCrystal) return 'enemy'
   }
   return 'draw'
 }
@@ -263,12 +255,21 @@ export async function startGameSession(app: Application, scene: GameScene): Prom
     world.players.find((player) => player.id === playerId)?.blueCrystal ?? 0
   const aliveUnitCount = (playerId: PlayerId): number =>
     world.units.filter((unit) => unit.player === playerId && unit.hp > 0).length
+  const powerOf = (playerId: PlayerId): number =>
+    world.units.reduce((total, unit) => {
+      if (unit.player !== playerId || unit.hp <= 0) return total
+      const def = world.defs.units[unit.defId]
+      if (def === undefined) return total
+      return total + unit.hp * def.stats.dmg * def.stats.attackSpeed
+    }, 0)
   recorder.sample(
     0,
     crystalOf('player'),
     crystalOf('enemy'),
     aliveUnitCount('player'),
     aliveUnitCount('enemy'),
+    powerOf('player'),
+    powerOf('enemy'),
   )
 
   // 對局結果（Prompt 10.5）：結束時填入；之前為 null。
@@ -373,6 +374,8 @@ export async function startGameSession(app: Application, scene: GameScene): Prom
         crystalOf('enemy'),
         aliveUnitCount('player'),
         aliveUnitCount('enemy'),
+        powerOf('player'),
+        powerOf('enemy'),
       )
     }
     prev = curr
@@ -439,13 +442,7 @@ export async function startGameSession(app: Application, scene: GameScene): Prom
     },
     getBattleStats: (): BattleStats => {
       const crystal = (id: PlayerId): number => world.players.find((p) => p.id === id)?.blueCrystal ?? 0
-      const power = (id: PlayerId): number =>
-        world.units.reduce((total, unit) => {
-          if (unit.player !== id || unit.hp <= 0) return total
-          const def = world.defs.units[unit.defId]
-          if (def === undefined) return total
-          return total + unit.hp * def.stats.dmg * def.stats.attackSpeed
-        }, 0)
+      const power = powerOf
       const squads: SquadInfo[] = []
       for (const player of world.players) {
         const plan = plans[player.id]

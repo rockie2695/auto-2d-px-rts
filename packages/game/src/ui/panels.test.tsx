@@ -445,6 +445,11 @@ const replayFixture: ReplayRecord = {
     { tick: 1200, player: 5, enemy: 4 },
     { tick: 2400, player: 7, enemy: 2 },
   ],
+  powerSeries: [
+    { tick: 0, player: 4320, enemy: 4320 },
+    { tick: 1200, player: 5200, enemy: 3100 },
+    { tick: 2400, player: 6400, enemy: 1200 },
+  ],
   policyEvents: [
     { tick: 600, key: 'aggression', from: 0.5, to: 1 },
     { tick: 1800, key: 'econMilitary', from: 0.5, to: 0 },
@@ -452,16 +457,17 @@ const replayFixture: ReplayRecord = {
 }
 
 describe('PostGamePanel（/post-game，Prompt 10.5）', () => {
-  it('讀 replay：勝負＋時長＋最終資源＋兩張曲線 canvas', () => {
+  it('讀 replay：勝負＋時長＋最終資源＋三張曲線 canvas（資源／單位／戰力）', () => {
     const container = render(<PostGamePanel replay={replayFixture} onRestart={() => {}} />)
     const result = container.querySelector('[data-testid="post-game-result"]')
     expect(result?.textContent).toBe('勝利')
     expect((result as HTMLElement).style.color).toBe('rgb(124, 227, 139)')
     expect(container.querySelector('[data-testid="post-game-duration"]')?.textContent).toBe('時長 2:00')
     expect(container.querySelector('[data-testid="post-game-final-crystal"]')?.textContent).toContain('830')
-    expect(container.querySelectorAll('canvas').length).toBe(2)
+    expect(container.querySelectorAll('canvas').length).toBe(3)
     expect(container.querySelector('[data-testid="post-game-resource-chart"]')).not.toBeNull()
     expect(container.querySelector('[data-testid="post-game-unitcount-chart"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="post-game-power-chart"]')).not.toBeNull()
   })
 
   it('Policy 時間軸：標記數與明細（tick → 時鐘、key from→to）', () => {

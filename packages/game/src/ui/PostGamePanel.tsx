@@ -160,6 +160,17 @@ export function PostGamePanel({
       </section>
 
       <section className="post-game-section">
+        <h2>戰力曲線（全程）</h2>
+        <TwoLineChart
+          samples={replay.powerSeries}
+          durationTicks={replay.durationTicks}
+          width={560}
+          height={160}
+          testId="post-game-power-chart"
+        />
+      </section>
+
+      <section className="post-game-section">
         <h2>Policy 調整時間軸</h2>
         <PolicyTimeline events={replay.policyEvents} durationTicks={replay.durationTicks} />
       </section>

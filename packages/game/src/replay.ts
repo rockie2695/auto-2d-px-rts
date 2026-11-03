@@ -36,6 +36,8 @@ export interface ReplayRecord {
   readonly resourceSeries: readonly ReplaySample[]
   /** 雙方存活單位數曲線。 */
   readonly unitCountSeries: readonly ReplaySample[]
+  /** 雙方戰力曲線（Σ hp × dmg × attackSpeed，SPEC §12.1）。 */
+  readonly powerSeries: readonly ReplaySample[]
   /** 玩家每次改滑桿的時間點。 */
   readonly policyEvents: readonly ReplayPolicyEvent[]
 }
@@ -50,19 +52,23 @@ const MAX_SAMPLES = 1200
 export class ReplayRecorder {
   private readonly resource: ReplaySample[] = []
   private readonly unitCounts: ReplaySample[] = []
+  private readonly powers: ReplaySample[] = []
   private readonly policies: ReplayPolicyEvent[] = []
 
-  /** 對局中取一個雙陣營樣本（水晶存量＋存活單位數，同一時刻成對）。 */
+  /** 對局中取一個雙陣營樣本（水晶、存活單位數、戰力，同一時刻成對）。 */
   sample(
     tick: number,
     playerCrystal: number,
     enemyCrystal: number,
     playerUnits: number,
     enemyUnits: number,
+    playerPower: number,
+    enemyPower: number,
   ): void {
     if (this.resource.length >= MAX_SAMPLES) return
     this.resource.push({ tick, player: playerCrystal, enemy: enemyCrystal })
     this.unitCounts.push({ tick, player: playerUnits, enemy: enemyUnits })
+    this.powers.push({ tick, player: playerPower, enemy: enemyPower })
   }
 
   /** 記錄一次政策變更（每個實際變更的滑桿一筆）。 */
@@ -84,6 +90,7 @@ export class ReplayRecorder {
       finalCrystal: { player: finalCrystal.player, enemy: finalCrystal.enemy },
       resourceSeries: [...this.resource],
       unitCountSeries: [...this.unitCounts],
+      powerSeries: [...this.powers],
       policyEvents: [...this.policies],
     }
   }
@@ -157,6 +164,7 @@ export function parseReplay(json: unknown): ReplayRecord {
     },
     resourceSeries: requireSamples(raw.resourceSeries, 'resourceSeries'),
     unitCountSeries: requireSamples(raw.unitCountSeries, 'unitCountSeries'),
+    powerSeries: requireSamples(raw.powerSeries, 'powerSeries'),
     policyEvents,
   }
 }

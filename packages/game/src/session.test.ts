@@ -253,17 +253,18 @@ describe('勝負判定（純函數）', () => {
     expect(resolveMatchResult(world)).toBe('draw')
   })
 
-  it('超時（雙 keep 俱在）→ 水晶多者勝、同數平手；matchEnded 為真', () => {
+  it('超時（雙 keep 俱在）→ 一律平手（不比水晶，Prompt 10.10）；matchEnded 為真', () => {
     const world = keepWorld()
     world.tick = world.match.maxTicks
     expect(matchEnded(world)).toBe(true)
-    expect(resolveMatchResult(world)).toBe('draw') // 起始水晶相同
+    expect(resolveMatchResult(world)).toBe('draw')
 
+    // 水晶差距不再影響超時判定（Prompt 10.10：超時 = 平手）。
     const player = world.players.find((p) => p.id === 'player')
     const enemy = world.players.find((p) => p.id === 'enemy')
     if (player === undefined || enemy === undefined) throw new Error('找不到玩家')
     enemy.blueCrystal = 500
-    expect(resolveMatchResult(world)).toBe('player')
+    expect(resolveMatchResult(world)).toBe('draw')
   })
 
   it('全滅（無建築且無單位）→ 結束且對方勝；雙方全滅 → 平手（Prompt 10.5 修）', () => {
