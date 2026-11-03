@@ -117,21 +117,42 @@ function keepAlive(world: World, playerId: PlayerId): boolean {
   )
 }
 
-/** 對局是否已結束：一方主堡消滅，或達 `match.maxTicks` 上限。 */
+/** 一方是否全滅：無任何存活建築且無存活單位（Prompt 10.5 修：全滅也結束）。 */
+function hasNoForces(world: World, playerId: PlayerId): boolean {
+  if (world.buildings.some((building) => building.player === playerId && building.hp > 0)) {
+    return false
+  }
+  return !world.units.some((unit) => unit.player === playerId && unit.hp > 0)
+}
+
+/** 對局是否已結束：一方主堡被毀、一方全滅（無建築且無單位），或達 `match.maxTicks` 上限。 */
 export function matchEnded(world: World): boolean {
   if (world.tick >= world.match.maxTicks) return true
-  return !keepAlive(world, 'player') || !keepAlive(world, 'enemy')
+  return (
+    !keepAlive(world, 'player') ||
+    !keepAlive(world, 'enemy') ||
+    hasNoForces(world, 'player') ||
+    hasNoForces(world, 'enemy')
+  )
 }
 
 /**
- * 勝負判定：一方主堡被毀 → 對方勝；同 tick 雙殺 → 平手；
+ * 勝負判定：一方主堡被毀 → 對方勝；同 tick 雙殺 → 全滅者敗（都還有部隊 → 平手）；
  * 超時（雙主堡俱在）→ 水晶多者勝、同數平手（MVP：不比戰力）。
- * 手動提前結束（雙主堡俱在且未超時）同此規則 → 平手。
+ * 全滅（無建築且無單位）同樣判負——無建築必含主堡已毀，此為 SPEC §11.1 的另一面。
+ * 手動提前結束（雙主堡俱在且未超時）→ 平手。
  */
 export function resolveMatchResult(world: World): MatchResult {
   const playerAlive = keepAlive(world, 'player')
   const enemyAlive = keepAlive(world, 'enemy')
   if (playerAlive !== enemyAlive) return playerAlive ? 'player' : 'enemy'
+  if (!playerAlive && !enemyAlive) {
+    // 雙主堡俱毀：全滅者敗；雙方都沒有部隊 → 平手。
+    const playerWiped = hasNoForces(world, 'player')
+    const enemyWiped = hasNoForces(world, 'enemy')
+    if (playerWiped !== enemyWiped) return playerWiped ? 'enemy' : 'player'
+    return 'draw'
+  }
   if (playerAlive && enemyAlive && world.tick >= world.match.maxTicks) {
     const crystal = (id: PlayerId): number =>
       world.players.find((player) => player.id === id)?.blueCrystal ?? 0
@@ -498,7 +519,13 @@ export async function startGameSession(app: Application, scene: GameScene): Prom
     },
     stop: (): void => {
       app.ticker.remove(onFrame)
-      activeSession = null
+      // 僅在「自己仍是註冊中的 session」時清除：React StrictMode 雙掛載下，
+      // 第一次掛載的 dispose 可能晚於第二次的 startGameSession 完成——
+      // 若無條件清 null，會把正在跑的新 session 從 App 輪詢中拔掉
+      // （對局自然結束後 App 就再也讀不到 outcome、永遠不切復盤頁）。
+      if (activeSession === session) {
+        activeSession = null
+      }
     },
   }
   activeSession = session

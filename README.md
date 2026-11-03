@@ -159,5 +159,8 @@ JSON 結構會按最終 schema 設計，方便日後遷移到 DB。
   `ReplayRecord`（每 20 tick 雙陣營資源＋存活單位數取樣、政策變更事件、
   `parseReplay` JSON 驗證）、`/post-game` 頁（勝負＋時長＋最終資源＋
   全程資源曲線＋單位數量曲線＋Policy 調整時間軸，props 純渲染
-  不依賴即時 sim）、App state 路由切換與「再來一場」
-  （218 個測試）。
+  不依賴即時 sim）、App state 路由切換與「再來一場」。
+  **結束條件修正**：一方全滅（無建築且無單位）也結束（SPEC §11.2）；
+  `stop()` 改 identity 檢查——修掉 StrictMode 雙掛載下舊 session 晚停
+  誤拔 `activeSession`、對局結束後頁面永不切復盤頁的 bug
+  （221 個測試）。

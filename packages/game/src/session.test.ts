@@ -3,11 +3,13 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it, vi } from 'vitest'
 
 import { DEFAULT_POLICIES } from './ai/policy.ts'
-import { matchEnded, resolveMatchResult, startGameSession } from './session.ts'
+import { getActiveSession, matchEnded, resolveMatchResult, startGameSession } from './session.ts'
 import type { GameSession, UnitInfo } from './session.ts'
 import { POLICY_COOLDOWN_TICKS } from './session.ts'
 import { addBuilding } from './sim/economy.ts'
-import { createTestWorld, makeBuildingDef } from './sim/testFixtures.ts'
+import { createTestWorld, makeBuildingDef, putUnit } from './sim/testFixtures.ts'
+import { loadContentPackFromDir } from './data/loadFromDir.ts'
+import { createWorld, stepWorld } from './sim/world.ts'
 
 /** 內容來源改讀 public/data 目錄（避免相對 fetch 依賴 dev server）。 */
 vi.mock('./data/loadFromFetch.ts', () => ({
@@ -257,6 +259,55 @@ describe('勝負判定（純函數）', () => {
     enemy.blueCrystal = 500
     expect(resolveMatchResult(world)).toBe('player')
   })
+
+  it('全滅（無建築且無單位）→ 結束且對方勝；雙方全滅 → 平手（Prompt 10.5 修）', () => {
+    const world = keepWorld()
+    putUnit(world, 'enemy', 'u', { x: 6, y: 6 }) // 敵方多一個單位
+    const enemyKeep = world.buildings.find((b) => b.player === 'enemy')
+    if (enemyKeep === undefined) throw new Error('找不到敵方 keep')
+    enemyKeep.hp = 0
+    // 敵 keep 毀但還有單位：SPEC §11.1 keep 毀即勝 → 已結束、玩家勝。
+    expect(matchEnded(world)).toBe(true)
+    expect(resolveMatchResult(world)).toBe('player')
+
+    // 敵方單位也陣亡 → 全滅，同樣玩家勝。
+    for (const unit of world.units) {
+      if (unit.player === 'enemy') unit.hp = 0
+    }
+    expect(matchEnded(world)).toBe(true)
+    expect(resolveMatchResult(world)).toBe('player')
+
+    // 玩家也全滅 → 雙方都沒有部隊 → 平手。
+    const playerKeep = world.buildings.find((b) => b.player === 'player')
+    if (playerKeep === undefined) throw new Error('找不到玩家 keep')
+    playerKeep.hp = 0
+    for (const unit of world.units) {
+      if (unit.player === 'player') unit.hp = 0
+    }
+    expect(matchEnded(world)).toBe(true)
+    expect(resolveMatchResult(world)).toBe('draw')
+  })
+
+  it('真實內容重現（Prompt 10.5 修）：敵方建築與單位全滅 → matchEnded、玩家勝', () => {
+    const content = loadContentPackFromDir(
+      fileURLToPath(new URL('../public/data/', import.meta.url)),
+    )
+    const world = createWorld(content, 42)
+    expect(matchEnded(world)).toBe(false) // 開局：雙方俱全
+
+    // 模擬「敵方建築與單位全滅」：所有敵建築 hp 歸 0、敵單位 hp 歸 0。
+    for (const building of world.buildings) {
+      if (building.player === 'enemy') building.hp = 0
+    }
+    for (const unit of world.units) {
+      if (unit.player === 'enemy') unit.hp = 0
+    }
+    stepWorld(world) // removeDead 清除屍體（下個 tick 的世界狀態）
+
+    expect(world.buildings.some((b) => b.player === 'enemy')).toBe(false)
+    expect(matchEnded(world)).toBe(true)
+    expect(resolveMatchResult(world)).toBe('player')
+  })
 })
 
 describe('手動結束與 replay 產出（Prompt 10.5）', () => {
@@ -296,5 +347,21 @@ describe('手動結束與 replay 產出（Prompt 10.5）', () => {
     expect(session.endMatch()).toBe(false)
 
     session.stop()
+  })
+
+  it('stop() 只清掉自己的註冊（StrictMode 雙掛載競態）：舊 session 晚停不誤殺新 session', async () => {
+    // 模擬 PixiCanvas remount：start1 → start2 都完成後，start1 才 stop()
+    // （StrictMode 第一次掛載的 dispose 晚於第二次的 startGameSession 完成）。
+    const app1 = makeFakeApp()
+    const session1: GameSession = await startGameSession(app1 as never, makeFakeScene() as never)
+    const app2 = makeFakeApp()
+    const session2: GameSession = await startGameSession(app2 as never, makeFakeScene() as never)
+    expect(getActiveSession()).toBe(session2)
+
+    session1.stop() // 晚到的 dispose：不得把 session2 從輪詢中拔掉
+    expect(getActiveSession()).toBe(session2)
+
+    session2.stop()
+    expect(getActiveSession()).toBeNull()
   })
 })
