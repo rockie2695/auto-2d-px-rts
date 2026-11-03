@@ -11,7 +11,8 @@ import type { Squad, TacticalPlan } from './tactics.ts'
  *
  * 行為樹（依序命中，`hp` 門檻與 `preferredRange` 取自單位 JSON）：
  * 1. `hp < retreatHpPct × maxHp` → **撤退**：移往集結點（「最近安全點」的 MVP 簡化）、
- *    清空攻擊目標。
+ *    清空攻擊目標；**抵達集結點後落回行為樹**（守備隊 slot＋sim 自動接戰，
+ *    Prompt 9.4 傷兵補位——不再永久停擺）。
  * 2. 最近敵在**攻擊射程內** → **攻擊**：目標取「同小隊集火目標」（離小隊重心最近的敵
  *    單位，平手取 id 小者）在射程內者，否則射程內最近者。遠程若最近敵
  *    距 < `preferredRange × KITE_MARGIN` → **風箏**：往遠離敵人的方向退，邊退邊打。
@@ -44,6 +45,8 @@ export interface MicroDecision {
   moveDest: TilePos | null
   /** 攻擊目標 id（敵單位或建築）；null = 回到自動接戰。 */
   attackTargetId: number | null
+  /** 人類可讀的決策原因（規則生成、中文、確定性）。資訊面板直接顯示。 */
+  reason: string
 }
 
 /** 環狀隊形偏移（radius 0→3，共 49 格，足夠 squadSize 上限 18）。 */
@@ -67,8 +70,11 @@ function distanceSquared(ax: number, ay: number, bx: number, by: number): number
   return dx * dx + dy * dy
 }
 
-/** 是否該重下移動令：閒置、目的地變更，或到 500ms 重算點。 */
+/** 是否該重下移動令：閒置、目的地變更，或到 500ms 重算點。
+ *  已站上目的地且路徑結束 → 不再重下（省 A*，杜絕「原地反覆下令」）。 */
 function shouldIssueMove(world: World, unit: Unit, dest: TilePos): boolean {
+  const tile = tileOf(unit.x, unit.y)
+  if (tile.x === dest.x && tile.y === dest.y && unit.path === null) return false
   if (unit.path === null && unit.dest === null) return true
   if (unit.dest === null || unit.dest.x !== dest.x || unit.dest.y !== dest.y) return true
   return world.tick % MICRO_REPATH_TICKS === 0
@@ -205,17 +211,27 @@ export function computeMicroPlan(
     if (def === undefined) continue
     const squad = squadByUnit.get(unit.id)
     const squadIndex = squad === undefined ? null : squad.index
+    const unitTile = tileOf(unit.x, unit.y)
+    const atRally = unitTile.x === rally.x && unitTile.y === rally.y
 
     // 1. 撤退：hp < retreatHpPct × maxHp（JSON）→ 移往集結點、清空攻擊目標。
-    if (def.stats.hp > 0 && unit.hp < def.stats.hp * def.ai.retreatHpPct) {
-      decisions.push({
-        unitId: unit.id,
-        action: 'retreat',
-        squadIndex,
-        moveDest: shouldIssueMove(world, unit, rally) ? { x: rally.x, y: rally.y } : null,
-        attackTargetId: null,
-      })
-      continue
+    //    抵達集結點後落回行為樹（守備隊 slot＋sim 自動接戰）——傷兵補位不永久停擺。
+    const maxHp = def.stats.hp
+    if (maxHp > 0 && unit.hp < maxHp * def.ai.retreatHpPct) {
+      if (!atRally) {
+        const hpPct = Math.floor((unit.hp / maxHp) * 100)
+        const thresholdPct = Math.round(def.ai.retreatHpPct * 100)
+        decisions.push({
+          unitId: unit.id,
+          action: 'retreat',
+          squadIndex,
+          moveDest: shouldIssueMove(world, unit, rally) ? { x: rally.x, y: rally.y } : null,
+          attackTargetId: null,
+          reason: `hp ${hpPct}% 低於撤退門檻 ${thresholdPct}%：撤回集結點`,
+        })
+        continue
+      }
+      // 在集結點：繼續走下面的分支（編隊／攻擊），僅清空攻擊目標由 sim 自動接戰接手。
     }
 
     // 2. 敵在射程內 → 攻擊（遠程被貼近時風箏）。
@@ -246,6 +262,7 @@ export function computeMicroPlan(
             squadIndex,
             moveDest: shouldIssueMove(world, unit, dest) ? dest : null,
             attackTargetId: target.id,
+            reason: `敵距 ${(Math.sqrt(nearest.distSq) / UNITS_PER_TILE).toFixed(1)} 格 < ${def.ai.preferredRange * KITE_MARGIN} 格：邊退邊打`,
           })
           continue
         }
@@ -257,6 +274,10 @@ export function computeMicroPlan(
         squadIndex,
         moveDest: null,
         attackTargetId: target.id,
+        reason:
+          target.id === focus?.id
+            ? `集火同隊目標 #${target.id}（射程內）`
+            : `敵人 #${target.id} 進入射程`,
       })
       continue
     }
@@ -270,6 +291,7 @@ export function computeMicroPlan(
         squadIndex,
         moveDest: shouldIssueMove(world, unit, slot) ? slot : null,
         attackTargetId: squad.targetBuildingId,
+        reason: `小隊 #${squadIndex}（${squad.mission}）→ 隊形位 (${slot.x},${slot.y})`,
       })
       continue
     }
@@ -281,6 +303,7 @@ export function computeMicroPlan(
       squadIndex: null,
       moveDest: shouldIssueMove(world, unit, rally) ? { x: rally.x, y: rally.y } : null,
       attackTargetId: null,
+      reason: atRally ? '未編隊：在集結點待命' : '未編隊：返回集結點',
     })
   }
 

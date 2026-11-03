@@ -201,6 +201,58 @@ describe('撤退（Prompt 8）', () => {
     const decision = computeMicroPlan(world, 'player', plan).find((d) => d.unitId === unitId)
     expect(decision?.action).toBe('attack')
   })
+
+  it('傷兵已抵達集結點 → 落回行為樹（守備隊佔位，不再永久停擺）', () => {
+    const world = microWorld()
+    const rally: TilePos = { x: 10, y: 10 }
+    const hurtId = putUnit(world, 'player', 'melee', rally)
+    const hurt = world.units.find((unit) => unit.id === hurtId)
+    if (hurt === undefined) throw new Error('找不到受傷單位')
+    hurt.hp = 15 // 15% < 20%，已退到集結點
+
+    const defendSquad: Squad = { ...makeSquad(0, [hurtId], rally), mission: 'defend' }
+    const plan = planWith(world, rally, [defendSquad])
+    const decision = computeMicroPlan(world, 'player', plan).find((d) => d.unitId === hurtId)
+    expect(decision?.action).toBe('formation')
+    expect(decision?.moveDest).toBeNull() // 已在 slot 上：不再反覆下令（省 A*）
+  })
+
+  it('撤退決策附帶中文 reason（資訊面板顯示用）', () => {
+    const world = microWorld()
+    const hurtId = putUnit(world, 'player', 'melee', { x: 10, y: 10 })
+    const hurt = world.units.find((unit) => unit.id === hurtId)
+    if (hurt === undefined) throw new Error('找不到受傷單位')
+    hurt.hp = 15 // 15% < 20%
+
+    const rally: TilePos = { x: 2, y: 2 }
+    const plan = planWith(world, rally, [makeSquad(0, [hurtId], { x: 20, y: 20 })])
+    const decision = computeMicroPlan(world, 'player', plan).find((d) => d.unitId === hurtId)
+    expect(decision?.reason).toContain('15%')
+    expect(decision?.reason).toContain('20%')
+    expect(decision?.reason).toContain('集結點')
+  })
+
+  it('攻擊／風箏／編隊決策也附帶 reason（資訊面板顯示用）', () => {
+    const world = microWorld()
+    const meleeId = putUnit(world, 'player', 'melee', { x: 10, y: 10 })
+    putUnit(world, 'enemy', 'melee', { x: 10, y: 10 })
+    const attackPlan = planWith(world, { x: 2, y: 2 }, [makeSquad(0, [meleeId], { x: 20, y: 20 })])
+    const attack = computeMicroPlan(world, 'player', attackPlan).find((d) => d.unitId === meleeId)
+    expect(attack?.action).toBe('attack')
+    expect(attack?.reason).not.toBe('')
+
+    const archerId = putUnit(world, 'player', 'archer', { x: 9, y: 10 }) // 離敵 1 格 → 風箏
+    const kitePlan = planWith(world, { x: 2, y: 2 }, [makeSquad(1, [archerId], { x: 20, y: 20 })])
+    const kite = computeMicroPlan(world, 'player', kitePlan).find((d) => d.unitId === archerId)
+    expect(kite?.action).toBe('kite')
+    expect(kite?.reason).toContain('邊退邊打')
+
+    const freshId = putUnit(world, 'player', 'melee', { x: 1, y: 1 })
+    const formationPlan = planWith(world, { x: 2, y: 2 }, [makeSquad(0, [freshId], { x: 8, y: 8 })])
+    const formation = computeMicroPlan(world, 'player', formationPlan).find((d) => d.unitId === freshId)
+    expect(formation?.action).toBe('formation')
+    expect(formation?.reason).toContain('隊形')
+  })
 })
 
 describe('編隊、待機與路徑節流（Prompt 8）', () => {

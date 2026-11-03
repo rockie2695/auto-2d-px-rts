@@ -26,7 +26,8 @@ import type { PolicyValues } from './policy.ts'
  * 撤退（MVP 簡化版）：
  * - 隊級：`squadPower < 敵方在重心的即時威脅 × 0.7` → 本循環全隊 `retreat` 回集結點
  *   （用即時點位威脅而非格中心值，才反映「貼身敵軍」的壓力）。
- * - 個體：`hp < retreatHpPct × maxHp`（JSON 讀）→ 脫離戰鬥、排除於小隊之外。
+ * - 個體：`hp < retreatHpPct × maxHp`（JSON 讀）→ 脫離戰鬥；傷兵不閒置，
+ *   round-robin 補進守備隊尾端（attack／harass 隊不收）。
  *
  * 編組為無狀態（每循環按 unit id 排序重算），確保相同世界 → 相同計畫。
  */
@@ -59,7 +60,7 @@ export interface TacticalPlan {
   /** 集結點（自己 keep 旁的可走格）。 */
   rally: TilePos
   squads: Squad[]
-  /** hp < retreatHpPct 而脫離戰鬥、被排除於小隊之外的單位 id。 */
+  /** hp < retreatHpPct 而脫離戰鬥的單位 id（守備隊補位者仍列於此，供資訊面板顯示）。 */
   disengaged: number[]
   influence: InfluenceMap
 }
@@ -231,15 +232,35 @@ export function computeTacticalPlan(
     })
   }
 
-  // 輪流分配（平衡隊員數）；同時累計戰力。
+  // 全體存活單位索引（含傷兵，供補位與重心計算共用）。
   const unitById = new Map<number, Unit>()
-  for (const unit of ready) unitById.set(unit.id, unit)
+  for (const unit of world.units) {
+    if (unit.player === playerId && unit.hp > 0) unitById.set(unit.id, unit)
+  }
+
+  // 健康單位輪流分配（平衡隊員數）；同時累計戰力。
   ready.forEach((unit, index) => {
     const squad = squads[index % squadCount]
     if (squad === undefined) return
     squad.memberIds.push(unit.id)
     squad.power += unitPower(world, unit)
   })
+
+  // 傷兵補位（SPEC §9.2 補註，Prompt 9.4）：脫離戰鬥的單位不閒置——
+  // round-robin 補進**守備隊**尾端（attack／harass 隊不收傷兵，避免拖累行軍）。
+  // 已在守備隊佔位 → micro 層撤退抵達集結點後落回行為樹，照常吃 slot 並自動接戰。
+  if (disengaged.length > 0) {
+    const defendSquads = squads.filter((squad) => squad.mission === 'defend')
+    defendSquads.forEach((squad, index) => {
+      const id = disengaged[index]
+      if (id === undefined) return
+      const unit = unitById.get(id)
+      if (unit === undefined) return
+      squad.memberIds.push(id)
+      squad.power += unitPower(world, unit)
+    })
+    // 傷兵多於守備隊時：多的依舊只留在 disengaged 清單（不進攻擊隊）。
+  }
 
   for (const squad of squads) {
     let sumX = 0

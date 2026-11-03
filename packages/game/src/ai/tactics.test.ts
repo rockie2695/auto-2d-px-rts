@@ -199,17 +199,40 @@ describe('撤退（Prompt 7）', () => {
     expect(plan.squads[0]?.mission).toBe('defend')
   })
 
-  it('個體 hp < retreatHpPct（JSON 0.2）→ 脫離戰鬥、排除於小隊之外', () => {
+  it('個體 hp < retreatHpPct（JSON 0.2）→ 脫離戰鬥、補進守備隊（Prompt 9.4 傷兵補位）', () => {
     const world = worldWithBases()
     const hurt = putUnit(world, 'player', 'u', { x: 4, y: 4 })
     const fine = putUnit(world, 'player', 'u', { x: 5, y: 4 })
+    const fine2 = putUnit(world, 'player', 'u', { x: 6, y: 4 })
     const hurtUnit = world.units.find((unit) => unit.id === hurt)
     if (hurtUnit === undefined) throw new Error('找不到受傷單位')
     hurtUnit.hp = 15 // 15% < 20%
 
     const plan = computeTacticalPlan(world, 'player', DEFAULT_POLICIES)
     expect(plan.disengaged).toEqual([hurt])
-    expect(plan.squads.flatMap((squad) => squad.memberIds)).toEqual([fine])
+    // 傷兵 round-robin 補進守備隊；attack／harass 隊不收傷兵。
+    const members = plan.squads.flatMap((squad) => squad.memberIds)
+    expect(members).toContain(fine)
+    expect(members).toContain(hurt)
+    for (const squad of plan.squads.filter((s) => s.mission === 'attack' || s.mission === 'harass')) {
+      expect(squad.memberIds).not.toContain(hurt)
+    }
+    expect(plan.squads.some((s) => s.mission === 'defend' && s.memberIds.includes(hurt))).toBe(true)
+    expect(members).toContain(fine2)
+  })
+
+  it('只有守備隊時傷兵補位；無守備隊（全攻勢）時不補', () => {
+    const world = worldWithBases()
+    const hurt = putUnit(world, 'player', 'u', { x: 4, y: 4 })
+    const fine = putUnit(world, 'player', 'u', { x: 5, y: 4 })
+    const hurtUnit = world.units.find((unit) => unit.id === hurt)
+    if (hurtUnit === undefined) throw new Error('找不到受傷單位')
+    hurtUnit.hp = 5
+
+    // 全攻勢：唯一小隊是 attack，傷兵不補位、留在 disengaged 清單。
+    const attackPlan = computeTacticalPlan(world, 'player', resolvePolicies({ aggression: 1, clusterSpread: 1 }))
+    expect(attackPlan.disengaged).toEqual([hurt])
+    expect(attackPlan.squads.flatMap((squad) => squad.memberIds)).toEqual([fine])
   })
 })
 
@@ -223,7 +246,7 @@ describe('計畫與確定性（Prompt 7 / 8）', () => {
     expect(squad?.targetBuildingId).not.toBeNull()
   })
 
-  it('低血單位被排除於小隊之外（下單改由微操層負責）', () => {
+  it('低血單位脫離戰鬥但補進守備隊（下單改由微操層負責）', () => {
     const world = worldWithBases()
     const hurt = putUnit(world, 'player', 'u', { x: 6, y: 6 })
     const fine = putUnit(world, 'player', 'u', { x: 7, y: 6 })
@@ -233,8 +256,9 @@ describe('計畫與確定性（Prompt 7 / 8）', () => {
 
     const plan = computeTacticalPlan(world, 'player', resolvePolicies({ aggression: 0 }))
     expect(plan.disengaged).toEqual([hurt])
-    expect(plan.squads.flatMap((squad) => squad.memberIds)).toEqual([fine])
+    // 全守備時唯一的隊收下健康單位後再補入傷兵。
     expect(plan.squads[0]?.mission).toBe('defend')
+    expect(plan.squads[0]?.memberIds).toEqual([fine, hurt])
   })
 
   it('相同世界 → 相同戰術計畫（確定性）', () => {
