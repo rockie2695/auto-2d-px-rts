@@ -6,7 +6,9 @@ import {
   assignMissions,
   computeTacticalPlan,
   countSquads,
+  FOCUS_RADIUS_TILES,
   lerp,
+  REGROUP_DISTANCE_TILES,
   RETREAT_POWER_RATIO,
   squadSizing,
   TACTICAL_INTERVAL_TICKS,
@@ -240,6 +242,80 @@ describe('主動防禦（保護建築與水晶，Prompt 10.6）', () => {
     const threat = pickMostUrgentThreat(world, 'player')
     expect(threat?.buildingId).toBe(mine.id) // 同戰力 → 經濟（水晶）優先
     expect(threat?.isEconomic).toBe(true)
+  })
+})
+
+describe('地緣重編組與集結再攻（Prompt 10.7）', () => {
+  it('就近聚類：地理群不混編（k 由 clusterSpread 決定）', () => {
+    const world = worldWithBases()
+    // A 群在左下、B 群在中上，兩群相距 12 格。
+    putUnit(world, 'player', 'u', { x: 4, y: 4 })
+    putUnit(world, 'player', 'u', { x: 5, y: 4 })
+    putUnit(world, 'player', 'u', { x: 16, y: 4 })
+    putUnit(world, 'player', 'u', { x: 17, y: 4 })
+
+    const plan = computeTacticalPlan(world, 'player', resolvePolicies({ clusterSpread: 0.5 }))
+    // clusterSpread 0.5 → k = 3（滑桿決定隊數）；每隊成員都在同一地理群（不混編）。
+    expect(plan.squads.length).toBe(3)
+    for (const squad of plan.squads) {
+      expect(squad.memberIds.length).toBeGreaterThan(0)
+      const xs = squad.memberIds.map((id) => {
+        const unit = world.units.find((candidate) => candidate.id === id)
+        return unit === undefined ? -99 : tileOf(unit.x, unit.y).x
+      })
+      const inA = xs.every((x) => x <= 10)
+      const inB = xs.every((x) => x > 10)
+      expect(inA || inB).toBe(true)
+    }
+    // 全部 4 個成員都有隊。
+    expect(plan.squads.flatMap((squad) => squad.memberIds)).toHaveLength(4)
+  })
+
+  it('就近聚類尊重容量上限（超過 squadSize 時溢出擴隊）', () => {
+    const world = worldWithBases()
+    for (let index = 0; index < 20; index++) {
+      putUnit(world, 'player', 'u', { x: 4 + (index % 5), y: 4 + Math.floor(index / 5) })
+    }
+    // clusterSpread 1 → 1 隊上限 18；20 個單位 → 擴成 2 隊（18 + 2）。
+    const plan = computeTacticalPlan(world, 'player', resolvePolicies({ clusterSpread: 1 }))
+    expect(plan.squads).toHaveLength(2)
+    expect(plan.squads[0]?.memberIds.length).toBeLessThanOrEqual(18)
+    expect(plan.squads.flatMap((squad) => squad.memberIds)).toHaveLength(20)
+  })
+
+  it('集結再攻：成員鬆散的攻擊隊先設集結點（重心往目標方向）', () => {
+    const world = worldWithBases()
+    putUnit(world, 'player', 'u', { x: 4, y: 4 })
+    putUnit(world, 'player', 'u', { x: 16, y: 4 }) // 兩成員相距 12 格 → 鬆散
+
+    const plan = computeTacticalPlan(world, 'player', resolvePolicies({ aggression: 1, clusterSpread: 1 }))
+    const squad = plan.squads[0]
+    expect(squad?.mission).toBe('attack')
+    expect(squad?.targetBuildingId).not.toBeNull() // 目標已鎖定（聚攏後進攻）
+    // 集結點在重心 (10,4) 與敵方目標之間：比重心更靠近目標、距重心 ≤ 6 格。
+    const targetX = squad?.target.x ?? -99
+    expect(targetX).toBeGreaterThan(10)
+    expect(Math.abs(targetX - 10)).toBeLessThanOrEqual(6)
+  })
+
+  it('成員聚攏 → 直接鎖定敵方建築（不設集結點）', () => {
+    const world = worldWithBases()
+    putUnit(world, 'player', 'u', { x: 4, y: 4 })
+    putUnit(world, 'player', 'u', { x: 5, y: 4 }) // 相距 1 格 → 聚攏
+
+    const plan = computeTacticalPlan(world, 'player', resolvePolicies({ aggression: 1, clusterSpread: 1 }))
+    const squad = plan.squads[0]
+    expect(squad?.mission).toBe('attack')
+    // 目標 = 敵方 keep（(28,28) 佔地）旁可走格。
+    const targetX = squad?.target.x ?? -99
+    const targetY = squad?.target.y ?? -99
+    expect(Math.abs(targetX - 28)).toBeLessThanOrEqual(3)
+    expect(Math.abs(targetY - 28)).toBeLessThanOrEqual(3)
+  })
+
+  it('常數：集結門檻 5 格、集火半徑 8 格', () => {
+    expect(REGROUP_DISTANCE_TILES).toBe(5)
+    expect(FOCUS_RADIUS_TILES).toBe(8)
   })
 })
 

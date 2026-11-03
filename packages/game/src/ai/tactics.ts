@@ -17,11 +17,16 @@ import type { PolicyValues } from './policy.ts'
  * - `squadCount = round(lerp(4, 1, clusterSpread))`（0 → 4 隊分散、1 → 1 隊集中）
  * - `squadSize  = round(lerp(4, 18, clusterSpread))`
  * - 隊數不超過兵力（不產生空隊）；兵力超過 `squadCount × squadSize` 時自動擴隊。
+ * - **就近聚類（Prompt 10.7）**：成員按地理位置聚類分隊（k-means-lite，固定 3 輪、
+ *   容量受限最終分配）——同區域的兵編成同一隊，小隊是地理群而非名冊，行軍自然成團；
+ *   空群丟棄、重新編號。
  *
  * 任務（`aggression` 決定攻守比例）：
  * - `attackCount = round(squadCount × aggression)`；`attackCount ≥ 2` 且隊數 ≥ 3 時
  *   其中 1 隊為 `harass`（打敵方經濟），其餘 `attack`，剩下的 `defend`。
  * - 進攻目標評分 = `建築value × 1/(敵方格威脅+1) × 1/(1+距離)`（價值高 × 防守弱 × 距離近）。
+ * - **集結再攻（Prompt 10.7）**：成員鬆散（最遠成員離重心 > `REGROUP_DISTANCE_TILES`
+ *   = 5 格）的攻擊隊先往「重心→目標」方向的集結點聚攏，到齊後才直接鎖定目標建築。
  * - **主動防禦（Prompt 10.6）**：敵軍進入我方建築守備半徑（`DEFENSE_RADIUS_TILES`
  *   = 6 格）→ 受威脅建築（平手優先水晶礦場）旁的來襲敵軍重心成為**攔截目標**：
  *   守備隊前出接敵，保護建築與水晶收入；全軍出擊（無守備隊）時把離威脅最近的
@@ -47,6 +52,16 @@ export const TACTICAL_INTERVAL_TICKS = 10
 
 /** 撤退門檻：小隊戰力 < 敵附近戰力 × 0.7（SPEC §8 小隊撤退）。 */
 export const RETREAT_POWER_RATIO = 0.7
+
+/** 集結再攻門檻（tile）：最遠成員離隊重心超過此距離 → 先集結、到齊再進攻。 */
+export const REGROUP_DISTANCE_TILES = 5
+
+/** 集結門檻的平方（固定點）：5 × 200 = 1000 → 1,000,000。 */
+const REGROUP_LIMIT_SQUARED =
+  REGROUP_DISTANCE_TILES * REGROUP_DISTANCE_TILES * UNITS_PER_TILE * UNITS_PER_TILE
+
+/** 集火半徑（tile）：斬殺集火只在小隊重心此距離內的敵人裡挑（維持協同）。 */
+export const FOCUS_RADIUS_TILES = 8
 
 export type SquadMission = 'defend' | 'attack' | 'harass' | 'retreat'
 
@@ -112,6 +127,91 @@ export function assignMissions(squadCount: number, policies: PolicyValues): Squa
     else missions.push('defend')
   }
   return missions
+}
+
+/* ------------------------------------------------------------------ */
+/* 就近聚類編組（Prompt 10.7）                                          */
+/* ------------------------------------------------------------------ */
+
+/** 聚類迭代輪數（固定值 → 確定性；不判斷收斂）。 */
+const REGROUP_ITERATIONS = 3
+
+/**
+ * 就近聚類（k-means-lite）：讓同區域的兵編成同一隊。
+ * 1. 種子：按 id 升冪等距取 `squadCount` 個單位的初始位置。
+ * 2. 固定 `REGROUP_ITERATIONS` 輪「就近分配 → 重算重心」（平手取 index 小）。
+ * 3. 最終分配：按 id 升冪、就近且未滿 `capacity` 的群（平手取 index 小）。
+ * 回傳每群的 unit id 清單（群內 id 升冪）；空群保留（呼叫端過濾）。
+ */
+function groupByProximity(
+  ready: readonly Unit[],
+  squadCount: number,
+  capacity: number,
+): number[][] {
+  const clusters: number[][] = Array.from({ length: Math.max(0, squadCount) }, () => [])
+  if (squadCount <= 0 || ready.length === 0) return clusters
+
+  const centers: Array<{ x: number; y: number }> = []
+  for (let index = 0; index < squadCount; index++) {
+    const unit = ready[Math.floor((index * ready.length) / squadCount)]
+    if (unit === undefined) continue
+    centers.push({ x: unit.x, y: unit.y })
+  }
+
+  for (let round = 0; round < REGROUP_ITERATIONS; round++) {
+    const sums = centers.map(() => ({ x: 0, y: 0, count: 0 }))
+    for (const unit of ready) {
+      let bestIndex = 0
+      let bestDistance = Number.POSITIVE_INFINITY
+      for (let index = 0; index < centers.length; index++) {
+        const center = centers[index]
+        if (center === undefined) continue
+        const dx = unit.x - center.x
+        const dy = unit.y - center.y
+        const distance = dx * dx + dy * dy
+        if (distance < bestDistance) {
+          bestDistance = distance
+          bestIndex = index
+        }
+      }
+      const bucket = sums[bestIndex]
+      if (bucket === undefined) continue
+      bucket.x += unit.x
+      bucket.y += unit.y
+      bucket.count += 1
+    }
+    for (let index = 0; index < centers.length; index++) {
+      const bucket = sums[index]
+      const center = centers[index]
+      if (bucket === undefined || center === undefined || bucket.count === 0) continue
+      center.x = bucket.x / bucket.count
+      center.y = bucket.y / bucket.count
+    }
+  }
+
+  for (const unit of ready) {
+    let bestIndex = 0
+    let bestDistance = Number.POSITIVE_INFINITY
+    let found = false
+    for (let index = 0; index < centers.length; index++) {
+      const cluster = clusters[index]
+      if (cluster === undefined || cluster.length >= capacity) continue
+      const center = centers[index]
+      if (center === undefined) continue
+      const dx = unit.x - center.x
+      const dy = unit.y - center.y
+      const distance = dx * dx + dy * dy
+      if (!found || distance < bestDistance) {
+        found = true
+        bestDistance = distance
+        bestIndex = index
+      }
+    }
+    const cluster = clusters[found ? bestIndex : 0]
+    if (cluster === undefined) continue
+    cluster.push(unit.id)
+  }
+  return clusters
 }
 
 /** 單位有效戰力（`value × hp / maxHp`，整數）。 */
@@ -203,6 +303,33 @@ function enemyTargets(world: World, playerId: PlayerId, economicOnly: boolean): 
   })
 }
 
+/** 隊伍鬆散度：最遠成員與隊重心的距離平方（固定點）。 */
+function squadSpreadSquared(unitById: Map<number, Unit>, squad: Squad): number {
+  const cx = squad.centroid.x * UNITS_PER_TILE + UNITS_PER_TILE / 2
+  const cy = squad.centroid.y * UNITS_PER_TILE + UNITS_PER_TILE / 2
+  let max = 0
+  for (const id of squad.memberIds) {
+    const unit = unitById.get(id)
+    if (unit === undefined) continue
+    const dx = unit.x - cx
+    const dy = unit.y - cy
+    const distance = dx * dx + dy * dy
+    if (distance > max) max = distance
+  }
+  return max
+}
+
+/** 集結點：從隊重心朝目標格方向前進 `REGROUP_DISTANCE_TILES` 的最近可走格（整數比例，確定性）。 */
+function stagingPoint(world: World, centroid: TilePos, targetTile: TilePos): TilePos | null {
+  const dx = targetTile.x - centroid.x
+  const dy = targetTile.y - centroid.y
+  const steps = Math.max(Math.abs(dx), Math.abs(dy))
+  if (steps === 0) return nearestWalkable(world, centroid)
+  const stepX = Math.round((dx * REGROUP_DISTANCE_TILES) / steps)
+  const stepY = Math.round((dy * REGROUP_DISTANCE_TILES) / steps)
+  return nearestWalkable(world, { x: centroid.x + stepX, y: centroid.y + stepY })
+}
+
 /** 純計算：編組、任務、目標、撤退判斷（不修改世界）。 */
 export function computeTacticalPlan(
   world: World,
@@ -226,21 +353,7 @@ export function computeTacticalPlan(
   ready.sort((a, b) => a.id - b.id)
 
   const sizing = squadSizing(policies)
-  const squadCount = countSquads(ready.length, sizing)
-  const missions = assignMissions(squadCount, policies)
-
-  const squads: Squad[] = []
-  for (let index = 0; index < squadCount; index++) {
-    squads.push({
-      index,
-      mission: missions[index] ?? 'defend',
-      memberIds: [],
-      target: { x: rally.x, y: rally.y },
-      targetBuildingId: null,
-      power: 0,
-      centroid: { x: rally.x, y: rally.y },
-    })
-  }
+  const rawCount = countSquads(ready.length, sizing)
 
   // 全體存活單位索引（含傷兵，供補位與重心計算共用）。
   const unitById = new Map<number, Unit>()
@@ -248,13 +361,35 @@ export function computeTacticalPlan(
     if (unit.player === playerId && unit.hp > 0) unitById.set(unit.id, unit)
   }
 
-  // 健康單位輪流分配（平衡隊員數）；同時累計戰力。
-  ready.forEach((unit, index) => {
-    const squad = squads[index % squadCount]
-    if (squad === undefined) return
-    squad.memberIds.push(unit.id)
-    squad.power += unitPower(world, unit)
-  })
+  // 就近聚類編組（Prompt 10.7）：同區域的兵編成同一隊——小隊是地理群而非名冊，
+  // 行軍自然成團。空群丟棄、重新編號（0..n-1）。
+  const groups = groupByProximity(ready, rawCount, sizing.size)
+  const missions = assignMissions(
+    groups.filter((group) => group.length > 0).length,
+    policies,
+  )
+
+  const squads: Squad[] = []
+  let squadIndex = 0
+  for (const memberIds of groups) {
+    if (memberIds.length === 0) continue
+    const squad: Squad = {
+      index: squadIndex,
+      mission: missions[squadIndex] ?? 'defend',
+      memberIds,
+      target: { x: rally.x, y: rally.y },
+      targetBuildingId: null,
+      power: 0,
+      centroid: { x: rally.x, y: rally.y },
+    }
+    for (const id of memberIds) {
+      const unit = unitById.get(id)
+      if (unit === undefined) continue
+      squad.power += unitPower(world, unit)
+    }
+    squads.push(squad)
+    squadIndex += 1
+  }
 
   // 傷兵補位（SPEC §9.2 補註，Prompt 9.4）：脫離戰鬥的單位不閒置——
   // round-robin 補進**守備隊**尾端（attack／harass 隊不收傷兵，避免拖累行軍）。
@@ -309,11 +444,21 @@ export function computeTacticalPlan(
     const center = buildingCenter(target)
     const approach = nearestWalkable(world, tileOf(center.x, center.y))
     squad.targetBuildingId = target.id
-    squad.target = approach ?? { x: rally.x, y: rally.y }
     if (approach === null) {
       squad.mission = 'defend'
       squad.targetBuildingId = null
+      continue
     }
+    // 集結再攻（Prompt 10.7）：成員鬆散（最遠成員離重心 > REGROUP_DISTANCE_TILES）
+    // → 先往「重心→目標」方向的集結點聚攏；到齊後直接鎖定目標建築。
+    if (squadSpreadSquared(unitById, squad) > REGROUP_LIMIT_SQUARED) {
+      const staging = stagingPoint(world, squad.centroid, tileOf(center.x, center.y))
+      if (staging !== null) {
+        squad.target = staging
+        continue
+      }
+    }
+    squad.target = approach
   }
 
   // 主動防禦（Prompt 10.6）：敵軍進入守備半徑（DEFENSE_RADIUS_TILES）→ 攔截。

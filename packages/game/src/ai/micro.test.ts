@@ -170,6 +170,43 @@ describe('集火（Prompt 8）', () => {
     expect(decision?.squadIndex).toBeNull()
     expect(decision?.attackTargetId).toBe(enemyId) // 自動接戰最近的敵單位
   })
+
+  it('斬殺集火：優先打 hp% 最低的敵人（集火半徑內收頭）', () => {
+    const world = microWorld()
+    const p1 = putUnit(world, 'player', 'siege', { x: 5, y: 5 })
+    const p2 = putUnit(world, 'player', 'siege', { x: 9, y: 5 })
+    const healthy = putUnit(world, 'enemy', 'melee', { x: 6, y: 5 }) // 滿血
+    const wounded = putUnit(world, 'enemy', 'melee', { x: 8, y: 5 }) // 殘血
+    const woundedUnit = world.units.find((unit) => unit.id === wounded)
+    if (woundedUnit === undefined) throw new Error('找不到殘血敵人')
+    woundedUnit.hp = 10 // 10/100 → 10%
+    const plan = planWith(world, { x: 2, y: 2 }, [
+      makeSquad(0, [p1, p2], { x: 5, y: 5 }, { x: 7, y: 5 }),
+    ])
+
+    const decisions = computeMicroPlan(world, 'player', plan)
+    const d1 = decisions.find((d) => d.unitId === p1)
+    const d2 = decisions.find((d) => d.unitId === p2)
+    expect(d1?.attackTargetId).toBe(wounded) // 集火收頭殘血（不再只打最近）
+    expect(d2?.attackTargetId).toBe(wounded)
+    expect(healthy).not.toBe(wounded)
+  })
+
+  it('斬殺集火半徑：殘血敵人在半徑外 → 退回打離重心最近者', () => {
+    const world = microWorld()
+    const p1 = putUnit(world, 'player', 'siege', { x: 5, y: 5 })
+    const healthy = putUnit(world, 'enemy', 'melee', { x: 6, y: 5 }) // 距重心 1 格
+    const far = putUnit(world, 'enemy', 'melee', { x: 20, y: 5 }) // 距重心 13 格 > 8
+    const farUnit = world.units.find((unit) => unit.id === far)
+    if (farUnit === undefined) throw new Error('找不到遠處敵人')
+    farUnit.hp = 5
+    const plan = planWith(world, { x: 2, y: 2 }, [
+      makeSquad(0, [p1], { x: 5, y: 5 }, { x: 7, y: 5 }),
+    ])
+
+    const decision = computeMicroPlan(world, 'player', plan).find((d) => d.unitId === p1)
+    expect(decision?.attackTargetId).toBe(healthy) // 半徑外的殘血敵人不影響集火
+  })
 })
 
 describe('撤退（Prompt 8 / Prompt 10 邊退邊打）', () => {
@@ -347,6 +384,23 @@ describe('追擊（SPEC §9.3 第 4 節，Prompt 10）', () => {
 })
 
 describe('編隊、待機與路徑節流（Prompt 8）', () => {
+  it('角色編隊：近戰排內環 slot、遠程排外環（Prompt 10.7）', () => {
+    const world = microWorld()
+    const rangedId = putUnit(world, 'player', 'archer', { x: 5, y: 5 })
+    const meleeId = putUnit(world, 'player', 'melee', { x: 6, y: 5 })
+    // 成員順序刻意讓遠程在前——編排後近戰仍應拿 slot 0（內環）。
+    const plan = planWith(world, { x: 2, y: 2 }, [
+      makeSquad(0, [rangedId, meleeId], { x: 20, y: 20 }),
+    ])
+
+    const decisions = computeMicroPlan(world, 'player', plan)
+    const meleeDest = decisions.find((d) => d.unitId === meleeId)?.moveDest
+    const rangedDest = decisions.find((d) => d.unitId === rangedId)?.moveDest
+    // slot 0 = 隊形基準格 (20,20)（內環）；slot 1 = 外環第一格 (19,19)。
+    expect(meleeDest).toEqual({ x: 20, y: 20 })
+    expect(rangedDest).toEqual({ x: 19, y: 19 })
+  })
+
   it('有小隊目標 → 移往隊形位置（隊形 slot 在目標附近且互不重疊）', () => {
     const world = microWorld()
     const a = putUnit(world, 'player', 'melee', { x: 5, y: 5 })

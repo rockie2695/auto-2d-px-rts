@@ -2,7 +2,7 @@ import { setAttackTarget } from '../sim/combat.ts'
 import { isBlockedAt, tileOf, UNITS_PER_TILE } from '../sim/types.ts'
 import { orderMove } from '../sim/world.ts'
 import type { PlayerId, TilePos, Unit, World } from '../sim/types.ts'
-import { nearestWalkable, rallyPoint } from './tactics.ts'
+import { nearestWalkable, rallyPoint, FOCUS_RADIUS_TILES } from './tactics.ts'
 import type { Squad, TacticalPlan } from './tactics.ts'
 
 /**
@@ -14,13 +14,15 @@ import type { Squad, TacticalPlan } from './tactics.ts'
  *    射程內有敵人 → **邊退邊打**（Prompt 10：保持最近射程內敵人為目標，
  *    後撤本身即拉開距離，不再是清空目標的靜默撤退）；**抵達集結點後落回行為樹**
  *    （守備隊 slot＋sim 自動接戰，Prompt 9.4 傷兵補位——不再永久停擺）。
- * 2. 最近敵在**攻擊射程內** → **攻擊**：目標取「同小隊集火目標」（離小隊重心最近的敵
- *    單位，平手取 id 小者）在射程內者，否則射程內最近者。遠程若最近敵
+ * 2. 最近敵在**攻擊射程內** → **攻擊**：目標取「同小隊集火目標」（集火半徑
+ *    `FOCUS_RADIUS_TILES` 內 **hp% 最低**者——斬殺集火，Prompt 10.7；
+ *    半徑內無敵人取離小隊重心最近者）在射程內者，否則射程內最近者。遠程若最近敵
  *    距 < `preferredRange × KITE_MARGIN` → **風箏**：往遠離敵人的方向退，邊退邊打。
  * 2.5 最近敵在**射程外但在追擊距離內**（≤ `range + CHASE_MARGIN`）→ **追擊**：
  *    前壓到敵人當下所在格接戰（SPEC §9.3 行為樹第 4 節「追擊」）；殺掉後
  *    下一循環由編隊分支接管。行軍／後退途中的近旁敵人不會再被「並行放走」。
- * 3. 有小隊 → **編隊**：移往集結隊形的位置（`squad.target` 周圍環狀 slot）；
+ * 3. 有小隊 → **編隊**：移往集結隊形的位置（`squad.target` 周圍環狀 slot，
+ *    **近戰內環、遠程外環**，Prompt 10.7）；
  *    attack／harass 任務同時對 `squad.targetBuildingId` 聚火。
  * 4. 否則（新兵／尚未編隊）→ **待機**：回集結點。
  *
@@ -119,21 +121,42 @@ function nearestEnemy(world: World, unit: Unit): { unit: Unit; distSq: number } 
   return best === null ? null : { unit: best, distSq: bestDist }
 }
 
-/** 小隊集火目標：離小隊重心最近的敵方單位（平手取 id 小者）。 */
+/**
+ * 小隊集火目標（Prompt 10.7 斬殺集火）：集火半徑（`FOCUS_RADIUS_TILES`）內
+ * **hp% 最低**的敵方單位——集火用來收頭，加快滾雪球；半徑內無敵人 →
+ * 退回「離小隊重心最近者」。平手：先近者、再 id 小者。純函式、確定性。
+ */
 function squadFocus(world: World, playerId: PlayerId, squad: Squad): Unit | null {
   const cx = squad.centroid.x * UNITS_PER_TILE + UNITS_PER_TILE / 2
   const cy = squad.centroid.y * UNITS_PER_TILE + UNITS_PER_TILE / 2
+  const radiusFixed = FOCUS_RADIUS_TILES * UNITS_PER_TILE
+  const limit = radiusFixed * radiusFixed
   let best: Unit | null = null
-  let bestDist = Number.POSITIVE_INFINITY
+  let bestHpMilli = Number.POSITIVE_INFINITY
+  let bestDistance = Number.POSITIVE_INFINITY
+  let nearest: Unit | null = null
+  let nearestDistance = Number.POSITIVE_INFINITY
   for (const other of world.units) {
     if (other.player === playerId || other.hp <= 0) continue
-    const dist = distanceSquared(cx, cy, other.x, other.y)
-    if (dist < bestDist || (dist === bestDist && other.id < (best?.id ?? Number.POSITIVE_INFINITY))) {
+    const distance = distanceSquared(cx, cy, other.x, other.y)
+    if (
+      distance < nearestDistance ||
+      (distance === nearestDistance && other.id < (nearest?.id ?? Number.POSITIVE_INFINITY))
+    ) {
+      nearest = other
+      nearestDistance = distance
+    }
+    if (distance > limit) continue
+    const def = world.defs.units[other.defId]
+    if (def === undefined || def.stats.hp <= 0) continue
+    const hpMilli = Math.round((other.hp * 1000) / def.stats.hp)
+    if (hpMilli < bestHpMilli || (hpMilli === bestHpMilli && distance < bestDistance)) {
       best = other
-      bestDist = dist
+      bestHpMilli = hpMilli
+      bestDistance = distance
     }
   }
-  return best
+  return best ?? nearest
 }
 
 /** 隊形位置：以 squad.target 為基準，依成員序取環狀 slot（擋路則順移）。 */
@@ -190,6 +213,20 @@ export function focusTargets(
   return targets
 }
 
+/** 隊形編排（Prompt 10.7）：**近戰前排（內環）、遠程後排（外環）**；
+ *  各角色內維持成員原序（id 升冪）→ 確定性。近戰頂在前、遠程在後排輸出。 */
+function formationOrder(world: World, squad: Squad, unitById: Map<number, Unit>): number[] {
+  const melee: number[] = []
+  const ranged: number[] = []
+  for (const id of squad.memberIds) {
+    const unit = unitById.get(id)
+    const role = unit === undefined ? undefined : world.defs.units[unit.defId]?.role
+    if (role === 'ranged') ranged.push(id)
+    else melee.push(id)
+  }
+  return [...melee, ...ranged]
+}
+
 /** 純計算：每個單位的行為樹決策（不修改世界）。 */
 export function computeMicroPlan(
   world: World,
@@ -200,8 +237,14 @@ export function computeMicroPlan(
 
   const squadByUnit = new Map<number, Squad>()
   const slotByUnit = new Map<number, number>()
+  // 存活單位索引（隊形編排查角色用；成員必屬本玩家且存活）。
+  const unitById = new Map<number, Unit>()
+  for (const unit of world.units) {
+    if (unit.player === playerId && unit.hp > 0) unitById.set(unit.id, unit)
+  }
   for (const squad of plan?.squads ?? []) {
-    squad.memberIds.forEach((id, index) => {
+    // 隊形編排：近戰取內環 slot、遠程取外環（Prompt 10.7）。
+    formationOrder(world, squad, unitById).forEach((id, index) => {
       squadByUnit.set(id, squad)
       slotByUnit.set(id, index)
     })
