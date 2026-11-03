@@ -137,4 +137,4 @@ JSON 結構會按最終 schema 設計，方便日後遷移到 DB。
   變動，最新 5 條：時間 + 層級 + 動作 + 原因）、右下小隊狀態（一隊一行：
   任務 + 人數 + 戰力 + 距目標距離）；單一輪詢元件 `BattleDashboard`
   （250ms）＋純邏輯 `collector.ts`（120 點環 ＝ 60s、200 tick 窗收入估算）；
-  `getBattleStats()` 一次取齊（183 個測試）。
+  `getBattleStats()` 一次取齊（184 個測試）。
