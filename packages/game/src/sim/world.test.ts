@@ -562,13 +562,15 @@ describe('確定性與真實內容（規則 8）', () => {
     }
   })
 
-  it('開局雙方到各自 keep 的距離相等（對稱局）', () => {
+  it('開局雙方到各自 keep 的距離相等（對稱局；以佔地中心量距，不受鏡射左上角換算影響）', () => {
     const content = loadRealContent()
     const world = createWorld(content, 42)
     const keepOf = (playerId: 'player' | 'enemy') =>
       world.buildings.find((building) => building.player === playerId && building.defId === 'keep')
-    const manhattan = (ax: number, ay: number, bx: number, by: number): number =>
-      Math.abs(ax - bx) + Math.abs(ay - by)
+    const center = (x: number, y: number, defId: string): { x: number; y: number } => {
+      const [w, h] = world.defs.buildings[defId]?.size ?? [1, 1]
+      return { x: x + (w - 1) / 2, y: y + (h - 1) / 2 }
+    }
 
     const playerKeep = keepOf('player')
     const enemyKeep = keepOf('enemy')
@@ -576,9 +578,62 @@ describe('確定性與真實內容（規則 8）', () => {
     expect(enemyKeep).toBeDefined()
     const playerSpawn = getPlayer(world, 'player').spawn
     const enemySpawn = getPlayer(world, 'enemy').spawn
-    expect(manhattan(playerSpawn.x, playerSpawn.y, playerKeep?.x ?? 0, playerKeep?.y ?? 0)).toBe(
-      manhattan(enemySpawn.x, enemySpawn.y, enemyKeep?.x ?? 0, enemyKeep?.y ?? 0),
+    const playerCenter = center(playerKeep?.x ?? 0, playerKeep?.y ?? 0, 'keep')
+    const enemyCenter = center(enemyKeep?.x ?? 0, enemyKeep?.y ?? 0, 'keep')
+    expect(Math.hypot(playerSpawn.x - playerCenter.x, playerSpawn.y - playerCenter.y)).toBeCloseTo(
+      Math.hypot(enemySpawn.x - enemyCenter.x, enemySpawn.y - enemyCenter.y),
+      6,
     )
+  })
+
+  it('開局地圖與佈局 180° 點鏡射對稱（紅藍如常規 RTS，Prompt 10）', () => {
+    const content = loadRealContent()
+    const world = createWorld(content, 42)
+    const size = world.map.size
+    const last = size - 1
+
+    // 地形：tiles[y*size+x] === tiles[(last−y)*size+(last−x)]。
+    for (let y = 0; y < size; y++) {
+      for (let x = 0; x < size; x++) {
+        expect(world.map.tiles[y * size + x]).toBe(
+          world.map.tiles[(last - y) * size + (last - x)],
+        )
+      }
+    }
+
+    // 資源點：兩兩鏡像成對（位置互鏡、蘊藏量相同）。
+    expect(world.resourceNodes.length % 2).toBe(0)
+    for (const node of world.resourceNodes) {
+      const mirror = world.resourceNodes.find(
+        (candidate) => candidate.x === last - node.x && candidate.y === last - node.y,
+      )
+      expect(mirror).toBeDefined()
+      expect(mirror?.amountRemaining).toBe(node.amountRemaining)
+    }
+
+    // 開局建築：敵方是玩家佈局的鏡像（同定義、佔地互鏡——左上角按寬高換算）。
+    for (const building of world.buildings) {
+      const [w, h] = world.defs.buildings[building.defId]?.size ?? [1, 1]
+      const other = world.buildings.find(
+        (candidate) =>
+          candidate.player !== building.player &&
+          candidate.defId === building.defId &&
+          candidate.x === last - (building.x + w - 1) &&
+          candidate.y === last - (building.y + h - 1),
+      )
+      expect(other).toBeDefined()
+    }
+
+    // 開局單位：敵方逐單位與玩家鏡像成對（同定義、tile 互鏡）。
+    for (const unit of world.units) {
+      const tile = tileOf(unit.x, unit.y)
+      const mirror = world.units.find((candidate) => {
+        if (candidate.player === unit.player || candidate.defId !== unit.defId) return false
+        const otherTile = tileOf(candidate.x, candidate.y)
+        return otherTile.x === last - tile.x && otherTile.y === last - tile.y
+      })
+      expect(mirror).toBeDefined()
+    }
   })
 
   it('真實內容全軍推中心：跑 1000 tick 無例外且有傷亡', () => {

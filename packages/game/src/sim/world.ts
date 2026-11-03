@@ -20,7 +20,8 @@ import type { PlayerId, TilePos, World } from './types.ts'
  * 世界初始化與每 tick 順序（SPEC §7、§11）。
  *
  * tick 順序：`tick++ → 經濟 → 移動 → 重建空間雜湊 → 戰鬥`。
- * 開局配置採「離出生點最近的有效位置」確定性搜尋（距離、y、x 依序平手裁決）。
+ * 開局配置：玩家側採「離出生點最近的有效位置」確定性搜尋（距離、y、x 依序平手裁決），
+ * 敵方側取玩家佈局的 180° 點鏡射——地圖、出生點、資源點與開局全部鏡射對稱。
  */
 
 /** 距離排序的候選（平手依 y、x、index，保證跨平台一致）。 */
@@ -152,9 +153,15 @@ export function createWorld(content: ContentPack, seed: number): World {
       mineCount: 0,
       barracksCount: 0,
     })
-    placeOpeningBuildings(world, playerId, { x: spawn.x, y: spawn.y })
-    placeStartUnits(world, playerId, { x: spawn.x, y: spawn.y })
   }
+
+  // 開局佈局（SPEC §7）：玩家側用「離出生點最近」的確定性搜尋佈置；
+  // 敵方直接取玩家佈局的 180° 點鏡射（(x,y) → (last−x, last−y)，佔地中心對中心）。
+  // 不對敵方重跑同一演算法——nearest-first 的平手裁決（距離 → y → x）在點鏡射下
+  // 會反序，兩邊各自搜尋無法保證鏡射對稱；先佈一邊再鏡射才完全對稱（紅藍如常規 RTS）。
+  placeOpeningBuildings(world, 'player', spawnA)
+  placeStartUnits(world, 'player', spawnA)
+  placeMirroredOpening(world, 'enemy')
 
   rebuildSpatialHash(world)
   return world
@@ -197,6 +204,42 @@ function placeStartUnits(world: World, playerId: PlayerId, spawn: TilePos): void
       }
       if (!placed) throw new Error(`找不到空間放置開局單位：${defId}`)
     }
+  }
+}
+
+/**
+ * 敵方開局：逐項鏡射玩家的建築與單位（180° 點鏡射，(x,y) → (last−x, last−y)）。
+ * 建築以佔地「左上角」座標記錄，鏡射要按佔地寬高換算成鏡像佔地的左上角；
+ * 礦場的資源點連結換成鏡像位置上的節點（地圖節點本身必須點對稱）。
+ * 前提：先佈完玩家側；鏡像位置由對稱性保證有效（界內、無岩石、不重疊）。
+ */
+function placeMirroredOpening(world: World, playerId: PlayerId): void {
+  const last = world.map.size - 1
+
+  for (const building of world.buildings.filter((item) => item.player === 'player')) {
+    const def = world.defs.buildings[building.defId]
+    if (def === undefined) throw new Error(`開局建築定義不存在：${building.defId}`)
+    const [w, h] = def.size
+    const tile = { x: last - (building.x + w - 1), y: last - (building.y + h - 1) }
+
+    let nodeId: number | null = null
+    if (building.nodeId !== null) {
+      const source = world.resourceNodes[building.nodeId]
+      if (source === undefined) throw new Error('開局礦場指向不存在的資源點')
+      const mirrored = world.resourceNodes.findIndex(
+        (node) => node.x === last - source.x && node.y === last - source.y,
+      )
+      if (mirrored === -1) {
+        throw new Error('資源點不是 180° 點對稱，無法鏡射開局礦場')
+      }
+      nodeId = mirrored
+    }
+    addBuilding(world, playerId, building.defId, tile, { built: true, nodeId })
+  }
+
+  for (const unit of world.units.filter((item) => item.player === 'player')) {
+    const tile = tileOf(unit.x, unit.y)
+    spawnUnit(world, playerId, unit.defId, { x: last - tile.x, y: last - tile.y })
   }
 }
 
