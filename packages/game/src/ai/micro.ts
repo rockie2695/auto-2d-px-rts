@@ -16,6 +16,9 @@ import type { Squad, TacticalPlan } from './tactics.ts'
  * 2. 最近敵在**攻擊射程內** → **攻擊**：目標取「同小隊集火目標」（離小隊重心最近的敵
  *    單位，平手取 id 小者）在射程內者，否則射程內最近者。遠程若最近敵
  *    距 < `preferredRange × KITE_MARGIN` → **風箏**：往遠離敵人的方向退，邊退邊打。
+ * 2.5 最近敵在**射程外但在追擊距離內**（≤ `range + CHASE_MARGIN`）→ **追擊**：
+ *    前壓到敵人當下所在格接戰（SPEC §9.3 行為樹第 4 節「追擊」）；殺掉後
+ *    下一循環由編隊分支接管。行軍／後退途中的近旁敵人不會再被「並行放走」。
  * 3. 有小隊 → **編隊**：移往集結隊形的位置（`squad.target` 周圍環狀 slot）；
  *    attack／harass 任務同時對 `squad.targetBuildingId` 聚火。
  * 4. 否則（新兵／尚未編隊）→ **待機**：回集結點。
@@ -34,7 +37,10 @@ export const MICRO_REPATH_TICKS = 10
 /** 風箏門檻：最近敵距 < `preferredRange × KITE_MARGIN` 就後退（archer 3.0 → 2.1 格）。 */
 export const KITE_MARGIN = 0.7
 
-export type MicroAction = 'retreat' | 'attack' | 'kite' | 'formation' | 'rally'
+/** 追擊門檻：射程外但 ≤ `range + CHASE_MARGIN`（格）就前壓接戰（SPEC §9.3 第 4 節）。 */
+export const CHASE_MARGIN = 1.0
+
+export type MicroAction = 'retreat' | 'attack' | 'kite' | 'chase' | 'formation' | 'rally'
 
 export interface MicroDecision {
   unitId: number
@@ -278,6 +284,23 @@ export function computeMicroPlan(
           target.id === focus?.id
             ? `集火同隊目標 #${target.id}（射程內）`
             : `敵人 #${target.id} 進入射程`,
+      })
+      continue
+    }
+
+    // 2.5 追擊：敵在射程外但 ≤ range + CHASE_MARGIN → 前壓到敵人所在格接戰
+    //     （SPEC §9.3 行為樹第 4 節）。近旁敵人不會再被同速行軍「並行放走」。
+    const near = nearestEnemy(world, unit)
+    const chaseLimitFixed = rangeFixed + CHASE_MARGIN * UNITS_PER_TILE
+    if (near !== null && near.distSq <= chaseLimitFixed * chaseLimitFixed) {
+      const enemyTile = tileOf(near.unit.x, near.unit.y)
+      decisions.push({
+        unitId: unit.id,
+        action: 'chase',
+        squadIndex,
+        moveDest: shouldIssueMove(world, unit, enemyTile) ? enemyTile : null,
+        attackTargetId: near.unit.id,
+        reason: `敵人 #${near.unit.id} 在追擊距離內（${(Math.sqrt(near.distSq) / UNITS_PER_TILE).toFixed(1)} 格，射程 ${(rangeFixed / UNITS_PER_TILE).toFixed(1)} 格）：前壓接戰`,
       })
       continue
     }

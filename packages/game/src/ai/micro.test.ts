@@ -6,6 +6,7 @@ import { computeInfluenceMap } from './influence.ts'
 import {
   applyMicroPlan,
   computeMicroPlan,
+  CHASE_MARGIN,
   KITE_MARGIN,
   MICRO_INTERVAL_TICKS,
   MICRO_REPATH_TICKS,
@@ -17,7 +18,7 @@ import { computeTacticalPlan, TACTICAL_INTERVAL_TICKS } from './tactics.ts'
 import type { Squad, TacticalPlan } from './tactics.ts'
 import { runStrategicCycle, STRATEGIC_INTERVAL_TICKS } from './strategy.ts'
 import { loadContentPackFromDir } from '../data/loadFromDir.ts'
-import { createWorld, stepWorld } from '../sim/world.ts'
+import { createWorld, orderMove, stepWorld } from '../sim/world.ts'
 import { tileOf } from '../sim/types.ts'
 import { createTestWorld, makeUnitDef, putUnit } from '../sim/testFixtures.ts'
 import type { PlayerId, TilePos, World } from '../sim/types.ts'
@@ -252,6 +253,63 @@ describe('撤退（Prompt 8）', () => {
     const formation = computeMicroPlan(world, 'player', formationPlan).find((d) => d.unitId === freshId)
     expect(formation?.action).toBe('formation')
     expect(formation?.reason).toContain('隊形')
+  })
+})
+
+describe('追擊（SPEC §9.3 第 4 節，Prompt 10）', () => {
+  it('行軍中敵人在射程外但極近（0.9 格 < 0.8 射程 + 1.0 追擊距）→ 前壓接戰', () => {
+    const world = microWorld()
+    const meleeId = putUnit(world, 'player', 'melee', { x: 10, y: 10 })
+    const enemyId = putUnit(world, 'enemy', 'melee', { x: 11, y: 10 }) // 距 1.0 格：> 0.8 射程、< 1.8 追擊距
+    // 模擬行軍中：下了往 (20,20) 的路徑。
+    expect(orderMove(world, meleeId, { x: 20, y: 20 })).toBe(true)
+    const plan = planWith(world, { x: 2, y: 2 }, [makeSquad(0, [meleeId], { x: 20, y: 20 })])
+
+    const decision = computeMicroPlan(world, 'player', plan).find((d) => d.unitId === meleeId)
+    expect(decision?.action).toBe('chase')
+    expect(decision?.moveDest).toEqual({ x: 11, y: 10 }) // 前壓到敵人所在格
+    expect(decision?.attackTargetId).toBe(enemyId)
+    expect(decision?.reason).toContain(String(enemyId))
+  })
+
+  it('敵人在追擊距之外（2.0 格 > 1.8）→ 不追擊（照常編隊）', () => {
+    const world = microWorld()
+    const meleeId = putUnit(world, 'player', 'melee', { x: 10, y: 10 })
+    putUnit(world, 'enemy', 'melee', { x: 12, y: 10 }) // 距 2.0 格
+    const plan = planWith(world, { x: 2, y: 2 }, [makeSquad(0, [meleeId], { x: 20, y: 20 })])
+
+    const decision = computeMicroPlan(world, 'player', plan).find((d) => d.unitId === meleeId)
+    expect(decision?.action).toBe('formation')
+  })
+
+  it('遠程也會追擊：敵距 4.0 格（< 3.0 射程 + 1.0）→ 前壓縮短射程差', () => {
+    const world = microWorld()
+    const archerId = putUnit(world, 'player', 'archer', { x: 10, y: 10 })
+    const enemyId = putUnit(world, 'enemy', 'melee', { x: 14, y: 10 }) // 距 4.0 格
+    const plan = planWith(world, { x: 2, y: 2 }, [makeSquad(0, [archerId], { x: 20, y: 20 })])
+
+    const decision = computeMicroPlan(world, 'player', plan).find((d) => d.unitId === archerId)
+    expect(decision?.action).toBe('chase')
+    expect(decision?.attackTargetId).toBe(enemyId)
+  })
+
+  it('撤退優先於追擊：傷兵（hp 15% < 20%）近旁有可追擊的敵人 → 仍撤退', () => {
+    const world = microWorld()
+    const hurtId = putUnit(world, 'player', 'melee', { x: 10, y: 10 })
+    putUnit(world, 'enemy', 'melee', { x: 11, y: 10 }) // 追擊距內但射程外
+    const hurt = world.units.find((unit) => unit.id === hurtId)
+    if (hurt === undefined) throw new Error('找不到受傷單位')
+    hurt.hp = 15
+
+    const rally: TilePos = { x: 2, y: 2 }
+    const plan = planWith(world, rally, [makeSquad(0, [hurtId], { x: 20, y: 20 })])
+    const decision = computeMicroPlan(world, 'player', plan).find((d) => d.unitId === hurtId)
+    expect(decision?.action).toBe('retreat')
+    expect(decision?.moveDest).toEqual(rally)
+  })
+
+  it('常數：追擊門檻 1.0 格', () => {
+    expect(CHASE_MARGIN).toBe(1.0)
   })
 })
 
