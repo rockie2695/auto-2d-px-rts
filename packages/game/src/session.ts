@@ -9,6 +9,8 @@ import type { DecisionRecord } from './ai/strategy.ts'
 import { computeTacticalPlan, TACTICAL_INTERVAL_TICKS } from './ai/tactics.ts'
 import type { Squad, TacticalPlan } from './ai/tactics.ts'
 import { loadContentPackFromFetch } from './data/loadFromFetch.ts'
+import { ReplayRecorder, REPLAY_SAMPLE_INTERVAL_TICKS } from './replay.ts'
+import type { MatchResult, ReplayRecord } from './replay.ts'
 import type { GameScene } from './render/scene.ts'
 import type { PlayerId, World } from './sim/types.ts'
 import { buildingEffectiveMaxHp, tileOf } from './sim/types.ts'
@@ -101,6 +103,46 @@ export interface BuildingInfo {
 /** 政策冷卻：30 秒 × 20Hz = 600 tick（Prompt 10：對局中每 30 秒才能改一次滑桿）。 */
 export const POLICY_COOLDOWN_TICKS = 600
 
+/* ------------------------------------------------------------------ */
+/* 對局結束與勝負判定（Prompt 10.5，純函數供測試）                      */
+/* ------------------------------------------------------------------ */
+
+/** 主堡 defId（不可建造、只能由開局配置放置；SPEC §12）。 */
+const KEEP_DEF_ID = 'keep'
+
+function keepAlive(world: World, playerId: PlayerId): boolean {
+  return world.buildings.some(
+    (building) =>
+      building.player === playerId && building.defId === KEEP_DEF_ID && building.hp > 0,
+  )
+}
+
+/** 對局是否已結束：一方主堡消滅，或達 `match.maxTicks` 上限。 */
+export function matchEnded(world: World): boolean {
+  if (world.tick >= world.match.maxTicks) return true
+  return !keepAlive(world, 'player') || !keepAlive(world, 'enemy')
+}
+
+/**
+ * 勝負判定：一方主堡被毀 → 對方勝；同 tick 雙殺 → 平手；
+ * 超時（雙主堡俱在）→ 水晶多者勝、同數平手（MVP：不比戰力）。
+ * 手動提前結束（雙主堡俱在且未超時）同此規則 → 平手。
+ */
+export function resolveMatchResult(world: World): MatchResult {
+  const playerAlive = keepAlive(world, 'player')
+  const enemyAlive = keepAlive(world, 'enemy')
+  if (playerAlive !== enemyAlive) return playerAlive ? 'player' : 'enemy'
+  if (playerAlive && enemyAlive && world.tick >= world.match.maxTicks) {
+    const crystal = (id: PlayerId): number =>
+      world.players.find((player) => player.id === id)?.blueCrystal ?? 0
+    const playerCrystal = crystal('player')
+    const enemyCrystal = crystal('enemy')
+    if (playerCrystal > enemyCrystal) return 'player'
+    if (enemyCrystal > playerCrystal) return 'enemy'
+  }
+  return 'draw'
+}
+
 /** 政策滑桿快照（Prompt 10：下方面板輪詢讀取）。 */
 export interface PolicySnapshot {
   /** 目前生效的 5 個滑桿值。 */
@@ -127,6 +169,11 @@ export interface GameSession {
    * 生效時機：即時換掉政策物件，下一個戰略／戰術週期讀到新值。
    */
   applyPolicies(playerId: PlayerId, values: Partial<PolicyValues>): boolean
+  /** 復盤（Prompt 10.5）：對局是否已結束；結束時帶完整 replay 紀錄。 */
+  getOutcome(): { ended: boolean; replay: ReplayRecord | null }
+  /** 復盤（Prompt 10.5）：手動提前結束（以當下狀態判勝負、停迴圈、產出 replay）。
+   *  已結束時回傳 false。 */
+  endMatch(): boolean
   /** 停止 ticker 迴圈（卸載 PixiCanvas 前呼叫）。 */
   stop(): void
 }
@@ -175,6 +222,37 @@ export async function startGameSession(app: Application, scene: GameScene): Prom
   const lastPolicyChange: Record<PlayerId, number> = {
     player: -POLICY_COOLDOWN_TICKS,
     enemy: -POLICY_COOLDOWN_TICKS,
+  }
+
+  // 復盤紀錄（Prompt 10.5）：tick 0 起每 20 tick 取雙陣營樣本；政策變更即時記錄。
+  const recorder = new ReplayRecorder()
+  const crystalOf = (playerId: PlayerId): number =>
+    world.players.find((player) => player.id === playerId)?.blueCrystal ?? 0
+  const aliveUnitCount = (playerId: PlayerId): number =>
+    world.units.filter((unit) => unit.player === playerId && unit.hp > 0).length
+  recorder.sample(
+    0,
+    crystalOf('player'),
+    crystalOf('enemy'),
+    aliveUnitCount('player'),
+    aliveUnitCount('enemy'),
+  )
+
+  // 對局結果（Prompt 10.5）：結束時填入；之前為 null。
+  let outcome: { result: MatchResult; replay: ReplayRecord } | null = null
+  /** 結束對局：判勝負、產出 replay、停 ticker（冪等）。 */
+  const finalize = (): void => {
+    if (outcome !== null) return
+    const result = resolveMatchResult(world)
+    outcome = {
+      result,
+      replay: recorder.finish(
+        result,
+        { player: crystalOf('player'), enemy: crystalOf('enemy') },
+        world.tick,
+      ),
+    }
+    app.ticker.remove(onFrame) // 對局結束：不再推進（復盤頁不依賴即時 sim）
   }
 
   let prev: WorldSnapshot = snapshotWorld(world)
@@ -243,12 +321,23 @@ export async function startGameSession(app: Application, scene: GameScene): Prom
         latestMicro[player.id] = runMicroCycle(w, player.id, plans[player.id])
       }
     }
+    if (w.tick % REPLAY_SAMPLE_INTERVAL_TICKS === 0) {
+      recorder.sample(
+        w.tick,
+        crystalOf('player'),
+        crystalOf('enemy'),
+        aliveUnitCount('player'),
+        aliveUnitCount('enemy'),
+      )
+    }
     prev = curr
     curr = snapshotWorld(w)
   }
 
   const onFrame = (ticker: Ticker): void => {
+    if (outcome !== null) return // 已結束：保險，不再推進（正常路徑 ticker 已移除）
     loop.advance(ticker.deltaMS, onTick)
+    if (matchEnded(world)) finalize()
     scene.update(curr, prev, loop.progressToNextTick, app.screen.width, app.screen.height)
   }
   app.ticker.add(onFrame)
@@ -385,6 +474,9 @@ export async function startGameSession(app: Application, scene: GameScene): Prom
       if (changed.length === 0) return true // 無實際變更：不消耗冷卻、不記日誌
       policies[playerId] = next
       lastPolicyChange[playerId] = world.tick
+      for (const key of changed) {
+        recorder.recordPolicy({ tick: world.tick, key, from: current[key], to: next[key] })
+      }
       pushLog({
         tick: world.tick,
         layer: 'policy',
@@ -393,6 +485,15 @@ export async function startGameSession(app: Application, scene: GameScene): Prom
           .map((key) => `${key} ${current[key].toFixed(2)}→${next[key].toFixed(2)}`)
           .join('、')}（此後決策受影響）`,
       })
+      return true
+    },
+    getOutcome: (): { ended: boolean; replay: ReplayRecord | null } => ({
+      ended: outcome !== null,
+      replay: outcome === null ? null : outcome.replay,
+    }),
+    endMatch: (): boolean => {
+      if (outcome !== null) return false
+      finalize()
       return true
     },
     stop: (): void => {

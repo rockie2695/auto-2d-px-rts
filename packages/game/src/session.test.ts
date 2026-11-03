@@ -3,9 +3,11 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it, vi } from 'vitest'
 
 import { DEFAULT_POLICIES } from './ai/policy.ts'
-import { startGameSession } from './session.ts'
+import { matchEnded, resolveMatchResult, startGameSession } from './session.ts'
 import type { GameSession, UnitInfo } from './session.ts'
 import { POLICY_COOLDOWN_TICKS } from './session.ts'
+import { addBuilding } from './sim/economy.ts'
+import { createTestWorld, makeBuildingDef } from './sim/testFixtures.ts'
 
 /** 內容來源改讀 public/data 目錄（避免相對 fetch 依賴 dev server）。 */
 vi.mock('./data/loadFromFetch.ts', () => ({
@@ -205,6 +207,93 @@ describe('政策滑桿 getPolicies / applyPolicies（Prompt 10）', () => {
     }
     const summary = session.getPolicies('player').summary
     expect(summary !== null && summary.length > 0).toBe(true)
+
+    session.stop()
+  })
+})
+
+/* ------------------------------------------------------------------ */
+/* 對局結束、勝負判定與 replay（Prompt 10.5）                            */
+/* ------------------------------------------------------------------ */
+
+describe('勝負判定（純函數）', () => {
+  /** 合成世界：雙方各一座 keep。 */
+  function keepWorld(): ReturnType<typeof createTestWorld> {
+    const world = createTestWorld({
+      size: 12,
+      buildings: [makeBuildingDef({ id: 'keep', hp: 100 })],
+    })
+    addBuilding(world, 'player', 'keep', { x: 0, y: 0 }, { built: true, nodeId: null })
+    addBuilding(world, 'enemy', 'keep', { x: 11, y: 11 }, { built: true, nodeId: null })
+    return world
+  }
+
+  it('雙 keep 俱在且未超時 → draw；一方被毀 → 對方勝；同 tick 雙殺 → draw', () => {
+    const world = keepWorld()
+    expect(matchEnded(world)).toBe(false)
+    expect(resolveMatchResult(world)).toBe('draw')
+
+    const enemyKeep = world.buildings.find((b) => b.player === 'enemy')
+    if (enemyKeep === undefined) throw new Error('找不到敵方 keep')
+    enemyKeep.hp = 0
+    expect(matchEnded(world)).toBe(true)
+    expect(resolveMatchResult(world)).toBe('player')
+
+    const playerKeep = world.buildings.find((b) => b.player === 'player')
+    if (playerKeep === undefined) throw new Error('找不到玩家 keep')
+    playerKeep.hp = 0
+    expect(resolveMatchResult(world)).toBe('draw')
+  })
+
+  it('超時（雙 keep 俱在）→ 水晶多者勝、同數平手；matchEnded 為真', () => {
+    const world = keepWorld()
+    world.tick = world.match.maxTicks
+    expect(matchEnded(world)).toBe(true)
+    expect(resolveMatchResult(world)).toBe('draw') // 起始水晶相同
+
+    const player = world.players.find((p) => p.id === 'player')
+    const enemy = world.players.find((p) => p.id === 'enemy')
+    if (player === undefined || enemy === undefined) throw new Error('找不到玩家')
+    enemy.blueCrystal = 500
+    expect(resolveMatchResult(world)).toBe('player')
+  })
+})
+
+describe('手動結束與 replay 產出（Prompt 10.5）', () => {
+  it('endMatch → 停迴圈、outcome.ended、replay 含樣本與政策事件', async () => {
+    const app = makeFakeApp()
+    const session: GameSession = await startGameSession(app as never, makeFakeScene() as never)
+    expect(session.getOutcome().ended).toBe(false)
+
+    // 對局推進 2 秒（含 tick 20/40 的取樣點），並改一次滑桿（記政策事件）。
+    await app.onFrame(1000)
+    expect(session.applyPolicies('player', { aggression: 1 })).toBe(true)
+    await app.onFrame(1000)
+
+    expect(session.endMatch()).toBe(true)
+    const outcome = session.getOutcome()
+    expect(outcome.ended).toBe(true)
+    if (outcome.replay === null) throw new Error('結束後 replay 不應為 null')
+
+    // 勝負：雙 keep 俱在且未超時（手動提前結束）→ 平手（MVP 規則）。
+    expect(outcome.replay.result).toBe('draw')
+    // tick 0 起的完整樣本（資源與單位數成對等長）。
+    expect(outcome.replay.resourceSeries[0]?.tick).toBe(0)
+    expect(outcome.replay.resourceSeries[0]?.player).toBe(600)
+    expect(outcome.replay.unitCountSeries[0]?.player).toBe(3)
+    expect(outcome.replay.resourceSeries.length).toBe(outcome.replay.unitCountSeries.length)
+    expect(outcome.replay.resourceSeries.length).toBeGreaterThanOrEqual(2)
+    // 政策時間軸：1 筆 aggression 0.5→1。
+    expect(outcome.replay.policyEvents).toEqual([
+      { tick: expect.any(Number), key: 'aggression', from: 0.5, to: 1 },
+    ])
+    // 最終資源與時長。
+    expect(outcome.replay.durationTicks).toBeGreaterThan(0)
+    expect(outcome.replay.finalCrystal.player).toBeGreaterThanOrEqual(0)
+
+    // 對局已停：ticker 移除；重複 endMatch 回 false。
+    expect(app.ticker.remove).toHaveBeenCalled()
+    expect(session.endMatch()).toBe(false)
 
     session.stop()
   })
