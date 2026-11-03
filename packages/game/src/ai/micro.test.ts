@@ -292,6 +292,7 @@ describe('撤退（Prompt 8 / Prompt 10 邊退邊打）', () => {
   it('撤退決策附帶中文 reason（資訊面板顯示用）', () => {
     const world = microWorld()
     const hurtId = putUnit(world, 'player', 'melee', { x: 10, y: 10 })
+    putUnit(world, 'enemy', 'melee', { x: 11, y: 10 }) // 附近有敵 → 觸發撤退
     const hurt = world.units.find((unit) => unit.id === hurtId)
     if (hurt === undefined) throw new Error('找不到受傷單位')
     hurt.hp = 15 // 15% < 20%
@@ -299,9 +300,22 @@ describe('撤退（Prompt 8 / Prompt 10 邊退邊打）', () => {
     const rally: TilePos = { x: 2, y: 2 }
     const plan = planWith(world, rally, [makeSquad(0, [hurtId], { x: 20, y: 20 })])
     const decision = computeMicroPlan(world, 'player', plan).find((d) => d.unitId === hurtId)
+    expect(decision?.action).toBe('retreat')
     expect(decision?.reason).toContain('15%')
     expect(decision?.reason).toContain('20%')
     expect(decision?.reason).toContain('集結點')
+
+    // 對照：附近無敵人（8 格內）→ 傷兵照常跟隊，不撤退（Prompt 10.9 安全距離）。
+    const lonelyWorld = microWorld()
+    const lonelyId = putUnit(world, 'player', 'melee', { x: 10, y: 10 })
+    const lonely = world.units.find((unit) => unit.id === lonelyId)
+    if (lonely === undefined) throw new Error('找不到受傷單位')
+    lonely.hp = 15
+    const lonelyPlan = planWith(world, { x: 2, y: 2 }, [makeSquad(0, [lonelyId], { x: 20, y: 20 })])
+    const lonelyDecision = computeMicroPlan(world, 'player', lonelyPlan).find(
+      (d) => d.unitId === lonelyId,
+    )
+    expect(lonelyDecision?.action).toBe('formation')
   })
 
   it('攻擊／風箏／編隊決策也附帶 reason（資訊面板顯示用）', () => {
