@@ -6,7 +6,7 @@
     "startUnits": { "legionnaire": 3 },
     "startBuildings": ["keep", "barracks", "crystal_mine"],
     "roster": ["legionnaire", "archer"],
-    "buildings": ["barracks", "crystal_mine"],
+    "buildings": ["barracks", "crystal_mine", "tower"],
     "startResources": { "blue_crystal": 600 },
     "counterMatrix": {
       "melee": { "melee": 1.0, "ranged": 1.0 },

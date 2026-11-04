@@ -104,7 +104,9 @@ function anchorOf(world: World, playerId: PlayerId): TilePos {
   return getPlayer(world, playerId).spawn
 }
 
-/** 飽和度：count / cap（mine 用礦場數/礦場上限，兵營同理）。 */
+/** 塔類建築的每方上限（Prompt 10.16）：2 座即飽和，AI 不再蓋。 */
+export const TOWER_CAP = 2
+
 function saturationOf(world: World, playerId: PlayerId, defId: string): number {
   const player = getPlayer(world, playerId)
   const def = world.defs.buildings[defId]
@@ -118,6 +120,9 @@ function saturationOf(world: World, playerId: PlayerId, defId: string): number {
   const count = world.buildings.filter(
     (building) => building.player === playerId && building.defId === defId,
   ).length
+  // 塔類（帶 defense，Prompt 10.16）：上限 `TOWER_CAP` = 2 座——2 座即飽和，
+  // AI 不再蓋（避免塔海蓋爆經濟）。
+  if (def.defense !== undefined) return count / TOWER_CAP
   return count // 未分類建築：蓋 1 座即飽和
 }
 

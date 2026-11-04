@@ -82,7 +82,7 @@ JSON 結構會按最終 schema 設計，方便日後遷移到 DB。
 - [x] Prompt 2 — `docs/SPEC.md`：MVP 規格（資源、單位、建築、經濟、
       5 個 Policy 滑桿、AI 三層、勝負、文字面板、JSON schema、不做清單）。
 - [x] Prompt 3 — 資料 schema 與內容 JSON：`packages/shared/src/schema.ts`（Zod）、
-      `packages/game/public/data/` 的 10 份內容檔、Zod 驗證測試（計數、
+      `packages/game/public/data/` 的內容檔（Prompt 10.16 起 11 份）、Zod 驗證測試（計數、
       id 交叉引用、地圖 180° 對稱）。
 - [x] Prompt 4 — 模擬核心 `packages/game/src/sim/`：內容載入器、固定點移動、
       確定性 A\*、空間雜湊自動接戰、整數精確經濟（收入／建造／生產佇列）、
@@ -241,3 +241,15 @@ JSON 結構會按最終 schema 設計，方便日後遷移到 DB。
   16/3/5 → 14/7/3——退掉閘門，接觸重評估只驅動小隊目標與夾擊；退閘後
   11 藍 / 7 紅 / 6 平，決出局比 11:7 在噪音範圍內）。
   （284 個測試）。
+- [x] Prompt 10.16 — 防禦塔（唯一會攻擊的建築）：
+  **`tower` 建築與 schema `defense`**（SPEC §5：700 hp／150 成本／20 s／2×2，
+  `defense {dmg: 10, range: 4.0, attackSpeed: 0.5}`——schema 新增**選用** `defense`
+  欄位；**只有帶此欄位且已完工的建築會攻擊**，keep/barracks/crystal_mine 永遠不攻擊）；
+  **只打單位不打建築**（SPEC §10：射程內最近敵方單位，顯式 `targetId` 優先，
+  傷害進 §2.3 同一批同時結算；建築 `attackAcc`／`targetId` 進快照）；
+  攻城仍只能靠單位（塔不會拆塔、不會拆家）；
+  **AI 每方上限 2 座**（`TOWER_CAP`；帶 `defense` 的建築飽和度 = 數量/2）；
+  **開火特效**（SPEC §12.1：快照 diff 偵測 `building.attackAcc` 掉落，發射線起點
+  = 建築外框最近點；有目標的塔同時畫持續接戰線）；內容檔 3→4 個建築（共 11 份）、
+  塔模擬層測試（完工才攻擊／無 defense 不攻擊／只打單位）。
+  （288 個測試；塔加入後 24 種子量測 7 藍 / 8 紅 / 9 平）。

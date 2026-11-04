@@ -95,9 +95,15 @@ tick++ → 經濟 → 脫戰回血 → 移動 → 重建空間雜湊 → 戰鬥�
 | `keep` | 主堡 | 作戰建築 | **1000** | — | — | 3×3 | 被摧毀即輸；不可建造、不可維修 |
 | `barracks` | 兵營 | 作戰建築 | 600 | 200 | 15 s | 2×2 | 生產單位 |
 | `crystal_mine` | 礦場 | 經濟設施 | 300 | 150 | 12 s | 1×1 | 產出 1.0 藍水晶/秒；**必須**蓋在空資源點上 |
+| `tower` | 防禦塔 | 作戰建築 | 700 | 150 | 20 s | 2×2 | 防禦攻擊：10 傷／4.0 格／0.5 次/秒；**只打單位** |
 
 - MVP **不做維修**。
 - 建造期間可被攻擊；未完成則 hp 按完成比例折算。
+- **防禦塔（Prompt 10.16）**：唯一帶 `defense {dmg, range, attackSpeed}` 的建築——
+  只有**帶此欄位且已完工**的建築會攻擊，且**只打敵方單位（永不攻擊建築）**；
+  其餘建築（keep/barracks/crystal_mine）永遠不攻擊，只被動挨打。
+  目標取射程內最近敵方單位（平手取 id 小者），傷害以 §2.3 同時結算；
+  AI 每方最多蓋 **2** 座塔（`TOWER_CAP`）。
 - **收入結算**（Prompt 5）：每座礦場以 `incomePerSec.blue_crystal` 獨立累積，
   每 tick 以整數取出入帳，並逐礦消耗所在節點的 `amount`（入帳 1 扣 1）。
   礦場必須蓋在**空**資源點上；節點採完後礦場**保留**但收入為 0。
@@ -500,6 +506,10 @@ A\* 路徑未變更且非重算點時沿用，`tick % 10 === 0`（500ms）定期
   `[x×200, (x+w)×200) × [y×200, (y+h)×200)` 取實測平方距離——不是格中心：
   中心近似會讓相鄰 1×1 建築的固定距離恆為 200，近戰射程 160 打不到、
   攻擊建築的意圖永遠失敗（部隊在牆邊原地空轉）。
+- **建築防禦攻擊（Prompt 10.16）**：帶 `defense` 且已完工的建築（**只有 `tower`**）
+  每 tick 累積 `attackSpeed / 20`，`≥ 1` 時對**射程內最近敵方單位**開火一次
+  （顯式 `targetId` 優先，但目前無外部指定來源）；**只打單位、不打建築**；
+  與單位攻擊共用同一批同時結算（§2.3 公平性涵蓋），受害者死亡當 tick 亦能還手。
 - `keep` hp ≤ 0 → 該方落敗。
 
 ---
@@ -614,6 +624,9 @@ AI 會**主動保護建築與水晶收入**，而不是窩在集結點被動挨�
     顯式建築目標超出射程時不畫（沒在打就不誤導）。
   - **開火特效強化**：開火瞬間加一條 **3px** 攻擊者→受擊者亮線（隨時間淡出）＋
     **12×12** 受擊閃光（比接戰線醒目）；特效壽命 `ATTACK_FX_MS` 由 160ms 提到 **200ms**。
+  - **塔的開火特效（Prompt 10.16）**：以快照 diff 偵測 `building.attackAcc` 掉落
+    （與單位同法），發射線起點 = 建築**外框**最近受害者的點、終點 = 受害單位；
+    有目標的塔同時畫淡色持續接戰線（外框最近點 → 單位）。
 
 > **Prompt 9.5 落地範圍（MVP 修訂）**：決策日誌只收**戰略層記錄**（build／train 與
 > 中文原因）與**戰術層小隊任務／目標變動**兩類（每 10 tick 比對前後計畫、變動才記）；
@@ -678,7 +691,7 @@ AI 會**主動保護建築與水晶收入**，而不是窩在集結點被動挨�
 schema 定義在 `packages/shared/src/schema.ts`（Zod）；
 每份內容檔的外層固定是 `{ "schemaVersion": 1, "<種類>": { ... } }`。
 
-### 檔案清單（共 10 個）
+### 檔案清單（共 11 個）
 
 ```
 public/data/
@@ -686,9 +699,10 @@ public/data/
   factions/test_faction.json      1 個陣營（雙方共用）
   units/legionnaire.json          2 個單位（各一檔）
   units/archer.json
-  buildings/keep.json             3 個建築（各一檔）
+  buildings/keep.json             4 個建築（各一檔）
   buildings/barracks.json
   buildings/crystal_mine.json
+  buildings/tower.json
   maps/test_map.json              1 張 32x32 地圖
   policies.json                   5 個滑桿
   match.json                      對局設定（tick 頻率、時限、各項上限）
@@ -751,6 +765,8 @@ public/data/
 
 - `size` = 佔地 `[寬, 高]`（格）。
 - `keep` 的 `cost: 0`、`buildTimeSec: 0`：它不可建造，只能由開局配置放置。
+- `tower` 另帶 `defense {dmg, range, attackSpeed}`（Prompt 10.16）：**唯一**會攻擊的建築，
+  只打敵方單位（§5／§10）。
 
 ### `factions/test_faction.json`
 
@@ -763,7 +779,7 @@ public/data/
     "startUnits": { "legionnaire": 3 },
     "startBuildings": ["keep", "barracks", "crystal_mine"],
     "roster": ["legionnaire", "archer"],
-    "buildings": ["barracks", "crystal_mine"],
+    "buildings": ["barracks", "crystal_mine", "tower"],
     "startResources": { "blue_crystal": 600 },
     "counterMatrix": {
       "melee": { "melee": 1.0, "ranged": 1.0 },

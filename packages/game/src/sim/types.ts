@@ -92,6 +92,13 @@ export interface Building {
    * 單位 milli·tick，見 economy.ts。
    */
   incomeAccMilli: number
+  /**
+   * 防禦攻擊冷卻累積器（Prompt 10.16）：僅帶 `def.defense` 的建築使用；
+   * 語義與單位 `attackAcc` 相同（acc ≥ 1 開火一次再 −1）。
+   */
+  attackAcc: number
+  /** 防禦攻擊目標（敵方單位 id）；null = 無顯式目標（自動取射程內最近者）。 */
+  targetId: number | null
 }
 
 /** 單一資源的礦點。 */

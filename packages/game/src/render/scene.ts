@@ -297,6 +297,31 @@ export class GameScene {
           born: now,
         })
       }
+      // 塔的開火特效（Prompt 10.16）：快照 diff 偵測 `building.attackAcc` 掉落，
+      // 起點 = 建築**外框**最近受害者的點、終點 = 受害單位。
+      if (buildingsById.size > 0) {
+        const prevBuildingsById = new Map<number, WorldSnapshot['buildings'][number]>()
+        for (const building of prev.buildings) prevBuildingsById.set(building.id, building)
+        for (const before of prev.buildings) {
+          const after = buildingsById.get(before.id)
+          if (after === undefined || after.hp <= 0) continue
+          if (!(before.attackAcc >= 1 && after.attackAcc < before.attackAcc)) continue
+          const def = this.defs.buildings[after.defId]
+          if (def?.defense === undefined || after.targetId === null) continue
+          const victim = currById.get(after.targetId)
+          if (victim === undefined || victim.hp <= 0) continue
+          const edge = closestPointOnBuilding(victim, after, this.defs)
+          this.effects.push({
+            kind: 'shot',
+            fromX: fixedToPx(edge.x),
+            fromY: fixedToPx(edge.y),
+            toX: fixedToPx(victim.x),
+            toY: fixedToPx(victim.y),
+            color: after.player === 'player' ? COLOR_BUILDING_PLAYER : COLOR_BUILDING_ENEMY,
+            born: now,
+          })
+        }
+      }
     }
     this.effects = this.effects.filter((fx) => now - fx.born < ATTACK_FX_MS)
     this.fxG.clear()
@@ -315,6 +340,19 @@ export class GameScene {
       const color = unit.player === 'player' ? COLOR_UNIT_PLAYER : COLOR_UNIT_ENEMY
       this.fxG
         .moveTo(fixedToPx(unit.x), fixedToPx(unit.y))
+        .lineTo(fixedToPx(victim.x), fixedToPx(victim.y))
+        .stroke({ width: 1, color, alpha: 0.28 })
+    }
+    // 塔的持續接戰線（Prompt 10.16）：有目標的塔畫淡色細線（外框最近點 → 受害單位）。
+    for (const building of curr.buildings) {
+      if (building.hp <= 0 || building.targetId === null) continue
+      if (this.defs.buildings[building.defId]?.defense === undefined) continue
+      const victim = engageById.get(building.targetId)
+      if (victim === undefined || victim.hp <= 0) continue
+      const edge = closestPointOnBuilding(victim, building, this.defs)
+      const color = building.player === 'player' ? COLOR_BUILDING_PLAYER : COLOR_BUILDING_ENEMY
+      this.fxG
+        .moveTo(fixedToPx(edge.x), fixedToPx(edge.y))
         .lineTo(fixedToPx(victim.x), fixedToPx(victim.y))
         .stroke({ width: 1, color, alpha: 0.28 })
     }

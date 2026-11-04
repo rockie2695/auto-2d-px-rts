@@ -467,6 +467,10 @@ export interface WorldSnapshot {
     queue: Array<{ defId: string; remainingTicks: number }>
     nodeId: number | null
     incomeAccMilli: number
+    /** 防禦攻擊冷卻（Prompt 10.16；僅帶 defense 的建築使用）。 */
+    attackAcc: number
+    /** 防禦攻擊目標（敵單位 id）；null = 無。 */
+    targetId: number | null
   }>
   resourceNodes: Array<{
     x: number
@@ -515,6 +519,8 @@ export function snapshotWorld(world: World): WorldSnapshot {
       queue: building.queue.map((job) => ({ ...job })),
       nodeId: building.nodeId,
       incomeAccMilli: building.incomeAccMilli,
+      attackAcc: building.attackAcc,
+      targetId: building.targetId,
     })),
     resourceNodes: world.resourceNodes.map((node) => ({ ...node })),
   }

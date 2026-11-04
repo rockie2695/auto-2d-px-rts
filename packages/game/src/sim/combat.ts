@@ -1,8 +1,8 @@
 import { TICK_RATE_HZ } from '@auto-2d-px-rts/shared'
 
 import { queryNear } from './spatialHash.ts'
-import { buildingEffectiveMaxHp, UNITS_PER_TILE } from './types.ts'
-import type { CombatTarget, Unit, World } from './types.ts'
+import { buildingEffectiveMaxHp, isConstructed, UNITS_PER_TILE } from './types.ts'
+import type { Building, CombatTarget, Unit, World } from './types.ts'
 
 /**
  * 自動接戰（SPEC §10）：每個 tick 對每個單位嘗試攻擊一次。
@@ -104,6 +104,40 @@ function acquireTarget(world: World, unit: Unit, rangeFixed: number): CombatTarg
   return bestBuilding === null ? null : { kind: 'building', building: bestBuilding }
 }
 
+/**
+ * 塔的防禦攻擊（Prompt 10.16，邊注在 §2.2）：**僅帶 `def.defense` 且已完工**
+ * 的建築攻擊，且**只打單位**（不打建築——其他建築永遠不攻擊）。
+ * 目標：顯式 `targetId`（敵方存活單位）優先，需在 `defense.range` 內；
+ * 否則射程內最近敵方單位（平手取 id 較小者）。
+ * 射程量測與 §2.2 同：單位固定點座標到建築**佔地外框**的距離。
+ */
+function acquireBuildingTarget(world: World, building: Building, rangeFixed: number): Unit | null {
+  const explicit =
+    building.targetId === null
+      ? null
+      : (world.units.find(
+          (candidate) =>
+            candidate.id === building.targetId &&
+            candidate.player !== building.player &&
+            candidate.hp > 0,
+        ) ?? null)
+  if (explicit !== null) {
+    return distanceSquaredToBuilding(explicit, building) <= rangeFixed * rangeFixed ? explicit : null
+  }
+
+  let best: Unit | null = null
+  let bestDistance = Number.POSITIVE_INFINITY
+  for (const candidate of world.units) {
+    if (candidate.player === building.player || candidate.hp <= 0) continue
+    const distance = distanceSquaredToBuilding(candidate, building)
+    if (distance <= rangeFixed * rangeFixed && distance < bestDistance) {
+      best = candidate
+      bestDistance = distance
+    }
+  }
+  return best
+}
+
 /** 傷害打到建築上：記錄累計傷害並折算目前 hp（未完工按比例，SPEC §5）。 */
 function damageBuilding(world: World, buildingId: number, damage: number): void {
   const building = world.buildings.find((candidate) => candidate.id === buildingId)
@@ -130,6 +164,10 @@ function removeDead(world: World): void {
     world.units = world.units.filter((unit) => !deadUnitIds.has(unit.id))
     for (const unit of world.units) {
       if (unit.targetId !== null && deadUnitIds.has(unit.targetId)) unit.targetId = null
+    }
+    // 塔的防禦目標（Prompt 10.16）同樣指向單位 id：目標陣亡即回到自動接戰。
+    for (const building of world.buildings) {
+      if (building.targetId !== null && deadUnitIds.has(building.targetId)) building.targetId = null
     }
     for (const player of world.players) {
       player.unitCount = world.units.filter((unit) => unit.player === player.id).length
@@ -195,6 +233,28 @@ export function stepCombat(world: World): void {
     } else {
       pending.push({ attackerId: unit.id, targetUnitId: null, targetBuildingId: target.building.id, dmg: def.stats.dmg })
     }
+  }
+
+  // 塔的防禦攻擊（Prompt 10.16）：同一批 pending（建築與單位同時結算，
+  // 建築攻擊也受「被擊殺者死亡當 tick 仍能還手」的公平性保護涵蓋）。
+  for (const building of world.buildings) {
+    if (building.hp <= 0 || !isConstructed(building)) continue
+    const def = world.defs.buildings[building.defId]
+    const defense = def?.defense
+    if (def === undefined || defense === undefined) continue
+
+    building.attackAcc += defense.attackSpeed / TICK_RATE_HZ
+    if (building.attackAcc < 1) continue
+
+    const rangeFixed = Math.round(defense.range * UNITS_PER_TILE)
+    const target = acquireBuildingTarget(world, building, rangeFixed)
+    if (target === null) {
+      // 無目標：冷卻封頂在 1（開火當刻立即生效，與單位語義一致）。
+      building.attackAcc = Math.min(building.attackAcc, 1)
+      continue
+    }
+    building.attackAcc -= 1
+    pending.push({ attackerId: building.id, targetUnitId: target.id, targetBuildingId: null, dmg: defense.dmg })
   }
 
   for (const attack of pending) {

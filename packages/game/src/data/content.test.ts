@@ -40,6 +40,7 @@ const EXPECTED_FILES: readonly string[] = [
   'buildings/barracks.json',
   'buildings/crystal_mine.json',
   'buildings/keep.json',
+  'buildings/tower.json',
   'factions/test_faction.json',
   'maps/test_map.json',
   'match.json',
@@ -118,14 +119,15 @@ describe('MVP 內容 JSON（Prompt 3）', () => {
     expect(units).toHaveLength(2)
   })
 
-  it('建築：3 個（keep / barracks / crystal_mine），且都通過 Zod 驗證', () => {
+  it('建築：4 個（keep / barracks / crystal_mine / tower），且都通過 Zod 驗證', () => {
     const buildings = loadBuildings()
     expect(buildings.map((building) => building.id).sort()).toEqual([
       'barracks',
       'crystal_mine',
       'keep',
+      'tower',
     ])
-    expect(buildings).toHaveLength(3)
+    expect(buildings).toHaveLength(4)
   })
 
   it('地圖：1 張（32x32 test_map），且通過 superRefine', () => {
@@ -161,7 +163,7 @@ describe('MVP 內容 JSON（Prompt 3）', () => {
     expect(faction.startUnits).toEqual({ legionnaire: 3 })
     expect(faction.startBuildings.sort()).toEqual(['barracks', 'crystal_mine', 'keep'])
     expect(faction.roster).toEqual(['legionnaire', 'archer'])
-    expect(faction.buildings).toEqual(['barracks', 'crystal_mine'])
+    expect(faction.buildings).toEqual(['barracks', 'crystal_mine', 'tower'])
   })
 
   it('對局設定：tick 頻率與時限等於 shared 常數', () => {
@@ -333,6 +335,15 @@ describe('內容數值與 SPEC 一致（防止資料悄悄漂移）', () => {
     expect(buildings.find((building) => building.id === 'crystal_mine')?.requiresResourceNode).toBe(
       true,
     )
+    // 塔（Prompt 10.16）：唯一帶 defense 的建築——數值鎖定，只打單位。
+    const tower = buildings.find((building) => building.id === 'tower')
+    expect(tower?.hp).toBe(700)
+    expect(tower?.cost).toEqual({ blue_crystal: 150 })
+    expect(tower?.buildTimeSec).toBe(20)
+    expect(tower?.defense).toEqual({ dmg: 10, range: 4.0, attackSpeed: 0.5 })
+    expect(buildings.find((building) => building.id === 'keep')?.defense).toBeUndefined()
+    expect(buildings.find((building) => building.id === 'barracks')?.defense).toBeUndefined()
+    expect(buildings.find((building) => building.id === 'crystal_mine')?.defense).toBeUndefined()
   })
 
   it('撤退閾值固定為 0.5（資料定義，玩家不可調 — SPEC §8.4；Prompt 10.13 上調）', () => {

@@ -247,6 +247,8 @@ export function addBuilding(
     queue: [],
     nodeId: options.nodeId,
     incomeAccMilli: 0,
+    attackAcc: 0,
+    targetId: null,
   }
   world.nextBuildingId += 1
   world.buildings.push(building)

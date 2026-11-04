@@ -107,6 +107,8 @@ function snapshotWithBuildings(
       queue: [],
       nodeId: null,
       incomeAccMilli: 0,
+      attackAcc: 0,
+      targetId: null,
     })),
     resourceNodes: [],
   }

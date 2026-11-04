@@ -135,6 +135,19 @@ export const BuildingDefSchema = z.object({
   incomePerSec: ResourceRateSchema.optional(),
   /** 是否必須蓋在空資源點上。 */
   requiresResourceNode: z.boolean().optional(),
+  /**
+   * 防禦（Prompt 10.16）：塔類建築的攻擊數值——**只有帶此欄位且已完工的建築
+   * 才會攻擊**，且只打單位（不打建築）；未設 = 純被動建築（keep/barracks/
+   * crystal_mine 永遠不攻擊）。
+   */
+  defense: z
+    .object({
+      dmg: z.number().int().positive(),
+      /** 對單位固定點座標的量測距離（格；與單位 range 同義）。 */
+      range: z.number().nonnegative(),
+      attackSpeed: z.number().positive(),
+    })
+    .optional(),
 })
 
 export type BuildingDef = z.infer<typeof BuildingDefSchema>
