@@ -93,6 +93,14 @@ export function InfoPanel() {
               ({unitInfo.tileX}, {unitInfo.tileY})
             </dd>
           </div>
+          <div>
+            <dt>射程</dt>
+            <dd>{unitInfo.rangeTiles.toFixed(1)} 格</dd>
+          </div>
+          <div>
+            <dt>速度</dt>
+            <dd>{unitInfo.moveSpeedTilesPerSec.toFixed(1)} 格/秒</dd>
+          </div>
           {unitInfo.squadMission !== null ? (
             <div>
               <dt>小隊</dt>

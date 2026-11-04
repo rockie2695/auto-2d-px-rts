@@ -335,9 +335,9 @@ describe('內容數值與 SPEC 一致（防止資料悄悄漂移）', () => {
     )
   })
 
-  it('撤退閾值固定為 0.2（資料定義，玩家不可調 — SPEC §8.4）', () => {
+  it('撤退閾值固定為 0.5（資料定義，玩家不可調 — SPEC §8.4；Prompt 10.13 上調）', () => {
     for (const unit of loadUnits()) {
-      expect(unit.ai.retreatHpPct, `${unit.id} 的 retreatHpPct`).toBe(0.2)
+      expect(unit.ai.retreatHpPct, `${unit.id} 的 retreatHpPct`).toBe(0.5)
     }
   })
 })

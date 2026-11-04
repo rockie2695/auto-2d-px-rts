@@ -8,6 +8,7 @@ import {
   countSquads,
   ENGAGE_POWER_RATIO,
   FOCUS_RADIUS_TILES,
+  groupByProximity,
   lerp,
   REGROUP_DISTANCE_TILES,
   RETREAT_POWER_RATIO,
@@ -17,13 +18,14 @@ import {
 import type { TacticalPlan } from './tactics.ts'
 import { MICRO_INTERVAL_TICKS, runMicroCycle } from './micro.ts'
 import { DEFENSE_RADIUS_TILES, pickMostUrgentThreat } from './influence.ts'
+import { rallyPoint } from './tactics.ts'
 import { DEFAULT_POLICIES, resolvePolicies } from './policy.ts'
 import type { PolicyValues } from './policy.ts'
 import { runStrategicCycle, STRATEGIC_INTERVAL_TICKS } from './strategy.ts'
 import { loadContentPackFromDir } from '../data/loadFromDir.ts'
 import { addBuilding } from '../sim/economy.ts'
 import { createWorld, stepWorld } from '../sim/world.ts'
-import { tileOf } from '../sim/types.ts'
+import { tileOf, UNITS_PER_TILE } from '../sim/types.ts'
 import { createTestWorld, makeBuildingDef, makeUnitDef, putUnit } from '../sim/testFixtures.ts'
 import type { PlayerId, TilePos, World } from '../sim/types.ts'
 
@@ -243,6 +245,138 @@ describe('主動防禦（保護建築與水晶，Prompt 10.6）', () => {
     const threat = pickMostUrgentThreat(world, 'player')
     expect(threat?.buildingId).toBe(mine.id) // 同戰力 → 經濟（水晶）優先
     expect(threat?.isEconomic).toBe(true)
+  })
+})
+
+describe('集結點／生產點與編組遲滯（Prompt 10.13）', () => {
+  it('集結點：無威脅＝keep 旁；有威脅＝往受威脅建築前移', () => {
+    const world = worldWithBases()
+    addBuilding(world, 'player', 'mine', { x: 8, y: 8 }, { built: true, nodeId: null })
+    const home = rallyPoint(world, 'player')
+    putUnit(world, 'enemy', 'u', { x: 11, y: 8 }) // 礦場旁來襲
+    const threat = pickMostUrgentThreat(world, 'player')
+    expect(threat).not.toBeNull()
+    const forward = rallyPoint(world, 'player', threat)
+    const dist = (a: TilePos, b: TilePos) => Math.abs(a.x - b.x) + Math.abs(a.y - b.y)
+    // 有威脅的集結點更靠近受威脅建築（往中點前移）。
+    expect(dist(forward, { x: 8, y: 8 })).toBeLessThan(dist(home, { x: 8, y: 8 }))
+  })
+
+  it('生產點：由集結點往主目標方向前移（介於集結點與敵 keep 之間）', () => {
+    const world = worldWithBases()
+    putUnit(world, 'player', 'u', { x: 5, y: 5 })
+    const plan = computeTacticalPlan(world, 'player', resolvePolicies({ aggression: 1, clusterSpread: 1 }))
+    const dist = (a: TilePos, b: TilePos) => Math.abs(a.x - b.x) + Math.abs(a.y - b.y)
+    const enemyKeep = { x: 29, y: 29 } // 敵 keep（28,28）3×3 的中心
+    expect(dist(plan.gather, enemyKeep)).toBeLessThan(dist(plan.rally, enemyKeep))
+  })
+
+  it('編組遲滯：邊界單位小幅移動不換隊；大幅移動才換', () => {
+    const buildWorld = () => {
+      const world = worldWithBases()
+      // 兩群（k=2）：左群 (4,4)(4,5)(5,4)、右群 (12,4)(12,5)(13,4) + 邊界單位 (8,4)。
+      for (const tile of [{ x: 4, y: 4 }, { x: 4, y: 5 }, { x: 5, y: 4 }]) {
+        putUnit(world, 'player', 'u', tile)
+      }
+      for (const tile of [{ x: 12, y: 4 }, { x: 12, y: 5 }, { x: 13, y: 4 }]) {
+        putUnit(world, 'player', 'u', tile)
+      }
+      const boundaryId = putUnit(world, 'player', 'u', { x: 8, y: 4 })
+      return { world, boundaryId }
+    }
+    const indexOfUnit = (plan: TacticalPlan, id: number): number | null =>
+      plan.squads.find((squad) => squad.memberIds.includes(id))?.index ?? null
+    const policies = resolvePolicies({ clusterSpread: 0.67 }) // k=2
+
+    // 小幅朝右群移 1 格：遲滯裕度內 → 留原隊。
+    const a = buildWorld()
+    const firstA = computeTacticalPlan(a.world, 'player', policies)
+    const beforeA = indexOfUnit(firstA, a.boundaryId)
+    expect(beforeA).not.toBeNull()
+    const boundaryA = a.world.units.find((unit) => unit.id === a.boundaryId)
+    if (boundaryA === undefined) throw new Error('找不到邊界單位')
+    boundaryA.x += UNITS_PER_TILE // 右移 1 格
+    const secondA = computeTacticalPlan(a.world, 'player', policies, firstA)
+    expect(indexOfUnit(secondA, a.boundaryId)).toBe(beforeA) // 不換隊
+
+    // 大幅移入右群（距原隊很遠）→ 允許換隊。
+    const b = buildWorld()
+    const firstB = computeTacticalPlan(b.world, 'player', policies)
+    const boundaryB = b.world.units.find((unit) => unit.id === b.boundaryId)
+    if (boundaryB === undefined) throw new Error('找不到邊界單位')
+    boundaryB.x += 4 * UNITS_PER_TILE // 右移 4 格
+    const secondB = computeTacticalPlan(b.world, 'player', policies, firstB)
+    expect(indexOfUnit(secondB, b.boundaryId)).not.toBe(indexOfUnit(firstB, b.boundaryId))
+  })
+
+  it('聚類索引空間：空群不位移非空群的索引（warm start／遲滯跨循環對齊）', () => {
+    const world = worldWithBases()
+    // 6 單位分兩團（左 (4,4) 附近、右 (20,20) 附近）；群 1 的種子在遠處 → 必為空群。
+    const leftIds = [
+      putUnit(world, 'player', 'u', { x: 4, y: 4 }),
+      putUnit(world, 'player', 'u', { x: 4, y: 5 }),
+      putUnit(world, 'player', 'u', { x: 5, y: 4 }),
+    ]
+    const rightIds = [
+      putUnit(world, 'player', 'u', { x: 20, y: 20 }),
+      putUnit(world, 'player', 'u', { x: 20, y: 21 }),
+      putUnit(world, 'player', 'u', { x: 21, y: 20 }),
+    ]
+    const ready = [...leftIds, ...rightIds].map(
+      (id) => world.units.find((unit) => unit.id === id)!,
+    )
+    const seedCenters: TilePos[] = [
+      { x: 4, y: 4 },
+      { x: 30, y: 30 }, // 附近無兵 → 群 1 空
+      { x: 20, y: 20 },
+    ]
+    const previousIndex = new Map<number, number>()
+    for (const id of leftIds) previousIndex.set(id, 0)
+    for (const id of rightIds) previousIndex.set(id, 2)
+    const groups = groupByProximity(ready, 3, 18, seedCenters, previousIndex)
+    // 回傳群數＝請求數（保留群索引空間）：群 1 空、右群留在索引 2（不壓縮成 1）——
+    // 這是 warm start／遲滯跨循環對齊的前提（先前版本會把非空群重新編號而失準）。
+    expect(groups).toHaveLength(3)
+    expect(groups[1]).toHaveLength(0)
+    expect(groups[0]?.length).toBeGreaterThan(0)
+    expect(groups[2]?.length).toBeGreaterThan(0)
+  })
+
+  it('空群不位移小隊索引（warm start 對齊、紅藍公平性回歸）', () => {
+    // 三團（左／中／右）、clusterSpread=1/3 → 目標隊數 3。
+    const world = worldWithBases()
+    for (const tile of [{ x: 4, y: 4 }, { x: 4, y: 5 }]) {
+      putUnit(world, 'player', 'u', tile)
+    }
+    const midIds = [
+      putUnit(world, 'player', 'u', { x: 12, y: 12 }),
+      putUnit(world, 'player', 'u', { x: 12, y: 13 }),
+    ]
+    const rightIds = [
+      putUnit(world, 'player', 'u', { x: 20, y: 20 }),
+      putUnit(world, 'player', 'u', { x: 20, y: 21 }),
+    ]
+    const policies = resolvePolicies({ clusterSpread: 1 / 3 })
+    const indexOfUnit = (plan: TacticalPlan, id: number): number | null =>
+      plan.squads.find((squad) => squad.memberIds.includes(id))?.index ?? null
+
+    const first = computeTacticalPlan(world, 'player', policies)
+    // 中團與右團的索引（應為 1 與 2）。
+    const rightBefore = indexOfUnit(first, rightIds[0]!)
+    expect(indexOfUnit(first, midIds[0]!)).toBe(1)
+    expect(rightBefore).toBe(2)
+
+    // 把中團移到左團旁 → 下一循環中群變空群。
+    for (const id of midIds) {
+      const unit = world.units.find((candidate) => candidate.id === id)
+      if (unit === undefined) throw new Error('找不到中團單位')
+      unit.x = 5 * UNITS_PER_TILE
+      unit.y = 4 * UNITS_PER_TILE
+    }
+    const second = computeTacticalPlan(world, 'player', policies, first)
+    // 右團仍應留在索引 2（不因空群被壓縮成 1）；沒有任何小隊佔用空群的索引 1。
+    expect(indexOfUnit(second, rightIds[0]!)).toBe(rightBefore)
+    expect(second.squads.some((squad) => squad.index === 1)).toBe(false)
   })
 })
 

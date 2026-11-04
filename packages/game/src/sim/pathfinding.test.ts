@@ -79,6 +79,52 @@ describe('A* 尋路（SPEC §9.4）', () => {
     expect(a).toEqual(b)
   })
 
+  it('等價路徑抽選（Prompt 10.13）：同鹽決定性、不同鹽走不同但等長的路徑', () => {
+    const query = (salt: number) => ({ size, walkable: walkableOver([], size), tieBreakSalt: salt })
+    const start: TilePos = { x: 0, y: 0 }
+    const goal: TilePos = { x: 9, y: 9 }
+    const a = findPath(query(0.123), start, goal)
+    const b = findPath(query(0.123), start, goal)
+    expect(a).not.toBeNull()
+    expect(a).toEqual(b) // 同鹽 → 決定性
+
+    const variants = new Set<string>()
+    for (const salt of [0.05, 0.25, 0.5, 0.75, 0.95]) {
+      const path = findPath(query(salt), start, goal)
+      expect(path).not.toBeNull()
+      if (path === null) continue
+      expect(path).toHaveLength(a?.length ?? -1) // 只換等價路徑（長度不變）
+      expect(path.at(-1)).toEqual(goal)
+      variants.add(JSON.stringify(path))
+    }
+    expect(variants.size).toBeGreaterThanOrEqual(2) // 多樣性
+  })
+
+  it('鏡像序 + 抽選鹽：同鹽下鏡射起訖仍逐格互為鏡像（公平性不破）', () => {
+    const rocks: TilePos[] = [
+      { x: 2, y: 4 },
+      { x: 7, y: 5 },
+      { x: 4, y: 4 },
+      { x: 5, y: 5 },
+    ]
+    const mirrorTile = (tile: TilePos): TilePos => ({ x: size - 1 - tile.x, y: size - 1 - tile.y })
+    const start: TilePos = { x: 0, y: 0 }
+    const goal: TilePos = { x: 9, y: 9 }
+    const blue = findPath({ size, walkable: walkableOver(rocks, size), tieBreakSalt: 0.37 }, start, goal)
+    const red = findPath(
+      { size, walkable: walkableOver(rocks, size), mirrorOrder: true, tieBreakSalt: 0.37 },
+      mirrorTile(start),
+      mirrorTile(goal),
+    )
+    expect(blue).not.toBeNull()
+    expect(red).not.toBeNull()
+    if (blue === null || red === null) return
+    expect(red).toHaveLength(blue.length)
+    for (let index = 0; index < blue.length; index++) {
+      expect(red[index]).toEqual(mirrorTile(blue[index] as TilePos))
+    }
+  })
+
   it('鏡像序（Prompt 10.11）：鏡射起訖 + mirrorOrder → 路徑逐格互為鏡像', () => {
     // 對稱岩石配置（點鏡射不變）。
     const rocks: TilePos[] = [

@@ -64,6 +64,8 @@ function planWith(world: World, rallies: TilePos, squads: Squad[]): TacticalPlan
     tick: world.tick,
     player: 'player',
     rally: rallies,
+    // 測試預設生產點＝集結點（微操「未編隊」分支以生產點為目標）。
+    gather: rallies,
     squads,
     disengaged: [],
     influence: computeInfluenceMap(world, 'player'),
@@ -239,7 +241,7 @@ describe('撤退（Prompt 8 / Prompt 10 邊退邊打）', () => {
     putUnit(world, 'enemy', 'melee', { x: 15, y: 10 }) // 距 5 格：射程外
     const hurt = world.units.find((unit) => unit.id === hurtId)
     if (hurt === undefined) throw new Error('找不到受傷單位')
-    hurt.hp = 15
+    hurt.hp = 8 // 殘血 < 10%：一律撤退
 
     const rally: TilePos = { x: 2, y: 2 }
     const plan = planWith(world, rally, [makeSquad(0, [hurtId], { x: 20, y: 20 })])
@@ -248,6 +250,76 @@ describe('撤退（Prompt 8 / Prompt 10 邊退邊打）', () => {
     expect(decision?.moveDest).toEqual(rally)
     expect(decision?.attackTargetId).toBeNull()
     expect(decision?.reason).not.toContain('邊退邊打')
+  })
+
+  it('HP 撤退分級（Prompt 10.13）：殘血 < 10% 一律退；10–50% 打不贏才退、打得贏繼續', () => {
+    // 殘血 8%：附近的敵人再遠也一律回家。
+    const worldA = microWorld()
+    const criticalId = putUnit(worldA, 'player', 'melee', { x: 10, y: 10 })
+    const criticalUnit = worldA.units.find((unit) => unit.id === criticalId)
+    if (criticalUnit === undefined) throw new Error('找不到單位')
+    criticalUnit.hp = 8
+    const planA = planWith(worldA, { x: 2, y: 2 }, [makeSquad(0, [criticalId], { x: 20, y: 20 })])
+    const critical = computeMicroPlan(worldA, 'player', planA).find((d) => d.unitId === criticalId)
+    expect(critical?.action).toBe('retreat')
+    expect(critical?.reason).toContain('殘血')
+
+    // 中傷 15% + 敵人很遠（威脅 < 自身戰力 × 0.9）→ 繼續作戰（不退）。
+    const worldB = microWorld()
+    const midId = putUnit(worldB, 'player', 'melee', { x: 10, y: 10 })
+    putUnit(worldB, 'enemy', 'melee', { x: 16, y: 10 }) // 距 6 格：威脅遠低於自身
+    const midUnit = worldB.units.find((unit) => unit.id === midId)
+    if (midUnit === undefined) throw new Error('找不到單位')
+    midUnit.hp = 15
+    const planB = planWith(worldB, { x: 2, y: 2 }, [makeSquad(0, [midId], { x: 20, y: 20 })])
+    const mid = computeMicroPlan(worldB, 'player', planB).find((d) => d.unitId === midId)
+    expect(mid?.action).not.toBe('retreat')
+
+    // 中傷 15% + 大量敵軍貼身（威脅 > 自身戰力 × 0.9）→ 撤退。
+    const worldC = microWorld()
+    const weakId = putUnit(worldC, 'player', 'melee', { x: 10, y: 10 })
+    for (const tile of [
+      { x: 10, y: 10 },
+      { x: 11, y: 10 },
+      { x: 10, y: 11 },
+      { x: 11, y: 11 },
+    ]) {
+      putUnit(worldC, 'enemy', 'melee', tile)
+    }
+    const weakUnit = worldC.units.find((unit) => unit.id === weakId)
+    if (weakUnit === undefined) throw new Error('找不到單位')
+    weakUnit.hp = 15
+    const planC = planWith(worldC, { x: 2, y: 2 }, [makeSquad(0, [weakId], { x: 20, y: 20 })])
+    const weak = computeMicroPlan(worldC, 'player', planC).find((d) => d.unitId === weakId)
+    expect(weak?.action).toBe('retreat')
+    expect(weak?.reason).toContain('優勢')
+  })
+
+  it('騷擾脫離（Prompt 10.13）：騷擾隊遇優勢敵人 → 不硬拼、往外脫離', () => {
+    const world = microWorld()
+    const harasserId = putUnit(world, 'player', 'melee', { x: 10, y: 10 })
+    // 3 名敵人貼身：威脅 300000 > 我隊戰力 100 × 1000 × 0.9。
+    for (const tile of [
+      { x: 10, y: 10 },
+      { x: 11, y: 10 },
+      { x: 10, y: 11 },
+    ]) {
+      putUnit(world, 'enemy', 'melee', tile)
+    }
+    const squad = { ...makeSquad(0, [harasserId], { x: 20, y: 20 }), mission: 'harass' as const }
+    const plan = planWith(world, { x: 2, y: 2 }, [squad])
+    const decision = computeMicroPlan(world, 'player', plan).find((d) => d.unitId === harasserId)
+    expect(decision?.action).toBe('disengage')
+    expect(decision?.attackTargetId).toBeNull() // 不還手
+    expect(decision?.reason).toContain('脫離')
+    expect(decision?.moveDest).not.toBeNull() // 往外脫離
+
+    // 對照：攻擊隊同樣處境 → 照常接戰（不是騷擾就不脫離）。
+    const attackPlan = planWith(world, { x: 2, y: 2 }, [makeSquad(0, [harasserId], { x: 20, y: 20 })])
+    const attacker = computeMicroPlan(world, 'player', attackPlan).find(
+      (d) => d.unitId === harasserId,
+    )
+    expect(attacker?.action).toBe('attack')
   })
 
   it('撤退中每循環改打最近的射程內敵人（路過誰打誰）', () => {
@@ -295,14 +367,14 @@ describe('撤退（Prompt 8 / Prompt 10 邊退邊打）', () => {
     putUnit(world, 'enemy', 'melee', { x: 11, y: 10 }) // 附近有敵 → 觸發撤退
     const hurt = world.units.find((unit) => unit.id === hurtId)
     if (hurt === undefined) throw new Error('找不到受傷單位')
-    hurt.hp = 15 // 15% < 20%
+    hurt.hp = 8 // 殘血 < 10%：一律撤退
 
     const rally: TilePos = { x: 2, y: 2 }
     const plan = planWith(world, rally, [makeSquad(0, [hurtId], { x: 20, y: 20 })])
     const decision = computeMicroPlan(world, 'player', plan).find((d) => d.unitId === hurtId)
     expect(decision?.action).toBe('retreat')
-    expect(decision?.reason).toContain('15%')
-    expect(decision?.reason).toContain('20%')
+    expect(decision?.reason).toContain('8%')
+    expect(decision?.reason).toContain('殘血')
     expect(decision?.reason).toContain('集結點')
 
     // 對照：附近無敵人（8 格內）→ 傷兵照常跟隊，不撤退（Prompt 10.9 安全距離）。

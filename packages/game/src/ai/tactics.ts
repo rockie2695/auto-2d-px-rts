@@ -1,7 +1,7 @@
 import { getPlayer, isBlockedAt, tileOf, UNITS_PER_TILE } from '../sim/types.ts'
 import type { Building, PlayerId, TilePos, Unit, World } from '../sim/types.ts'
 import { computeInfluenceMap, DEFENSE_RADIUS_TILES, enemyThreatAtPoint, enemyThreatAtTile, pickMostUrgentThreat, unitThreatMilli } from './influence.ts'
-import type { InfluenceMap } from './influence.ts'
+import type { BuildingThreat, InfluenceMap } from './influence.ts'
 import { clampSlider } from './policy.ts'
 import type { PolicyValues } from './policy.ts'
 
@@ -88,8 +88,10 @@ export interface Squad {
 export interface TacticalPlan {
   tick: number
   player: PlayerId
-  /** 集結點（自己 keep 旁的可走格）。 */
+  /** 集結點（無威脅＝keep 旁；有威脅＝往受威脅建築方向前移，Prompt 10.13）。 */
   rally: TilePos
+  /** 生產點（Prompt 10.13）：新兵出廠後的集合格——集結點往主目標方向前移。 */
+  gather: TilePos
   squads: Squad[]
   /** hp < retreatHpPct 而脫離戰鬥的單位 id（守備隊補位者仍列於此，供資訊面板顯示）。 */
   disengaged: number[]
@@ -142,23 +144,35 @@ export function assignMissions(squadCount: number, policies: PolicyValues): Squa
 /** 聚類迭代輪數（固定值 → 確定性；不判斷收斂）。 */
 const REGROUP_ITERATIONS = 3
 
+/** 編組遲滯裕度（格）：換隊需比原隊近超過此值（避免邊界單位每循環乒乓）。 */
+const SQUAD_HYSTERESIS_TILES = 2
+
 /**
  * 就近聚類（k-means-lite）：讓同區域的兵編成同一隊。
- * 1. 種子：按 id 升冪等距取 `squadCount` 個單位的初始位置。
+ * 1. 種子：優先用前次群心（warm start，Prompt 10.13），不足則按 id 升冪等距取。
  * 2. 固定 `REGROUP_ITERATIONS` 輪「就近分配 → 重算重心」（平手取 index 小）。
- * 3. 最終分配：按 id 升冪、就近且未滿 `capacity` 的群（平手取 index 小）。
+ * 3. 最終分配：按 id 升冪、就近且未滿 `capacity` 的群；**遲滯**——原隊距離在
+ *    「最近距離 + 裕度」內就留在原隊（不乒乓）。
  * 回傳每群的 unit id 清單（群內 id 升冪）；空群保留（呼叫端過濾）。
  */
-function groupByProximity(
+export function groupByProximity(
   ready: readonly Unit[],
   squadCount: number,
   capacity: number,
+  seedCenters: readonly TilePos[] = [],
+  previousIndex: ReadonlyMap<number, number> = new Map(),
 ): number[][] {
   const clusters: number[][] = Array.from({ length: Math.max(0, squadCount) }, () => [])
   if (squadCount <= 0 || ready.length === 0) return clusters
 
   const centers: Array<{ x: number; y: number }> = []
   for (let index = 0; index < squadCount; index++) {
+    const seed = seedCenters[index]
+    if (seed !== undefined) {
+      // warm start：前次群心（固定點中心）。
+      centers.push({ x: seed.x * UNITS_PER_TILE + UNITS_PER_TILE / 2, y: seed.y * UNITS_PER_TILE + UNITS_PER_TILE / 2 })
+      continue
+    }
     const unit = ready[Math.floor((index * ready.length) / squadCount)]
     if (unit === undefined) continue
     centers.push({ x: unit.x, y: unit.y })
@@ -195,6 +209,12 @@ function groupByProximity(
     }
   }
 
+  const hysteresisMargin = SQUAD_HYSTERESIS_TILES * UNITS_PER_TILE
+  // 遲滯距離以「前次群心」為準（迭代後的中心會漂移，不適合當原隊參考）。
+  const previousCenters = seedCenters.map((seed) => ({
+    x: seed.x * UNITS_PER_TILE + UNITS_PER_TILE / 2,
+    y: seed.y * UNITS_PER_TILE + UNITS_PER_TILE / 2,
+  }))
   for (const unit of ready) {
     let bestIndex = 0
     let bestDistance = Number.POSITIVE_INFINITY
@@ -211,6 +231,21 @@ function groupByProximity(
         found = true
         bestDistance = distance
         bestIndex = index
+      }
+    }
+    // 遲滯（Prompt 10.13）：原隊仍在且距離在「最近距離 + 裕度」內 → 留原隊（不乒乓）。
+    const previous = previousIndex.get(unit.id)
+    if (previous !== undefined && previous < centers.length && previous !== bestIndex && found) {
+      const cluster = clusters[previous]
+      const center = previousCenters[previous] ?? centers[previous]
+      if (cluster !== undefined && center !== undefined && cluster.length < capacity) {
+        const dx = unit.x - center.x
+        const dy = unit.y - center.y
+        const limit = (Math.sqrt(bestDistance) + hysteresisMargin) ** 2
+        if (dx * dx + dy * dy <= limit) {
+          cluster.push(unit.id)
+          continue
+        }
       }
     }
     const cluster = clusters[found ? bestIndex : 0]
@@ -257,8 +292,17 @@ export function nearestWalkable(
   return null
 }
 
-/** 集結點：自己 keep 旁的可走格；沒有 keep 時退回出生點附近。 */
-export function rallyPoint(world: World, playerId: PlayerId): TilePos {
+/**
+ * 集結點（Prompt 10.13）：AI 依局勢選點——
+ * - 無威脅 → keep 旁的可走格（原行為）。
+ * - 有威脅（`threat`）→ 往受威脅建築方向**前移**到中點附近的可走格
+ *   （防守儲備更靠近前線）；沒有 keep 時退回出生點。
+ */
+export function rallyPoint(
+  world: World,
+  playerId: PlayerId,
+  threat: BuildingThreat | null = null,
+): TilePos {
   const spawn = getPlayer(world, playerId).spawn
   const mirrorOrder = playerId === 'enemy'
   const keep = world.buildings.find(
@@ -268,7 +312,54 @@ export function rallyPoint(world: World, playerId: PlayerId): TilePos {
     keep === undefined
       ? spawn
       : { x: keep.x + Math.floor(keep.w / 2), y: keep.y + Math.floor(keep.h / 2) }
-  return nearestWalkable(world, base, mirrorOrder) ?? { x: spawn.x, y: spawn.y }
+  const home = nearestWalkable(world, base, mirrorOrder) ?? { x: spawn.x, y: spawn.y }
+  if (threat === null) return home
+  const forward: TilePos = {
+    x: Math.round((home.x + threat.buildingCenterTile.x) / 2),
+    y: Math.round((home.y + threat.buildingCenterTile.y) / 2),
+  }
+  return nearestWalkable(world, forward, mirrorOrder) ?? home
+}
+
+/** 生產點前移格數（集結點往主目標方向）。 */
+const GATHER_FORWARD_TILES = 4
+
+/** 建築中心格。 */
+function buildingCenterTile(building: Building): TilePos {
+  return tileOf(buildingCenter(building).x, buildingCenter(building).y)
+}
+
+/**
+ * 生產點（Prompt 10.13）：新兵出廠後的集合格——
+ * 由集結點往**主目標**（進攻／騷擾隊的目標建築，否則敵方 keep）方向前移 4 格；
+ * 找不到目標則同集結點。整數比例、確定性、鏡射一致。
+ */
+function gatherPoint(
+  world: World,
+  playerId: PlayerId,
+  rally: TilePos,
+  squads: readonly Squad[],
+): TilePos {
+  const mirrorOrder = playerId === 'enemy'
+  const attacker = squads.find(
+    (squad) =>
+      (squad.mission === 'attack' || squad.mission === 'harass') && squad.targetBuildingId !== null,
+  )
+  let objective: TilePos | null = attacker?.target ?? null
+  if (objective === null) {
+    const enemyKeep = world.buildings.find(
+      (building) => building.player !== playerId && building.defId === 'keep' && building.hp > 0,
+    )
+    objective = enemyKeep === undefined ? null : buildingCenterTile(enemyKeep)
+  }
+  if (objective === null) return rally
+  const dx = objective.x - rally.x
+  const dy = objective.y - rally.y
+  const steps = Math.max(Math.abs(dx), Math.abs(dy))
+  if (steps === 0) return rally
+  const stepX = Math.round((dx * GATHER_FORWARD_TILES) / steps)
+  const stepY = Math.round((dy * GATHER_FORWARD_TILES) / steps)
+  return nearestWalkable(world, { x: rally.x + stepX, y: rally.y + stepY }, mirrorOrder) ?? rally
 }
 
 /** 建築中心（固定點）。 */
@@ -400,14 +491,21 @@ function canKillGroup(
   })
 }
 
-/** 純計算：編組、任務、目標、撤退判斷（不修改世界）。 */
+/**
+ * 純計算：編組、任務、目標、撤退判斷（不修改世界）。
+ * `previous`（Prompt 10.13）：前一循環的計畫——供編組 warm start 與遲滯，
+ * 避免邊界單位每循環乒乓換隊（反覆切組＝原地發呆）。
+ */
 export function computeTacticalPlan(
   world: World,
   playerId: PlayerId,
   policies: PolicyValues,
+  previous: TacticalPlan | null = null,
 ): TacticalPlan {
   const influence = computeInfluenceMap(world, playerId)
-  const rally = rallyPoint(world, playerId)
+  // 先偵測威脅（集結點依局勢選點；Prompt 10.13）。
+  const threat = pickMostUrgentThreat(world, playerId)
+  const rally = rallyPoint(world, playerId, threat)
 
   // 個體撤退：hp < retreatHpPct × maxHp → 脫離戰鬥（JSON 讀門檻）。
   const disengaged: number[] = []
@@ -440,19 +538,32 @@ export function computeTacticalPlan(
 
   // 就近聚類編組（Prompt 10.7）：同區域的兵編成同一隊——小隊是地理群而非名冊，
   // 行軍自然成團。空群丟棄、重新編號（0..n-1）。
-  const groups = groupByProximity(groupable, rawCount, sizing.size)
+  // warm start＋遲滯（Prompt 10.13）：以前一循環的群心為種子、原隊在裕度內不換。
+  // 前一循環的群組索引：**以 group index 為鍵**（與 `clusters`／`seedCenters` 同一索引空間），
+  // 不是壓縮後的 squad.index——否則空群被丟棄、索引位移，warm start 與遲滯會指到錯的群
+  // （且紅藍的位移時機不同 → 系統性偏差）。
+  const previousIndex = new Map<number, number>()
+  for (const squad of previous?.squads ?? []) {
+    for (const id of squad.memberIds) previousIndex.set(id, squad.index)
+  }
+  const seedCenters: TilePos[] = []
+  for (const squad of previous?.squads ?? []) seedCenters[squad.index] = squad.centroid
+  const groups = groupByProximity(groupable, rawCount, sizing.size, seedCenters, previousIndex)
   const missions = assignMissions(
     groups.filter((group) => group.length > 0).length,
     policies,
   )
 
+  // squad.index ＝ group index（可能因空群而有跳號）：與上一循環的鍵同一索引空間，
+  // warm start／遲滯才能跨循環對齊（微操只用 index 當 map 鍵，跳號無妨）。
   const squads: Squad[] = []
-  let squadIndex = 0
-  for (const memberIds of groups) {
-    if (memberIds.length === 0) continue
+  let missionIndex = 0
+  for (let groupIndex = 0; groupIndex < groups.length; groupIndex++) {
+    const memberIds = groups[groupIndex]
+    if (memberIds === undefined || memberIds.length === 0) continue
     const squad: Squad = {
-      index: squadIndex,
-      mission: missions[squadIndex] ?? 'defend',
+      index: groupIndex,
+      mission: missions[missionIndex] ?? 'defend',
       memberIds,
       target: { x: rally.x, y: rally.y },
       targetBuildingId: null,
@@ -465,7 +576,7 @@ export function computeTacticalPlan(
       squad.power += unitPower(world, unit)
     }
     squads.push(squad)
-    squadIndex += 1
+    missionIndex += 1
   }
 
   // 傷兵補位（SPEC §9.2 補註，Prompt 9.4）：脫離戰鬥的單位不閒置——
@@ -579,8 +690,7 @@ export function computeTacticalPlan(
   // - 受威脅建築（平手時優先水晶礦場）旁的來襲敵軍重心成為守備隊的攔截目標——
   //   保護建築與水晶收入，而不是窩在集結點等敵人打上門。
   // - 全軍出擊（沒有守備隊）時：把離受威脅建築最近的一支攻擊／騷擾隊拉回守備；
-  //   retreat 隊不拉（已在撤）。
-  const threat = pickMostUrgentThreat(world, playerId)
+  //   retreat 隊不拉（已在撤）。（threat 已於函式開頭偵測，集結點選點共用。）
   if (threat !== null) {
     const intercept =
       nearestWalkable(world, threat.centroid, playerId === 'enemy') ?? { x: rally.x, y: rally.y }
@@ -646,7 +756,10 @@ export function computeTacticalPlan(
     }
   }
 
-  return { tick: world.tick, player: playerId, rally, squads, disengaged, influence }
+  // 生產點（Prompt 10.13）：主目標定案後才計算。
+  const gather = gatherPoint(world, playerId, rally, squads)
+
+  return { tick: world.tick, player: playerId, rally, gather, squads, disengaged, influence }
 }
 
 

@@ -136,7 +136,12 @@ function main(): void {
 
   // tick 0 先算一次戰術計畫，讓微操層從第 1 tick 起就有小隊目標。
   for (const player of world.players) {
-    lastPlans[player.id] = computeTacticalPlan(world, player.id, policies[player.id])
+    lastPlans[player.id] = computeTacticalPlan(
+      world,
+      player.id,
+      policies[player.id],
+      lastPlans[player.id],
+    )
   }
 
   printStatus(world, decisionLog, lastPlans)
@@ -161,7 +166,8 @@ function main(): void {
 
     if (world.tick % TACTICAL_INTERVAL_TICKS === 0) {
       for (const player of world.players) {
-        const plan = computeTacticalPlan(world, player.id, policies[player.id])
+        const plan = computeTacticalPlan(world, player.id, policies[player.id], lastPlans[player.id])
+    lastPlans[player.id] = plan
         lastPlans[player.id] = plan
         const before = prevMissions[player.id]
         for (const squad of plan.squads) {

@@ -2,7 +2,13 @@ import { setAttackTarget } from '../sim/combat.ts'
 import { isBlockedAt, tileOf, UNITS_PER_TILE } from '../sim/types.ts'
 import { orderMove } from '../sim/world.ts'
 import type { PlayerId, TilePos, Unit, World } from '../sim/types.ts'
-import { nearestWalkable, rallyPoint, FOCUS_RADIUS_TILES } from './tactics.ts'
+import { enemyThreatAtPoint, unitThreatMilli } from './influence.ts'
+import {
+  nearestWalkable,
+  rallyPoint,
+  ENGAGE_POWER_RATIO,
+  FOCUS_RADIUS_TILES,
+} from './tactics.ts'
 import type { Squad, TacticalPlan } from './tactics.ts'
 
 /**
@@ -53,7 +59,22 @@ export const CHASE_SUPPORT_RADIUS_TILES = 4
  */
 export const SAFE_RETREAT_RADIUS_TILES = 8
 
-export type MicroAction = 'retreat' | 'attack' | 'kite' | 'chase' | 'formation' | 'rally'
+/**
+ * 殘血門檻（Prompt 10.13，HP 撤退分級）：
+ * `hp < 10%` → **一律回家**（避免被一刀撿頭）；
+ * `10% ≤ hp < retreatHpPct`（單位 JSON，現 0.5）→ **只在附近敵威脅 > 自身戰力 × 0.9** 時撤退；
+ * 以上 → 正常作戰（半血但優勢時不退）。
+ */
+export const CRITICAL_HP_PCT = 0.1
+
+export type MicroAction =
+  | 'retreat'
+  | 'attack'
+  | 'kite'
+  | 'chase'
+  | 'disengage'
+  | 'formation'
+  | 'rally'
 
 export interface MicroDecision {
   unitId: number
@@ -303,28 +324,65 @@ export function computeMicroPlan(
     //    抵達集結點後落回行為樹（守備隊 slot＋sim 自動接戰）——傷兵補位不永久停擺。
     const maxHp = def.stats.hp
     const rangeFixed = Math.round(def.stats.range * UNITS_PER_TILE)
-    if (maxHp > 0 && unit.hp < maxHp * def.ai.retreatHpPct && !atRally) {
-      const near = nearestEnemy(world, unit)
+    if (maxHp > 0 && !atRally) {
+      const hpFraction = unit.hp / maxHp
       const safeLimit = SAFE_RETREAT_RADIUS_TILES * UNITS_PER_TILE
+      const near = nearestEnemy(world, unit)
       const threatened = near !== null && near.distSq <= safeLimit * safeLimit
-      if (threatened) {
-        const hpPct = Math.floor((unit.hp / maxHp) * 100)
-        const thresholdPct = Math.round(def.ai.retreatHpPct * 100)
+      // 分級（Prompt 10.13）：
+      // 1) 殘血 < 10%：一律回家（不被一刀撿頭）。
+      const critical = hpFraction < CRITICAL_HP_PCT
+      // 2) 10% ≤ hp < retreatHpPct（JSON 0.5）：附近敵威脅 > 自身戰力 × 0.9 才退
+      //    （還打得贏就繼續；保留「附近無敵不撤退」的安全距離）。
+      const outmatched =
+        hpFraction < def.ai.retreatHpPct &&
+        enemyThreatAtPoint(world, playerId, unit.x, unit.y) >
+          unitThreatMilli(world, unit) * ENGAGE_POWER_RATIO
+      if (critical || (outmatched && threatened)) {
+        const hpPct = Math.floor(hpFraction * 100)
         const target = nearestEnemyWithin(world, unit, rangeFixed)
+        const why = critical
+          ? `hp ${hpPct}% 殘血（< ${Math.round(CRITICAL_HP_PCT * 100)}%）：一律撤回集結點`
+          : `hp ${hpPct}% 低於門檻且附近敵優勢：撤回集結點`
         decisions.push({
           unitId: unit.id,
           action: 'retreat',
           squadIndex,
           moveDest: shouldIssueMove(world, unit, rally) ? { x: rally.x, y: rally.y } : null,
           attackTargetId: target?.id ?? null,
-          reason:
-            target !== null
-              ? `hp ${hpPct}% 低於撤退門檻 ${thresholdPct}%：邊退邊打、撤回集結點`
-              : `hp ${hpPct}% 低於撤退門檻 ${thresholdPct}%：撤回集結點`,
+          reason: target !== null ? `${why}（邊退邊打）` : why,
         })
         continue
       }
-      // 附近無敵人：落入下方編隊分支照常跟隊（途中回血）。
+      // 未達撤退條件：落入下方分支照常作戰／跟隊。
+    }
+
+    // 2. 騷擾脫離（Prompt 10.13）：騷擾隊遇「附近敵威脅 > 我隊戰力 × 0.9」不硬拼——
+    //    往遠離敵人的方向脫離（打不贏就跑，改日再騷擾），而不是原地被打死。
+    if (squad !== undefined && squad.mission === 'harass') {
+      const threatMilli = enemyThreatAtPoint(world, playerId, unit.x, unit.y)
+      if (
+        squad.power > 0 &&
+        threatMilli > squad.power * 1000 * ENGAGE_POWER_RATIO
+      ) {
+        const near = nearestEnemy(world, unit)
+        const nearbyEnemy =
+          near !== null &&
+          near.distSq <=
+            (rangeFixed + 2 * UNITS_PER_TILE) * (rangeFixed + 2 * UNITS_PER_TILE)
+        if (nearbyEnemy && near !== null) {
+          const escape = kiteDest(world, playerId, unit, near.unit, plan?.gather ?? rally)
+          decisions.push({
+            unitId: unit.id,
+            action: 'disengage',
+            squadIndex,
+            moveDest: shouldIssueMove(world, unit, escape) ? escape : null,
+            attackTargetId: null,
+            reason: `騷擾隊遭優勢敵人壓制（威脅 ${Math.round(threatMilli / 1000)} > 我隊戰力 ${squad.power} × 0.9）：脫離不硬拼`,
+          })
+          continue
+        }
+      }
     }
 
     // 2. 敵在射程內 → 攻擊（遠程被貼近時風箏）。
@@ -426,14 +484,16 @@ export function computeMicroPlan(
       continue
     }
 
-    // 4. 待機：新兵／尚未編隊 → 回集結點。
+    // 4. 待機：新兵／尚未編隊 → 前往**生產點**（Prompt 10.13；無則集結點）。
+    const gather = plan?.gather ?? rally
+    const atGather = unitTile.x === gather.x && unitTile.y === gather.y
     decisions.push({
       unitId: unit.id,
       action: 'rally',
       squadIndex: null,
-      moveDest: shouldIssueMove(world, unit, rally) ? { x: rally.x, y: rally.y } : null,
+      moveDest: shouldIssueMove(world, unit, gather) ? { x: gather.x, y: gather.y } : null,
       attackTargetId: null,
-      reason: atRally ? '未編隊：在集結點待命' : '未編隊：返回集結點',
+      reason: atGather ? '未編隊：在生產點待命' : '未編隊：前往生產點',
     })
   }
 

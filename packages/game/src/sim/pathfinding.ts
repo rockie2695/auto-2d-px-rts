@@ -14,6 +14,12 @@ export interface PathQuery {
   walkable: (tile: TilePos) => boolean
   /** 敵方側鏡像鄰居序（Prompt 10.11）：鏡射起訖的查詢會走出互為鏡像的路徑。 */
   mirrorOrder?: boolean
+  /**
+   * 等價路徑抽選鹽（Prompt 10.13）：同 f 值前緣改以鹽抽選（原為「較早插入」）——
+   * 路徑長度不變、走位多樣。呼叫端以**正規化座標＋tick** 產生鹽，
+   * 鏡射查詢同值（公平性不破）。0（預設）＝沿用較早插入。
+   */
+  tieBreakSalt?: number
 }
 
 /** 鄰居展開的固定順序（北、東、南、西）。 */
@@ -66,16 +72,23 @@ export function findPath(query: PathQuery, start: TilePos, goal: TilePos): TileP
   gScore[startIndex] = 0
   const open: number[] = [startIndex]
 
+  const salt = query.tieBreakSalt ?? 0
+
   while (open.length > 0) {
-    // 穩定選取：最小 fScore；平手取陣列中較早插入者。
+    // 最小 fScore；平手：salt=0 取較早插入者；否則在等價前緣中以鹽抽選（決定性）。
     let bestPosition = 0
     let bestScore = Number.POSITIVE_INFINITY
+    let tiedCount = 0
     for (let position = 0; position < open.length; position++) {
       const index = open[position] ?? -1
       const score = (gScore[index] ?? Number.POSITIVE_INFINITY) + heuristic(index)
       if (score < bestScore) {
         bestScore = score
         bestPosition = position
+        tiedCount = 1
+      } else if (score === bestScore) {
+        tiedCount += 1
+        if (salt > 0 && Math.floor(salt * tiedCount) === 0) bestPosition = position
       }
     }
 

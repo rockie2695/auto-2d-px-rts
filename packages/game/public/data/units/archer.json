@@ -18,7 +18,7 @@
     "ai": {
       "value": 100,
       "preferredRange": 3.0,
-      "retreatHpPct": 0.2
+      "retreatHpPct": 0.5
     },
     "trainTimeSec": 7
   }

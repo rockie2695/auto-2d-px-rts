@@ -12,7 +12,7 @@ import type { Squad, TacticalPlan } from './ai/tactics.ts'
 import { loadContentPackFromFetch } from './data/loadFromFetch.ts'
 import { ReplayRecorder, REPLAY_SAMPLE_INTERVAL_TICKS } from './replay.ts'
 import type { MatchResult, ReplayRecord } from './replay.ts'
-import type { GameScene } from './render/scene.ts'
+import type { GameScene, MapMarker } from './render/scene.ts'
 import type { PlayerId, World } from './sim/types.ts'
 import { buildingEffectiveMaxHp, tileOf } from './sim/types.ts'
 import { GameLoop } from './sim/gameLoop.ts'
@@ -91,6 +91,10 @@ export interface UnitInfo {
   readonly decision: string | null
   /** 所屬小隊任務；未編隊為 null。 */
   readonly squadMission: string | null
+  /** 攻擊射程（格，Prompt 10.13 單位資訊）。 */
+  readonly rangeTiles: number
+  /** 移動速度（格/秒，Prompt 10.13 單位資訊）。 */
+  readonly moveSpeedTilesPerSec: number
 }
 
 /** 建築資訊（ui 面板顯示用，Prompt 9.1 驗收：點建築看到資訊）。 */
@@ -229,6 +233,18 @@ export async function startGameSession(app: Application, scene: GameScene): Prom
   for (const player of world.players) {
     plans[player.id] = computeTacticalPlan(world, player.id, policies[player.id])
   }
+  /** 集結點／生產點標記（Prompt 10.13）：推入 render 顯示（方形／菱形）。 */
+  const pushMarkers = (): void => {
+    const markers: MapMarker[] = []
+    for (const player of world.players) {
+      const plan = plans[player.id]
+      if (plan === null) continue
+      markers.push({ kind: 'rally', player: player.id, tile: plan.rally })
+      markers.push({ kind: 'gather', player: player.id, tile: plan.gather })
+    }
+    scene.setMarkers(markers)
+  }
+  pushMarkers()
   // 每玩家最新的微操決策（Prompt 9.4：點單位顯示 AI 當下在想什麼）。
   const latestMicro: Record<PlayerId, MicroDecision[]> = { player: [], enemy: [] }
   // 決策日誌（Prompt 9.5：戰略紀錄＋戰術小隊變動；面板取最後 5 條）。
@@ -328,7 +344,8 @@ export async function startGameSession(app: Application, scene: GameScene): Prom
   const refreshPlans = (tick: number): void => {
     for (const player of world.players) {
       const previous = plans[player.id]
-      const next = computeTacticalPlan(world, player.id, policies[player.id])
+      // 傳入前一計畫：編組 warm start＋遲滯（Prompt 10.13，避免乒乓換隊）。
+      const next = computeTacticalPlan(world, player.id, policies[player.id], previous)
       plans[player.id] = next
       if (previous === null) continue
       for (const squad of next.squads) {
@@ -351,6 +368,7 @@ export async function startGameSession(app: Application, scene: GameScene): Prom
         }
       }
     }
+    pushMarkers() // 集結點／生產點可能變了（Prompt 10.13）
   }
 
   const onTick = (w: World): void => {
@@ -414,6 +432,8 @@ export async function startGameSession(app: Application, scene: GameScene): Prom
         tileY: tile.y,
         decision,
         squadMission,
+        rangeTiles: def.stats.range,
+        moveSpeedTilesPerSec: def.stats.moveSpeed,
       }
     },
     getBuildingInfo: (buildingId: number): BuildingInfo | null => {

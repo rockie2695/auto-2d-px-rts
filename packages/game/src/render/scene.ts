@@ -47,6 +47,7 @@ export class GameScene {
   readonly root = new Container()
 
   private readonly tilesG = new Graphics()
+  private readonly markersG = new Graphics()
   private readonly objG = new Graphics()
   private readonly fxG = new Graphics()
 
@@ -60,10 +61,17 @@ export class GameScene {
   private camera: Camera | null = null
   /** 使用者調過視角（縮放／平移）→ resize 時保留其視角（僅重新夾限）。 */
   private userAdjusted = false
+  /** 地圖標記（Prompt 10.13）：集結點／生產點，由 ui/session 推入。 */
+  private markers: MapMarker[] = []
 
   constructor(mapSizeTiles: number) {
     this.mapSizeTiles = mapSizeTiles
-    this.root.addChild(this.tilesG, this.objG, this.fxG)
+    this.root.addChild(this.tilesG, this.markersG, this.objG, this.fxG)
+  }
+
+  /** ui/session（戰術計畫）→ render 的標記推入（集結點／生產點）。 */
+  setMarkers(markers: readonly MapMarker[]): void {
+    this.markers = [...markers]
   }
 
   /** ui（選取）→ render 的單向設定。 */
@@ -187,6 +195,26 @@ export class GameScene {
 
     this.objG.clear()
 
+    // 地圖標記（Prompt 10.13）：集結點＝方形、生產點＝菱形，分陣營上色 + 深色描邊。
+    this.markersG.clear()
+    for (const marker of this.markers) {
+      const color = marker.player === 'player' ? COLOR_UNIT_PLAYER : COLOR_UNIT_ENEMY
+      const cx = marker.tile.x * TILE_SIZE + TILE_SIZE / 2
+      const cy = marker.tile.y * TILE_SIZE + TILE_SIZE / 2
+      const r = 5
+      if (marker.kind === 'rally') {
+        this.markersG
+          .rect(cx - r, cy - r, r * 2, r * 2)
+          .fill(color)
+          .stroke({ width: 1, color: 0x10131a })
+      } else {
+        this.markersG
+          .poly([cx, cy - r - 1, cx + r + 1, cy, cx, cy + r + 1, cx - r - 1, cy])
+          .fill(color)
+          .stroke({ width: 1, color: 0x10131a })
+      }
+    }
+
     // 建築：按定義佔地的色塊 + 頂部血條（未完工按完成比例折算 maxHp，SPEC §5）。
     for (const building of curr.buildings) {
       const def = this.defs.buildings[building.defId]
@@ -270,8 +298,29 @@ export class GameScene {
     }
     this.effects = this.effects.filter((fx) => now - fx.born < ATTACK_FX_MS)
     this.fxG.clear()
+
+    // 持續接戰線（Prompt 10.13）：射程內有目標的單位畫淡色細線到目標——
+    // 一眼看出「誰在打誰」（不只開火那一瞬）。
+    const engageById = new Map<number, WorldSnapshot['units'][number]>()
+    for (const unit of curr.units) engageById.set(unit.id, unit)
+    for (const unit of curr.units) {
+      if (unit.hp <= 0) continue
+      const victim = victimOf(this.defs, unit, engageById)
+      if (victim === null) continue
+      const color = unit.player === 'player' ? COLOR_UNIT_PLAYER : COLOR_UNIT_ENEMY
+      this.fxG
+        .moveTo(fixedToPx(unit.x), fixedToPx(unit.y))
+        .lineTo(fixedToPx(victim.x), fixedToPx(victim.y))
+        .stroke({ width: 1, color, alpha: 0.28 })
+    }
+
     for (const fx of this.effects) {
       const age = Math.min(1, (now - fx.born) / ATTACK_FX_MS)
+      // 開火瞬間：攻擊者 → 受擊者的亮線（更粗、隨時間淡出）。
+      this.fxG
+        .moveTo(fx.fromX, fx.fromY)
+        .lineTo(fx.toX, fx.toY)
+        .stroke({ width: 3, color: fx.color, alpha: 1 - age })
       if (fx.kind === 'shot') {
         // 遠程：彈丸從攻擊者飛向受擊者。
         const x = Math.round(fx.fromX + (fx.toX - fx.fromX) * age)
@@ -284,10 +333,10 @@ export class GameScene {
           .lineTo(fx.toX + 4, fx.toY + 4)
           .stroke({ width: 1, color: 0xffffff, alpha: 1 - age })
       }
-      // 受擊閃光（兩種開火都閃）。
+      // 受擊閃光（兩種開火都閃，比接戰線醒目）。
       this.fxG
-        .rect(fx.toX - 5, fx.toY - 5, 10, 10)
-        .fill({ color: 0xffffff, alpha: (1 - age) * 0.5 })
+        .rect(fx.toX - 6, fx.toY - 6, 12, 12)
+        .fill({ color: 0xffffff, alpha: (1 - age) * 0.55 })
     }
   }
 
@@ -314,6 +363,13 @@ function hpColor(ratio: number): number {
 /* 攻擊特效（Prompt 10.10：讓「誰在打誰」看得見）                        */
 /* ------------------------------------------------------------------ */
 
+/** 地圖標記（Prompt 10.13）：集結點（方形）／生產點（菱形），分陣營上色。 */
+export interface MapMarker {
+  kind: 'rally' | 'gather'
+  player: 'player' | 'enemy'
+  tile: { x: number; y: number }
+}
+
 /** 單次開火特效：近戰 = 受擊閃光＋揮擊斜線；遠程 = 飛行彈丸＋受擊閃光。 */
 interface AttackEffect {
   kind: 'melee' | 'shot'
@@ -325,8 +381,8 @@ interface AttackEffect {
   born: number
 }
 
-/** 特效壽命（ms）：短於一次攻擊間隔，疊加不混亂。 */
-const ATTACK_FX_MS = 160
+/** 特效壽命（ms）：開火線／閃光短暫存在，疊加不混亂。 */
+const ATTACK_FX_MS = 200
 
 /** 開火受害者：顯式目標（敵方、存活）；否則射程內最近敵人（自動接戰近似）。 */
 function victimOf(

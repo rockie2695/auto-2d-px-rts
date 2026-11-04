@@ -1,4 +1,4 @@
-import { tileCenter, UNITS_PER_TILE } from '../sim/types.ts'
+import { UNITS_PER_TILE } from '../sim/types.ts'
 import type { PlayerId, TilePos, World } from '../sim/types.ts'
 
 /**
@@ -65,9 +65,15 @@ export function enemyThreatAtPoint(world: World, playerId: PlayerId, x: number, 
   return total
 }
 
-/** 格中心（格座標）→ 固定點座標。 */
+/**
+ * 格中心 → 固定點座標（Prompt 10.13 修正）。
+ * 用**固定點中點**（`cx × 格寬×200 + 格寬×200/2`）而非格中心格——後者在偶數格寬下
+ * 與鏡射點差半格（cell 3 的中心格 28 vs 真鏡射點格 27），會讓紅藍的影響力地圖
+ * 在固定點層級不對稱（目標評分失真 → 雙方打不同目標）。
+ */
 function cellCenterFixed(cx: number, cy: number, cellTiles: number): { x: number; y: number } {
-  return tileCenter({ x: cx * cellTiles + cellTiles / 2, y: cy * cellTiles + cellTiles / 2 })
+  const cellFixed = cellTiles * UNITS_PER_TILE
+  return { x: cx * cellFixed + cellFixed / 2, y: cy * cellFixed + cellFixed / 2 }
 }
 
 /** 由格座標求格 index（夾到地圖範圍內）。 */
