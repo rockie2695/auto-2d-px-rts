@@ -129,6 +129,8 @@ export interface WorldDefs {
 
 export interface World {
   tick: number
+  /** 比賽種子：命運雜湊（hashFate）輸入之一，讓每場對局的抽籤真正隨種子改變。 */
+  seed: number
   map: MapDef
   match: MatchDef
   faction: FactionDef

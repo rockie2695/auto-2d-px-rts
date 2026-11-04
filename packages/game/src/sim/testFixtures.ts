@@ -126,6 +126,7 @@ export function createTestWorld(options: TestWorldOptions = {}): World {
 
   const world: World = {
     tick: 0,
+    seed: options.seed ?? 1,
     map,
     match: makeMatch(),
     faction: makeFaction(

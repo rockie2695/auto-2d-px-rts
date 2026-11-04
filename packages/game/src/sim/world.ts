@@ -160,6 +160,7 @@ export function createWorld(content: ContentPack, seed: number): World {
 
   const world: World = {
     tick: 0,
+    seed,
     map: content.map,
     match: content.match,
     faction: content.faction,
@@ -297,8 +298,8 @@ export function orderMove(world: World, unitId: number, dest: TilePos): boolean 
   const unit = world.units.find((candidate) => candidate.id === unitId)
   if (unit === undefined) return false
   const start = tileOf(unit.x, unit.y)
-  // 等價路徑抽選鹽（Prompt 10.13）：以**正規化（藍方座標）起點＋tick** 雜湊——
-  // 鏡射查詢同值（公平性不破）、不同單位/時刻走出不同但等價的路徑。
+  // 等價路徑抽選鹽（Prompt 10.14）：以**正規化（藍方座標）起點＋tick＋比賽種子**
+  // 雜湊——鏡射查詢同值（公平性不破）、跨種子抽出不同但等價的路徑（種子活化）。
   const canonical =
     unit.player === 'enemy'
       ? { x: world.map.size - 1 - start.x, y: world.map.size - 1 - start.y }
@@ -308,7 +309,7 @@ export function orderMove(world: World, unitId: number, dest: TilePos): boolean 
       size: world.map.size,
       walkable: (tile) => !isBlockedAt(world, tile),
       mirrorOrder: unit.player === 'enemy',
-      tieBreakSalt: hashFate(canonical.x, canonical.y, world.tick),
+      tieBreakSalt: hashFate(world.seed, canonical.x, canonical.y, world.tick),
     },
     start,
     dest,

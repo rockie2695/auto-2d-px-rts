@@ -8,6 +8,7 @@ import { placeBuilding, queueTrain } from '../sim/economy.ts'
 import { findNearestPlacement, tryFindNearestFreeNode } from '../sim/world.ts'
 import { getPlayer } from '../sim/types.ts'
 import type { PlayerId, TilePos, World } from '../sim/types.ts'
+import { hashFate } from '../sim/rng.ts'
 
 /**
  * AI 戰略層（SPEC §8，Prompt 6 / 6.5）：每 40 tick（= 2 秒）決定「蓋什麼、生什麼」。
@@ -240,17 +241,13 @@ function ownedCountOf(world: World, playerId: PlayerId, defId: string): number {
 }
 
 /**
- * 命運值（Prompt 10.11）：由對局種子狀態與 tick 純函數導出的 [0,1) 值。
+ * 命運值（Prompt 10.11；10.14 種子活化）：由**比賽種子**與 tick 純函數導出的 [0,1) 值
+ * （hashFate avalanche；不再借用 `world.rng.state`——該狀態保留給未來規則）。
  * - 同 tick 兩側同值 → 鏡像對稱（紅藍抽籤一致）。
  * - 跨 tick／跨種子變化 → 對局多樣性（軍種組成因種子而異）。
- * 不消耗 `world.rng`（該序列保留給未來規則）。
  */
 function fateOf(world: World, tick: number): number {
-  let h = (world.rng.state ^ Math.imul(tick + 1, 0x9e3779b9)) >>> 0
-  h = Math.imul(h ^ (h >>> 16), 0x85ebca6b) >>> 0
-  h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35) >>> 0
-  h = (h ^ (h >>> 16)) >>> 0
-  return h / 4294967296
+  return hashFate(world.seed, tick)
 }
 
 /** 評估生產候選：克制 + tier + range − 稀缺性 ＋ 壓境防守加權；不可負擔或無產能者剔除。 */

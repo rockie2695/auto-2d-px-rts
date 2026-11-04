@@ -277,13 +277,15 @@ export class GameScene {
       this.lastFxTick = prev.tick
       const currById = new Map<number, WorldSnapshot['units'][number]>()
       for (const unit of curr.units) currById.set(unit.id, unit)
+      const buildingsById = new Map<number, WorldSnapshot['buildings'][number]>()
+      for (const building of curr.buildings) buildingsById.set(building.id, building)
       for (const before of prev.units) {
         const after = currById.get(before.id)
         if (after === undefined || after.hp <= 0) continue
         if (!(before.attackAcc >= 1 && after.attackAcc < before.attackAcc)) continue
         const def = this.defs.units[after.defId]
         if (def === undefined) continue
-        const victim = victimOf(this.defs, after, currById)
+        const victim = victimOf(this.defs, after, currById, buildingsById)
         if (victim === null) continue
         this.effects.push({
           kind: def.role === 'ranged' ? 'shot' : 'melee',
@@ -300,12 +302,15 @@ export class GameScene {
     this.fxG.clear()
 
     // 持續接戰線（Prompt 10.13）：射程內有目標的單位畫淡色細線到目標——
-    // 一眼看出「誰在打誰」（不只開火那一瞬）。
+    // 一眼看出「誰在打誰」（不只開火那一瞬）。**受害者含建築**（Prompt 10.14）：
+    // 打建築同樣畫線（端點 = 建築外框最近點），之前打建築什麼都不畫。
     const engageById = new Map<number, WorldSnapshot['units'][number]>()
     for (const unit of curr.units) engageById.set(unit.id, unit)
+    const engageBuildingsById = new Map<number, WorldSnapshot['buildings'][number]>()
+    for (const building of curr.buildings) engageBuildingsById.set(building.id, building)
     for (const unit of curr.units) {
       if (unit.hp <= 0) continue
-      const victim = victimOf(this.defs, unit, engageById)
+      const victim = victimOf(this.defs, unit, engageById, engageBuildingsById)
       if (victim === null) continue
       const color = unit.player === 'player' ? COLOR_UNIT_PLAYER : COLOR_UNIT_ENEMY
       this.fxG
@@ -384,33 +389,88 @@ interface AttackEffect {
 /** 特效壽命（ms）：開火線／閃光短暫存在，疊加不混亂。 */
 const ATTACK_FX_MS = 200
 
-/** 開火受害者：顯式目標（敵方、存活）；否則射程內最近敵人（自動接戰近似）。 */
+/** 開火受害者位置（固定點座標）：單位 → 中心；建築 → 外框最近點。 */
+interface VictimPoint {
+  x: number
+  y: number
+}
+
+/** 固定點座標對建築（外框矩形）的最近點（點在框內回傳自身）。 */
+function closestPointOnBuilding(
+  attacker: WorldSnapshot['units'][number],
+  building: WorldSnapshot['buildings'][number],
+  defs: WorldDefs,
+): { x: number; y: number } {
+  const size = defs.buildings[building.defId]?.size ?? [1, 1]
+  const x0 = building.x * UNITS_PER_TILE
+  const y0 = building.y * UNITS_PER_TILE
+  const x1 = (building.x + size[0]) * UNITS_PER_TILE
+  const y1 = (building.y + size[1]) * UNITS_PER_TILE
+  return {
+    x: Math.min(Math.max(attacker.x, x0), x1),
+    y: Math.min(Math.max(attacker.y, y0), y1),
+  }
+}
+
+/**
+ * 開火受害者（Prompt 10.10；10.14 擴充建築）：
+ * 顯式目標（敵方、存活）→ 單位中心／建築外框最近點；
+ * 否則自動接戰近似：射程內最近敵人**單位**，射程內無單位 → 射程內最近敵方**建築**
+ * （外框量測，與 `combat.ts` 相同的固定點算法）。
+ * 回傳固定點座標；呼叫端轉像素。
+ */
 function victimOf(
   defs: WorldDefs,
   attacker: WorldSnapshot['units'][number],
-  byId: Map<number, WorldSnapshot['units'][number]>,
-): WorldSnapshot['units'][number] | null {
+  unitsById: Map<number, WorldSnapshot['units'][number]>,
+  buildingsById: Map<number, WorldSnapshot['buildings'][number]>,
+): VictimPoint | null {
   const def = defs.units[attacker.defId]
   if (def === undefined) return null
+  const rangeFixed = Math.round(def.stats.range * UNITS_PER_TILE)
+  const rangeSq = rangeFixed * rangeFixed
+
   if (attacker.targetId !== null) {
-    const explicit = byId.get(attacker.targetId)
-    if (explicit !== undefined && explicit.hp > 0 && explicit.player !== attacker.player) {
-      return explicit
+    const explicitUnit = unitsById.get(attacker.targetId)
+    if (explicitUnit !== undefined && explicitUnit.hp > 0 && explicitUnit.player !== attacker.player) {
+      return { x: explicitUnit.x, y: explicitUnit.y }
+    }
+    // 顯式目標是建築：仍在射程內 → 畫到外框最近點；超出射程 = 沒在打該建築。
+    const explicitBuilding = buildingsById.get(attacker.targetId)
+    if (explicitBuilding !== undefined && explicitBuilding.hp > 0 && explicitBuilding.player !== attacker.player) {
+      const point = closestPointOnBuilding(attacker, explicitBuilding, defs)
+      const dx = point.x - attacker.x
+      const dy = point.y - attacker.y
+      return dx * dx + dy * dy <= rangeSq ? point : null
     }
   }
-  const rangePx = def.stats.range * TILE_SIZE
-  const pxPerFixed = TILE_SIZE / UNITS_PER_TILE
-  let best: WorldSnapshot['units'][number] | null = null
-  let bestDist = rangePx * rangePx
-  for (const candidate of byId.values()) {
+
+  let bestPoint: VictimPoint | null = null
+  let bestDist = rangeSq
+
+  for (const candidate of unitsById.values()) {
     if (candidate.player === attacker.player || candidate.hp <= 0) continue
-    const dx = (candidate.x - attacker.x) * pxPerFixed
-    const dy = (candidate.y - attacker.y) * pxPerFixed
+    const dx = candidate.x - attacker.x
+    const dy = candidate.y - attacker.y
+    const distance = dx * dx + dy * dy
+    // unitIds 無序，≤ 保留先設值（快照順序確定，平手裁決穩定）。
+    if (distance <= bestDist) {
+      bestDist = distance
+      bestPoint = { x: candidate.x, y: candidate.y }
+    }
+  }
+  if (bestPoint !== null) return bestPoint
+
+  for (const candidate of buildingsById.values()) {
+    if (candidate.player === attacker.player || candidate.hp <= 0) continue
+    const point = closestPointOnBuilding(attacker, candidate, defs)
+    const dx = point.x - attacker.x
+    const dy = point.y - attacker.y
     const distance = dx * dx + dy * dy
     if (distance <= bestDist) {
       bestDist = distance
-      best = candidate
+      bestPoint = point
     }
   }
-  return best
+  return bestPoint
 }
