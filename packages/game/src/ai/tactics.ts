@@ -69,6 +69,22 @@ export const FOCUS_RADIUS_TILES = 8
  */
 export const ENGAGE_POWER_RATIO = 0.9
 
+/** 接觸注意半徑（tile，Prompt 10.15 W1）：敵人進到小隊重心此半徑內算「接觸」。
+ *  接觸本身不等于接戰——射程內照樣由模擬層自動接戰，AI 層只在接觸時做**重新評估**。 */
+export const CONTACT_NOTICE_RADIUS_TILES = 6
+
+/** 接觸重評估冷卻（tick，Prompt 10.15 W1）：同小隊冷卻期內不重複評估（防抖動）。 */
+export const CONTACT_REPLAN_COOLDOWN_TICKS = 60
+
+/** 夾擊接應半徑（tile，Prompt 10.15 W2）：受襲小隊只向「此範圍內且殺得掉」的友隊求援。 */
+export const PINCER_REPLY_RADIUS_TILES = 12
+
+/** 夾擊繞後半徑（tile，Prompt 10.15 W2）：接應小隊自敵群重心此半徑的**不同方位**接近。 */
+export const PINCER_STANDOFF_TILES = 3
+
+/** 最多幾支小隊響應夾擊（Prompt 10.15 W2）。 */
+export const PINCER_MAX_RESPONDERS = 2
+
 export type SquadMission = 'defend' | 'attack' | 'harass' | 'retreat'
 
 export interface Squad {
@@ -83,6 +99,26 @@ export interface Squad {
   power: number
   /** 成員重心格。 */
   centroid: TilePos
+  /** 接觸重評估（Prompt 10.15）：true = 決定迎戰敵群（target = 敵群接近格；集火不指建築）。
+   *  false/未設 = 維持原命令——單位不自行離隊追擊，射程內仍由模擬層自動接戰。 */
+  engaging?: boolean
+}
+
+/** 接觸事件（Prompt 10.15）：一次接觸驅動的重新評估／夾擊呼叫，供決策日誌逐條顯示。 */
+export interface ContactEvent {
+  squadIndex: number
+  /** `engage` = 迎戰；`keep` = 維持原命令；`pincer` = 呼叫友隊夾擊。 */
+  outcome: 'engage' | 'keep' | 'pincer'
+  /** 人類可讀的完整句（規則生成、中文、確定性）。 */
+  text: string
+}
+
+/** 接觸狀態（Prompt 10.15）：跨循環持續的小隊接觸記錄（以 squad index 為鍵）。 */
+export interface ContactState {
+  /** squadIndex → 上次接觸重評估 tick（冷卻期內不再重複評估）。 */
+  replanTick: Record<number, number>
+  /** squadIndex → 隊上已知的敵人 id（這循環才出現者為「新接觸」）。 */
+  known: Record<number, number[]>
 }
 
 export interface TacticalPlan {
@@ -96,6 +132,10 @@ export interface TacticalPlan {
   /** hp < retreatHpPct 而脫離戰鬥的單位 id（守備隊補位者仍列於此，供資訊面板顯示）。 */
   disengaged: number[]
   influence: InfluenceMap
+  /** 接觸狀態（Prompt 10.15）：供下一循環區分「新接觸」與冷卻判斷。 */
+  contact?: ContactState
+  /** 本循環產生的接觸事件（迎戰／維持原命令／夾擊呼叫），session 轉進決策日誌。 */
+  events?: readonly ContactEvent[]
 }
 
 /** 線性插值。 */
@@ -546,6 +586,10 @@ export function computeTacticalPlan(
   for (const squad of previous?.squads ?? []) {
     for (const id of squad.memberIds) previousIndex.set(id, squad.index)
   }
+  // 接觸迎戰狀態（Prompt 10.15）：上一循環是否在迎戰——以群 index 為鍵沿續，
+  // 避免 engaging 在循環間失憶（ squads 每循環全新物件）造成忽進忽停。
+  const previousEngaging = new Map<number, boolean>()
+  for (const squad of previous?.squads ?? []) previousEngaging.set(squad.index, squad.engaging === true)
   const seedCenters: TilePos[] = []
   for (const squad of previous?.squads ?? []) seedCenters[squad.index] = squad.centroid
   const groups = groupByProximity(groupable, rawCount, sizing.size, seedCenters, previousIndex)
@@ -569,6 +613,7 @@ export function computeTacticalPlan(
       targetBuildingId: null,
       power: 0,
       centroid: { x: rally.x, y: rally.y },
+      engaging: previousEngaging.get(groupIndex) ?? false,
     }
     for (const id of memberIds) {
       const unit = unitById.get(id)
@@ -753,13 +798,182 @@ export function computeTacticalPlan(
       squad.mission = 'retreat'
       squad.target = { x: rally.x, y: rally.y }
       squad.targetBuildingId = null
+      squad.engaging = false
+    }
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* 接觸驅動再評估與夾擊（Prompt 10.15，W1/W2）                              */
+  /* ------------------------------------------------------------------ */
+
+  const previousContact = previous?.contact ?? { replanTick: {}, known: {} }
+  const contact: ContactState = { replanTick: {}, known: {} }
+  /** 這循環的特殊事件（session 轉進決策日誌）。 */
+  const events: ContactEvent[] = []
+  /** 各小隊的本循環接觸（供夾擊呼叫；以小隊 index 為鍵）。 */
+  const contactBySquad = new Map<number, { enemies: Unit[]; powerMilli: number; tile: TilePos }>()
+  const noticeLimit = CONTACT_NOTICE_RADIUS_TILES * UNITS_PER_TILE
+  const replyLimit = PINCER_REPLY_RADIUS_TILES * UNITS_PER_TILE
+
+  for (const squad of squads) {
+    // 沿續接觸狀態（以 squad index 為鍵；warm start 同一索引空間）。
+    contact.replanTick[squad.index] = previousContact.replanTick[squad.index] ?? 0
+    contact.known[squad.index] = [...(previousContact.known[squad.index] ?? [])]
+
+    // 撤退隊不再接觸接戰（已在撤）。
+    if (squad.mission === 'retreat') continue
+    const centroidFixed = {
+      x: squad.centroid.x * UNITS_PER_TILE + UNITS_PER_TILE / 2,
+      y: squad.centroid.y * UNITS_PER_TILE + UNITS_PER_TILE / 2,
+    }
+    const noticeSq = noticeLimit * noticeLimit
+    const seen: Unit[] = []
+    let contactPower = 0
+    let sumX = 0
+    let sumY = 0
+    for (const enemy of world.units) {
+      if (enemy.player === playerId || enemy.hp <= 0) continue
+      const dx = enemy.x - centroidFixed.x
+      const dy = enemy.y - centroidFixed.y
+      if (dx * dx + dy * dy > noticeSq) continue
+      seen.push(enemy)
+      contactPower += unitThreatMilli(world, enemy)
+      sumX += enemy.x
+      sumY += enemy.y
+    }
+    if (seen.length === 0) {
+      contact.known[squad.index] = []
+      squad.engaging = false // 視野內沒有敵人：迎戰狀態解除，回到原命令。
+      continue
+    }
+    seen.sort((a, b) => a.id - b.id)
+
+    const known = contact.known[squad.index] ?? []
+    const knownIds = new Set(known)
+    const newIds = seen.filter((enemy) => !knownIds.has(enemy.id))
+    const enemyTile = tileOf(sumX / seen.length, sumY / seen.length)
+    contact.known[squad.index] = seen.map((enemy) => enemy.id)
+    contactBySquad.set(squad.index, { enemies: seen, powerMilli: contactPower, tile: enemyTile })
+
+    const lastTick = contact.replanTick[squad.index] ?? 0
+    const cooledDown = world.tick - lastTick >= CONTACT_REPLAN_COOLDOWN_TICKS
+    if (newIds.length === 0) {
+      // 既有接觸：上一循環已在迎戰 → 目標跟著敵群現位走（不再重評估）。
+      if (squad.engaging === true) {
+        squad.target = enemyTile
+        squad.targetBuildingId = null
+      }
+      continue
+    }
+    if (!cooledDown) continue
+
+    // **新接觸 → AI 重新評估**（模擬層射程內自動接戰照舊、不受影響）：
+    // 殺得掉 → 迎戰（小隊目標改敵群重心格）；殺不掉 → 維持原命令。
+    contact.replanTick[squad.index] = world.tick
+    const winnable = canKillGroup(
+      world,
+      unitById,
+      squad.memberIds,
+      squad.power * 1000,
+      contactPower,
+      seen,
+    )
+    if (winnable) {
+      squad.engaging = true
+      squad.target = enemyTile
+      squad.targetBuildingId = null
+      events.push({
+        squadIndex: squad.index,
+        outcome: 'engage',
+        text: `小隊 #${squad.index} 遭遇敵軍（戰力 ${squad.power} vs 威脅 ${Math.round(contactPower / 1000)}）：重新評估 → 迎戰`,
+      })
+    } else {
+      squad.engaging = false
+      events.push({
+        squadIndex: squad.index,
+        outcome: 'keep',
+        text: `小隊 #${squad.index} 遭遇敵軍（戰力 ${squad.power} vs 威脅 ${Math.round(contactPower / 1000)}）：重新評估 → 維持原命令`,
+      })
+    }
+  }
+
+  // 夾擊呼叫（W2）：受襲殺不掉的小隊向「附近殺得掉」的友隊求援；接應小隊
+  // 自敵群重心的**不同方位**繞行接近（夾擊而非一窩蜂正面撞），方位序由
+  // responder 順序決定（確定性）。**方位向量在敵方（鏡像序）取負**——
+  // 否則藍方永遠從敵群東側接近、紅方也是東側，鏡射對稱會在接觸後破裂
+  // （pairProbe 實測 t=211 位置分叉的根因）。
+  const directions: readonly TilePos[] = [
+    { x: 1, y: 0 },
+    { x: 1, y: 1 },
+    { x: 0, y: 1 },
+    { x: -1, y: 1 },
+    { x: -1, y: 0 },
+    { x: -1, y: -1 },
+    { x: 0, y: -1 },
+    { x: 1, y: -1 },
+  ]
+  const mirrorOrder = playerId === 'enemy'
+  // 前一計畫各小隊的目標（供「接應位沒變就不重複記事件」判斷）。
+  const previousTargets = new Map<number, TilePos>()
+  for (const squad of previous?.squads ?? []) previousTargets.set(squad.index, squad.target)
+  for (const contactSquad of contactBySquad.values()) {
+    const losingPower = contactSquad.powerMilli
+    const responders: Squad[] = []
+    for (const squad of squads) {
+      if (responders.length >= PINCER_MAX_RESPONDERS) break
+      if (squad.mission !== 'attack' && squad.mission !== 'harass') continue
+      const centroidFixed = {
+        x: squad.centroid.x * UNITS_PER_TILE + UNITS_PER_TILE / 2,
+        y: squad.centroid.y * UNITS_PER_TILE + UNITS_PER_TILE / 2,
+      }
+      const dx = centroidFixed.x - (contactSquad.tile.x + 0.5) * UNITS_PER_TILE
+      const dy = centroidFixed.y - (contactSquad.tile.y + 0.5) * UNITS_PER_TILE
+      if (dx * dx + dy * dy > replyLimit * replyLimit) continue
+      if (
+        !canKillGroup(
+          world,
+          unitById,
+          squad.memberIds,
+          squad.power * 1000,
+          losingPower,
+          contactSquad.enemies,
+        )
+      ) {
+        continue
+      }
+      responders.push(squad)
+    }
+    responders.sort((a, b) => a.index - b.index)
+    for (const responder of responders) {
+      const base = directions[responders.indexOf(responder) % directions.length] ?? { x: 0, y: 1 }
+      const dir = mirrorOrder ? { x: -base.x, y: -base.y } : base
+      const approach =
+        nearestWalkable(
+          world,
+          {
+            x: contactSquad.tile.x + dir.x * PINCER_STANDOFF_TILES,
+            y: contactSquad.tile.y + dir.y * PINCER_STANDOFF_TILES,
+          },
+          mirrorOrder,
+        ) ?? contactSquad.tile
+      responder.engaging = true
+      responder.target = approach
+      responder.targetBuildingId = null
+      const before = previousTargets.get(responder.index)
+      if (before === undefined || before.x !== approach.x || before.y !== approach.y) {
+        events.push({
+          squadIndex: responder.index,
+          outcome: 'pincer',
+          text: `小隊 #${responder.index} 響應受襲小隊的夾擊呼叫（接應位 (${approach.x},${approach.y})）`,
+        })
+      }
     }
   }
 
   // 生產點（Prompt 10.13）：主目標定案後才計算。
   const gather = gatherPoint(world, playerId, rally, squads)
 
-  return { tick: world.tick, player: playerId, rally, gather, squads, disengaged, influence }
+  return { tick: world.tick, player: playerId, rally, gather, squads, disengaged, influence, contact, events }
 }
 
 

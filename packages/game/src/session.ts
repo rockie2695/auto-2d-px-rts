@@ -347,6 +347,15 @@ export async function startGameSession(app: Application, scene: GameScene): Prom
       // 傳入前一計畫：編組 warm start＋遲滯（Prompt 10.13，避免乒乓換隊）。
       const next = computeTacticalPlan(world, player.id, policies[player.id], previous)
       plans[player.id] = next
+      // 接觸驅動的重新評估／夾擊呼叫（Prompt 10.15）→ 決策日誌逐條一列。
+      for (const event of next.events ?? []) {
+        pushLog({
+          tick,
+          layer: 'tactical',
+          actor: player.id,
+          text: event.text,
+        })
+      }
       if (previous === null) continue
       for (const squad of next.squads) {
         const before = previous.squads.find((candidate) => candidate.index === squad.index)

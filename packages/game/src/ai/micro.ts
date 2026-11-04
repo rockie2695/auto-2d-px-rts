@@ -25,8 +25,13 @@ import type { Squad, TacticalPlan } from './tactics.ts'
  *    半徑內無敵人取離小隊重心最近者）在射程內者，否則射程內最近者。遠程若最近敵
  *    距 < `preferredRange × KITE_MARGIN` → **風箏**：往遠離敵人的方向退，邊退邊打。
  * 2.5 最近敵在**射程外但在追擊距離內**（≤ `range + CHASE_MARGIN`）→ **追擊**：
- *    前壓到敵人當下所在格接戰（SPEC §9.3 行為樹第 4 節「追擊」）；殺掉後
- *    下一循環由編隊分支接管。行軍／後退途中的近旁敵人不會再被「並行放走」。
+ *    前壓到敵人當下所在格接戰（Prompt 10.15 修訂：**不吃 AI 閘門**——量測顯示
+ *    閘門系統性偏藍；接觸重評估只驅動小隊目標／夾擊，不鎖貼身追擊）。
+ *    追擊支援規則（Prompt 10.8）仍適用：目標是遠程（風箏型）且在我方射程外時，
+ *    需有其他友軍在其 `CHASE_SUPPORT_RADIUS_TILES` 內作支援才追。
+ * 2.6 小隊任務為 **retreat**（戰術層判退）→ **fallback**：朝集結點退、
+ *    射程內有敵人 → **邊退邊打**（Prompt 10.15 W2：受襲不原地等死，
+ *    撤到集結點重整等待支援；與分支 1 的單位級撤退同一語義）。
  * 3. 有小隊 → **編隊**：移往集結隊形的位置（`squad.target` 周圍環狀 slot，
  *    **近戰內環、遠程外環**，Prompt 10.7）；
  *    attack／harass 任務同時對 `squad.targetBuildingId` 聚火。
@@ -73,6 +78,7 @@ export type MicroAction =
   | 'kite'
   | 'chase'
   | 'disengage'
+  | 'fallback'
   | 'formation'
   | 'rally'
 
@@ -432,42 +438,63 @@ export function computeMicroPlan(
       continue
     }
 
-    // 2.5 追擊：敵在射程外但 ≤ range + CHASE_MARGIN → 前壓到敵人所在格接戰
-    //     （SPEC §9.3 行為樹第 4 節）。近旁敵人不會再被同速行軍「並行放走」。
-    //     追擊支援規則（Prompt 10.8）：目標是遠程（風箏型）且在我方射程外時，
-    //     需有其他友軍在其 CHASE_SUPPORT_RADIUS_TILES 內作支援才追——
-    //     單兵追風箏會被射死；無支援則不追（落回編隊分支守在建築旁等隊友，
-    //     支援到齊後一起從各自位置包夾收頭）。
+    // 2.5 追擊（Prompt 10.15 修訂）：敵在射程外但 ≤ range + CHASE_MARGIN → 前壓接戰。
+    //     **不吃 AI 閘門**——量測（24 種子）顯示閘門造成系統性偏藍（16/3/5 → 14/7/3），
+    //     追擊是「射程外一步內的貼身反應」，屬本地行為；接觸重評估（W1）改為
+    //     驅動**小隊目標**（`engaging` → target 跟隨敵群重心）與夾擊呼叫（W2），
+    //     不禁止單位-Level 的貼身追擊。追擊支援規則（Prompt 10.8）仍適用：
+    //     目標是遠程（風箏型）且在我方射程外時，需有其他友軍在其
+    //     CHASE_SUPPORT_RADIUS_TILES 內作支援才追（單兵追風箏 = 被射死）。
     const near = nearestEnemy(world, unit)
-    const chaseLimitFixed = rangeFixed + CHASE_MARGIN * UNITS_PER_TILE
-    if (near !== null && near.distSq <= chaseLimitFixed * chaseLimitFixed) {
-      let supported = near.unit.role !== 'ranged'
-      if (!supported) {
-        const supportLimit = CHASE_SUPPORT_RADIUS_TILES * UNITS_PER_TILE
-        const supportSq = supportLimit * supportLimit
-        for (const ally of world.units) {
-          if (ally.player !== playerId || ally.id === unit.id || ally.hp <= 0) continue
-          const dx = ally.x - near.unit.x
-          const dy = ally.y - near.unit.y
-          if (dx * dx + dy * dy <= supportSq) {
-            supported = true
-            break
+    if (near !== null) {
+      const chaseLimitFixed = rangeFixed + CHASE_MARGIN * UNITS_PER_TILE
+      if (near.distSq <= chaseLimitFixed * chaseLimitFixed) {
+        let supported = near.unit.role !== 'ranged'
+        if (!supported) {
+          const supportLimit = CHASE_SUPPORT_RADIUS_TILES * UNITS_PER_TILE
+          const supportSq = supportLimit * supportLimit
+          for (const ally of world.units) {
+            if (ally.player !== playerId || ally.id === unit.id || ally.hp <= 0) continue
+            const dx = ally.x - near.unit.x
+            const dy = ally.y - near.unit.y
+            if (dx * dx + dy * dy <= supportSq) {
+              supported = true
+              break
+            }
           }
         }
+        if (supported) {
+          const enemyTile = tileOf(near.unit.x, near.unit.y)
+          decisions.push({
+            unitId: unit.id,
+            action: 'chase',
+            squadIndex,
+            moveDest: shouldIssueMove(world, unit, enemyTile) ? enemyTile : null,
+            attackTargetId: near.unit.id,
+            reason: `敵人 #${near.unit.id} 在追擊距離內（${(Math.sqrt(near.distSq) / UNITS_PER_TILE).toFixed(1)} 格，射程 ${(rangeFixed / UNITS_PER_TILE).toFixed(1)} 格）：前壓接戰`,
+          })
+          continue
+        }
+        // 無支援：不追（落回編隊分支，守在建築旁等待支援）。
       }
-      if (supported) {
-        const enemyTile = tileOf(near.unit.x, near.unit.y)
-        decisions.push({
-          unitId: unit.id,
-          action: 'chase',
-          squadIndex,
-          moveDest: shouldIssueMove(world, unit, enemyTile) ? enemyTile : null,
-          attackTargetId: near.unit.id,
-          reason: `敵人 #${near.unit.id} 在追擊距離內（${(Math.sqrt(near.distSq) / UNITS_PER_TILE).toFixed(1)} 格，射程 ${(rangeFixed / UNITS_PER_TILE).toFixed(1)} 格）：前壓接戰`,
-        })
-        continue
-      }
-      // 無支援：不追（落回編隊分支，守在建築旁等待支援）。
+    }
+
+    // 2.6 小隊級 fallback（Prompt 10.15 W2）：戰術層判退的小隊（mission 'retreat'）
+    //     → 朝集結點退、射程內有敵人 → **邊退邊打**（不就地等死，撤回集結點
+    //     重整等待支援；語義與分支 1 的單位級撤退相同，觸發層級在小隊）。
+    if (squad !== undefined && squad.mission === 'retreat') {
+      const inRange = nearestEnemyWithin(world, unit, rangeFixed)
+      decisions.push({
+        unitId: unit.id,
+        action: 'fallback',
+        squadIndex,
+        moveDest: shouldIssueMove(world, unit, rally) ? { x: rally.x, y: rally.y } : null,
+        attackTargetId: inRange?.id ?? null,
+        reason: inRange !== null
+          ? `小隊受襲撤退：邊退邊打 #${inRange.id}，撤回集結點等待支援`
+          : '小隊受襲撤退：撤回集結點等待支援',
+      })
+      continue
     }
 
     // 3. 有小隊 → 移往隊形位置（attack／harass 同時對目標建築聚火）。

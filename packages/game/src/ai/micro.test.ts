@@ -77,6 +77,7 @@ function makeSquad(
   memberIds: number[],
   target: TilePos,
   centroid: TilePos = target,
+  engaging = false,
 ): Squad {
   return {
     index,
@@ -86,6 +87,7 @@ function makeSquad(
     targetBuildingId: null,
     power: 100 * memberIds.length,
     centroid,
+    engaging,
   }
 }
 
@@ -418,9 +420,9 @@ describe('追擊（SPEC §9.3 第 4 節，Prompt 10）', () => {
     const world = microWorld()
     const meleeId = putUnit(world, 'player', 'melee', { x: 10, y: 10 })
     const enemyId = putUnit(world, 'enemy', 'melee', { x: 11, y: 10 }) // 距 1.0 格：> 0.8 射程、< 1.8 追擊距
-    // 模擬行軍中：下了往 (20,20) 的路徑。
+    // 模擬行軍中：下了往 (20,20) 的路徑；小隊已獲 AI 迎戰決策（engaging）。
     expect(orderMove(world, meleeId, { x: 20, y: 20 })).toBe(true)
-    const plan = planWith(world, { x: 2, y: 2 }, [makeSquad(0, [meleeId], { x: 20, y: 20 })])
+    const plan = planWith(world, { x: 2, y: 2 }, [makeSquad(0, [meleeId], { x: 20, y: 20 }, { x: 20, y: 20 }, true)])
 
     const decision = computeMicroPlan(world, 'player', plan).find((d) => d.unitId === meleeId)
     expect(decision?.action).toBe('chase')
@@ -443,7 +445,8 @@ describe('追擊（SPEC §9.3 第 4 節，Prompt 10）', () => {
     const world = microWorld()
     const archerId = putUnit(world, 'player', 'archer', { x: 10, y: 10 })
     const enemyId = putUnit(world, 'enemy', 'melee', { x: 14, y: 10 }) // 距 4.0 格
-    const plan = planWith(world, { x: 2, y: 2 }, [makeSquad(0, [archerId], { x: 20, y: 20 })])
+    // 小隊已獲 AI 迎戰決策（engaging）→ 允許追擊。
+    const plan = planWith(world, { x: 2, y: 2 }, [makeSquad(0, [archerId], { x: 20, y: 20 }, { x: 20, y: 20 }, true)])
 
     const decision = computeMicroPlan(world, 'player', plan).find((d) => d.unitId === archerId)
     expect(decision?.action).toBe('chase')
@@ -476,13 +479,13 @@ describe('追擊（SPEC §9.3 第 4 節，Prompt 10）', () => {
     expect(decision?.attackTargetId).toBeNull() // 編隊分支不設單位目標
   })
 
-  it('追擊支援：有隊友在敵人附近 → 一起追擊（包夾收頭）', () => {
+  it('追擊支援：有隊友在敵人附近 → 一起追擊（包夾收頭；小隊已獲 AI 迎戰決策）', () => {
     const world = microWorld()
     const melee1 = putUnit(world, 'player', 'melee', { x: 10, y: 10 })
     const melee2 = putUnit(world, 'player', 'melee', { x: 12, y: 10 }) // 距敵 1 格 → 支援半徑內
     const enemyId = putUnit(world, 'enemy', 'archer', { x: 11, y: 10 })
     const plan = planWith(world, { x: 2, y: 2 }, [
-      makeSquad(0, [melee1, melee2], { x: 20, y: 10 }),
+      makeSquad(0, [melee1, melee2], { x: 20, y: 10 }, { x: 20, y: 10 }, true),
     ])
 
     const decisions = computeMicroPlan(world, 'player', plan)
@@ -494,11 +497,26 @@ describe('追擊（SPEC §9.3 第 4 節，Prompt 10）', () => {
     expect(d1?.moveDest).toEqual({ x: 11, y: 10 }) // 兩面包夾到敵人所在格
   })
 
+  it('追擊閘門修訂（Prompt 10.15量測）：未獲 AI 迎戰決策也照常貼身追擊', () => {
+    const world = microWorld()
+    const meleeId = putUnit(world, 'player', 'melee', { x: 10, y: 10 })
+    const enemyId = putUnit(world, 'enemy', 'melee', { x: 11, y: 10 })
+    // engaging 未設——追擊不吃 AI 閘門（量測顯示閘門系統性偏藍，已退場）；
+    // 接觸重評估只驅動小隊目標（W1）與夾擊呼叫（W2）。
+    const plan = planWith(world, { x: 2, y: 2 }, [makeSquad(0, [meleeId], { x: 20, y: 20 })])
+
+    const decision = computeMicroPlan(world, 'player', plan).find((d) => d.unitId === meleeId)
+    expect(decision?.action).toBe('chase')
+    expect(decision?.attackTargetId).toBe(enemyId)
+  })
+
   it('追擊支援：近戰敵人不需要支援（照常追擊）', () => {
     const world = microWorld()
     const meleeId = putUnit(world, 'player', 'melee', { x: 10, y: 10 })
     const enemyId = putUnit(world, 'enemy', 'melee', { x: 11, y: 10 })
-    const plan = planWith(world, { x: 2, y: 2 }, [makeSquad(0, [meleeId], { x: 20, y: 20 })])
+    const plan = planWith(world, { x: 2, y: 2 }, [
+      makeSquad(0, [meleeId], { x: 20, y: 20 }, { x: 20, y: 20 }, true),
+    ])
 
     const decision = computeMicroPlan(world, 'player', plan).find((d) => d.unitId === meleeId)
     expect(decision?.action).toBe('chase')
