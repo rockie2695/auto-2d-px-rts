@@ -249,17 +249,37 @@ describe('主動防禦（保護建築與水晶，Prompt 10.6）', () => {
 })
 
 describe('集結點／生產點與編組遲滯（Prompt 10.13）', () => {
-  it('集結點：無威脅＝keep 旁；有威脅＝往受威脅建築前移', () => {
+  it('集結點：無威脅＝W4 前移點；有威脅＝更往前壓近受威脅建築', () => {
     const world = worldWithBases()
-    addBuilding(world, 'player', 'mine', { x: 8, y: 8 }, { built: true, nodeId: null })
+    // 受威脅礦場放在前線（比 W4 預設點更靠敵方）。
+    addBuilding(world, 'player', 'mine', { x: 14, y: 14 }, { built: true, nodeId: null })
+    putUnit(world, 'enemy', 'u', { x: 15, y: 14 }) // 礦場旁來襲
     const home = rallyPoint(world, 'player')
-    putUnit(world, 'enemy', 'u', { x: 11, y: 8 }) // 礦場旁來襲
     const threat = pickMostUrgentThreat(world, 'player')
     expect(threat).not.toBeNull()
     const forward = rallyPoint(world, 'player', threat)
     const dist = (a: TilePos, b: TilePos) => Math.abs(a.x - b.x) + Math.abs(a.y - b.y)
-    // 有威脅的集結點更靠近受威脅建築（往中點前移）。
-    expect(dist(forward, { x: 8, y: 8 })).toBeLessThan(dist(home, { x: 8, y: 8 }))
+    // 有威脅的集結點比無威脅預設點更靠近受威脅建築（往中點前移）。
+    expect(dist(forward, { x: 14, y: 14 })).toBeLessThan(dist(home, { x: 14, y: 14 }))
+  })
+
+  it('集結點前移（Prompt 10.17 W4）：無威脅＝往雙方 keep 中點 1/3、紅藍互為鏡像', () => {
+    // 精確鏡射的世界：藍 keep (2,2)、紅 keep = mirror (27,27)。
+    const world = createTestWorld({ size: 32, units: [UNIT], buildings: [KEEP, MINE] })
+    addBuilding(world, 'player', 'keep', { x: 2, y: 2 }, { built: true, nodeId: null })
+    addBuilding(world, 'enemy', 'keep', { x: 27, y: 27 }, { built: true, nodeId: null })
+
+    const blue = rallyPoint(world, 'player')
+    const red = rallyPoint(world, 'enemy')
+    const last = world.map.size - 1
+    expect(red).toEqual({ x: last - blue.x, y: last - blue.y }) // 鏡射對稱
+
+    const home = { x: 3, y: 3 } // 自家 keep 中心
+    const enemyKeep = { x: 28, y: 28 }
+    const dist = (a: TilePos, b: TilePos) => Math.abs(a.x - b.x) + Math.abs(a.y - b.y)
+    // 前移：比自家門口更靠近敵堡，但未過半（無威脅不衝中線）。
+    expect(dist(blue, enemyKeep)).toBeLessThan(dist(home, enemyKeep))
+    expect(dist(blue, home)).toBeLessThan(dist(home, enemyKeep) / 2)
   })
 
   it('生產點：由集結點往主目標方向前移（介於集結點與敵 keep 之間）', () => {

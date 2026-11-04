@@ -213,6 +213,16 @@ export class GameScene {
           .fill(color)
           .stroke({ width: 1, color: 0x10131a })
       }
+      // 標記選取框（Prompt 10.17）：點中的標記外描一圈亮框。
+      if (
+        this.selected?.kind === 'marker' &&
+        this.selected.marker.kind === marker.kind &&
+        this.selected.marker.player === marker.player
+      ) {
+        this.markersG
+          .rect(cx - r - 4, cy - r - 4, (r + 4) * 2, (r + 4) * 2)
+          .stroke({ width: 1, color: COLOR_SELECTED })
+      }
     }
 
     // 建築：按定義佔地的色塊 + 頂部血條（未完工按完成比例折算 maxHp，SPEC §5）。
@@ -355,6 +365,22 @@ export class GameScene {
         .moveTo(fixedToPx(edge.x), fixedToPx(edge.y))
         .lineTo(fixedToPx(victim.x), fixedToPx(victim.y))
         .stroke({ width: 1, color, alpha: 0.28 })
+    }
+
+    // 移動意圖線（Prompt 10.17）：有路徑的單位畫一條**極淡**的線到路徑終點格心——
+    // 一眼看出「部隊正往哪去」（alpha 0.12，與接戰線 0.28／開火線區隔，不喧賓奪主）。
+    // 快照的 `path` 最後一格即當前移動目的地（`dest` 未進快照）。
+    for (const unit of curr.units) {
+      if (unit.hp <= 0 || unit.path === null || unit.path.length === 0) continue
+      const goal = unit.path[unit.path.length - 1]
+      if (goal === undefined) continue
+      const fromX = fixedToPx(unit.x)
+      const fromY = fixedToPx(unit.y)
+      const toX = goal.x * TILE_SIZE + TILE_SIZE / 2
+      const toY = goal.y * TILE_SIZE + TILE_SIZE / 2
+      if (Math.abs(toX - fromX) < 0.5 && Math.abs(toY - fromY) < 0.5) continue // 已抵達終點格
+      const color = unit.player === 'player' ? COLOR_UNIT_PLAYER : COLOR_UNIT_ENEMY
+      this.fxG.moveTo(fromX, fromY).lineTo(toX, toY).stroke({ width: 1, color, alpha: 0.12 })
     }
 
     for (const fx of this.effects) {

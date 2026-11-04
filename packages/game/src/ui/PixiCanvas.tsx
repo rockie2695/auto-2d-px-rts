@@ -4,7 +4,7 @@ import type { Application } from 'pixi.js'
 import { MAP_SIZE } from '@auto-2d-px-rts/shared'
 
 import { createGameApp, destroyGameApp } from '../render/pixiApp.ts'
-import { pickTarget, screenToWorld } from '../render/hitTest.ts'
+import { pickMarker, pickTarget, screenToWorld } from '../render/hitTest.ts'
 import { GameScene } from '../render/scene.ts'
 import { startGameSession } from '../session.ts'
 import type { GameSession } from '../session.ts'
@@ -54,7 +54,14 @@ export function PixiCanvas() {
       const viewport = session.scene.viewportOf(rect.width, rect.height)
       const world = screenToWorld(clientX - rect.left, clientY - rect.top, viewport)
       const sizeOf = (defId: string) => session?.scene.buildingSizeOf(defId) ?? null
-      useUiStore.getState().select(pickTarget(snapshot, world.x, world.y, sizeOf))
+      // 優先權（Prompt 10.17）：單位 → 建築 → 地圖標記（集結點／生產點）。
+      const target =
+        pickTarget(snapshot, world.x, world.y, sizeOf) ??
+        (() => {
+          const marker = pickMarker(session?.getMarkers() ?? [], world.x, world.y)
+          return marker === null ? null : ({ kind: 'marker' as const, marker })
+        })()
+      useUiStore.getState().select(target ?? null)
     }
 
     const handlePointerDown = (event: PointerEvent): void => {

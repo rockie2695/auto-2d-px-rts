@@ -115,6 +115,18 @@ export interface BuildingInfo {
   readonly tileY: number
 }
 
+/** 集結點／生產點標記資訊（ui 面板顯示用，Prompt 10.17：點標記看名稱與說明）。 */
+export interface MarkerInfo {
+  readonly kind: 'rally' | 'gather'
+  readonly player: PlayerId
+  readonly tileX: number
+  readonly tileY: number
+  /** 名稱（例：「我方集結點」）。 */
+  readonly title: string
+  /** 一行說明（用途與選點規則）。 */
+  readonly description: string
+}
+
 /** 政策冷卻：30 秒 × 20Hz = 600 tick（Prompt 10：對局中每 30 秒才能改一次滑桿）。 */
 export const POLICY_COOLDOWN_TICKS = 600
 
@@ -187,6 +199,10 @@ export interface GameSession {
   getSnapshot(): WorldSnapshot | null
   getUnitInfo(unitId: number): UnitInfo | null
   getBuildingInfo(buildingId: number): BuildingInfo | null
+  /** 目前的地圖標記（Prompt 10.17）：供 ui 層拾取（單位／建築優先權在 ui 端處理）。 */
+  getMarkers(): readonly MapMarker[]
+  /** 標記資訊（Prompt 10.17）：名稱與說明；查無回 null。 */
+  getMarkerInfo(ref: { kind: 'rally' | 'gather'; player: PlayerId }): MarkerInfo | null
   /** 四角面板（Prompt 9.5）一次取齊的戰況。 */
   getBattleStats(): BattleStats
   /** 政策滑桿（Prompt 10）：讀取某玩家的滑桿值與冷卻狀態。 */
@@ -233,16 +249,19 @@ export async function startGameSession(app: Application, scene: GameScene): Prom
   for (const player of world.players) {
     plans[player.id] = computeTacticalPlan(world, player.id, policies[player.id])
   }
-  /** 集結點／生產點標記（Prompt 10.13）：推入 render 顯示（方形／菱形）。 */
+  // 集結點／生產點標記（Prompt 10.13）：推入 render 顯示（方形／菱形）。
+  // 保留一份供拾取（Prompt 10.17：點標記看名稱／說明）。
+  let markers: MapMarker[] = []
   const pushMarkers = (): void => {
-    const markers: MapMarker[] = []
+    const next: MapMarker[] = []
     for (const player of world.players) {
       const plan = plans[player.id]
       if (plan === null) continue
-      markers.push({ kind: 'rally', player: player.id, tile: plan.rally })
-      markers.push({ kind: 'gather', player: player.id, tile: plan.gather })
+      next.push({ kind: 'rally', player: player.id, tile: plan.rally })
+      next.push({ kind: 'gather', player: player.id, tile: plan.gather })
     }
-    scene.setMarkers(markers)
+    markers = next
+    scene.setMarkers(next)
   }
   pushMarkers()
   // 每玩家最新的微操決策（Prompt 9.4：點單位顯示 AI 當下在想什麼）。
@@ -467,6 +486,33 @@ export async function startGameSession(app: Application, scene: GameScene): Prom
         h,
         tileX: building.x,
         tileY: building.y,
+      }
+    },
+    getMarkers: (): readonly MapMarker[] => markers,
+    getMarkerInfo: (ref: { kind: 'rally' | 'gather'; player: PlayerId }): MarkerInfo | null => {
+      const marker = markers.find(
+        (candidate) => candidate.kind === ref.kind && candidate.player === ref.player,
+      )
+      if (marker === undefined) return null
+      const side = marker.player === 'player' ? '我方' : '敵方'
+      if (marker.kind === 'rally') {
+        return {
+          kind: 'rally',
+          player: marker.player,
+          tileX: marker.tile.x,
+          tileY: marker.tile.y,
+          title: `${side}集結點`,
+          description:
+            '部隊待命與集結的位置：無威脅時由主堡往雙方主堡中點前移約 1/3，受威脅時再往威脅方向壓近。',
+        }
+      }
+      return {
+        kind: 'gather',
+        player: marker.player,
+        tileX: marker.tile.x,
+        tileY: marker.tile.y,
+        title: `${side}生產點`,
+        description: '新兵出廠後的集合格：由集結點往主目標方向前移 4 格，歸隊後再出發。',
       }
     },
     getBattleStats: (): BattleStats => {

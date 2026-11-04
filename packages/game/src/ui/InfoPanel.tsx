@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 
 import { getActiveSession } from '../session.ts'
-import type { BuildingInfo, UnitInfo } from '../session.ts'
+import type { BuildingInfo, MarkerInfo, UnitInfo } from '../session.ts'
 import { useUiStore } from './uiStore.ts'
 
 /** 輪詢間隔（≈5Hz）：面板是文字資訊，不需要 60fps 重繪。 */
@@ -19,6 +19,7 @@ export function InfoPanel() {
   const togglePanel = useUiStore((state) => state.togglePanel)
   const [unitInfo, setUnitInfo] = useState<UnitInfo | null>(null)
   const [buildingInfo, setBuildingInfo] = useState<BuildingInfo | null>(null)
+  const [markerInfo, setMarkerInfo] = useState<MarkerInfo | null>(null)
   const [exists, setExists] = useState(false)
 
   useEffect(() => {
@@ -32,12 +33,21 @@ export function InfoPanel() {
         const unit = active?.getUnitInfo(selected.id) ?? null
         setUnitInfo(unit)
         setBuildingInfo(null)
+        setMarkerInfo(null)
         setExists(unit !== null)
-      } else {
+      } else if (selected.kind === 'building') {
         const building = active?.getBuildingInfo(selected.id) ?? null
         setBuildingInfo(building)
         setUnitInfo(null)
+        setMarkerInfo(null)
         setExists(building !== null)
+      } else {
+        // 地圖標記（Prompt 10.17）：集結點／生產點的名稱與說明。
+        const marker = active?.getMarkerInfo(selected.marker) ?? null
+        setMarkerInfo(marker)
+        setUnitInfo(null)
+        setBuildingInfo(null)
+        setExists(marker !== null)
       }
     }
     const timer = window.setInterval(refresh, POLL_MS)
@@ -55,7 +65,13 @@ export function InfoPanel() {
   }
 
   const kindLabel: string =
-    selected === null ? '' : selected.kind === 'unit' ? '單位資訊' : '建築資訊'
+    selected === null
+      ? ''
+      : selected.kind === 'unit'
+        ? '單位資訊'
+        : selected.kind === 'building'
+          ? '建築資訊'
+          : (markerInfo?.title ?? '標記資訊')
 
   return (
     <aside className="info-panel">
@@ -147,6 +163,27 @@ export function InfoPanel() {
             <dd>
               ({buildingInfo.tileX}, {buildingInfo.tileY})
             </dd>
+          </div>
+        </dl>
+      ) : selected.kind === 'marker' && markerInfo !== null ? (
+        <dl className="info-panel-rows">
+          <div>
+            <dt>標記</dt>
+            <dd>{markerInfo.title}</dd>
+          </div>
+          <div>
+            <dt>陣營</dt>
+            <dd>{markerInfo.player === 'player' ? '我方' : '敵方'}</dd>
+          </div>
+          <div>
+            <dt>座標</dt>
+            <dd>
+              ({markerInfo.tileX}, {markerInfo.tileY})
+            </dd>
+          </div>
+          <div className="info-panel-decision">
+            <dt>用途</dt>
+            <dd>{markerInfo.description}</dd>
           </div>
         </dl>
       ) : null}

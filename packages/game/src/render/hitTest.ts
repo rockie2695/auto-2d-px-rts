@@ -1,5 +1,6 @@
 import { fixedToPx } from './interpolate.ts'
 import { TILE_SIZE, UNIT_RENDER_SIZE } from './constants.ts'
+import type { PlayerId } from '../sim/types.ts'
 import type { WorldSnapshot } from '../sim/world.ts'
 import type { Viewport } from './viewport.ts'
 
@@ -8,10 +9,17 @@ import type { Viewport } from './viewport.ts'
  * 拾取用**當前快照**（不用插值位置），讓判定貼合最新 sim 狀態。
  */
 
-/** 點擊拾取結果：先單位、再建築（單位點擊優先權高）。 */
+/** 地圖標記（集結點／生產點）的識別碼（Prompt 10.17：可點擊看說明）。 */
+export interface MarkerRef {
+  readonly kind: 'rally' | 'gather'
+  readonly player: PlayerId
+}
+
+/** 點擊拾取結果：先單位、再建築、最後地圖標記（優先權由高而低）。 */
 export type SelectionTarget =
   | { readonly kind: 'unit'; readonly id: number }
   | { readonly kind: 'building'; readonly id: number }
+  | { readonly kind: 'marker'; readonly marker: MarkerRef }
 
 /** 螢幕座標 → 世界座標（px；`computeViewport` 的逆運算）。 */
 export function screenToWorld(
@@ -78,5 +86,35 @@ export function pickTarget(
   if (unitId !== null) return { kind: 'unit', id: unitId }
   const buildingId = pickBuilding(snapshot, worldX, worldY, sizeOf)
   if (buildingId !== null) return { kind: 'building', id: buildingId }
+  return null
+}
+
+/** 拾取用的標記形狀（與 render/scene 的 `MapMarker` 結構相同；此處不 import 避免循環）。 */
+export interface MarkerLike {
+  readonly kind: 'rally' | 'gather'
+  readonly player: PlayerId
+  readonly tile: { readonly x: number; readonly y: number }
+}
+
+/** 標記命中框半邊長（px）：比照渲染標記 r=5 + 描邊 1，再略放寬到 7（好點）。 */
+const MARKER_HALF = 7
+
+/**
+ * 地圖標記拾取（Prompt 10.17）：點集結點／生產點 → 回傳其識別碼（kind + player）。
+ * 取**陣列順序第一個命中者**（session 推入順序固定：我方集結 → 我方生產 → 敵方…，
+ * 確定性）；無命中回 null。單位／建築的優先權在呼叫端處理（先 `pickTarget`）。
+ */
+export function pickMarker(
+  markers: readonly MarkerLike[],
+  worldX: number,
+  worldY: number,
+): MarkerRef | null {
+  for (const marker of markers) {
+    const cx = marker.tile.x * TILE_SIZE + TILE_SIZE / 2
+    const cy = marker.tile.y * TILE_SIZE + TILE_SIZE / 2
+    if (worldX < cx - MARKER_HALF || worldX > cx + MARKER_HALF) continue
+    if (worldY < cy - MARKER_HALF || worldY > cy + MARKER_HALF) continue
+    return { kind: marker.kind, player: marker.player }
+  }
   return null
 }

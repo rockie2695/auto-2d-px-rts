@@ -1,9 +1,16 @@
 import { create } from 'zustand'
 
-/** 選中的目標（Prompt 9.1：單位或建築）。 */
+/** 地圖標記識別碼（與 render/hitTest 的 `MarkerRef` 結構相同；ui 層不 import render 執行期）。 */
+export interface UiMarkerRef {
+  readonly kind: 'rally' | 'gather'
+  readonly player: 'player' | 'enemy'
+}
+
+/** 選中的目標（Prompt 9.1：單位／建築；Prompt 10.17：地圖標記）。 */
 export type SelectionTarget =
   | { readonly kind: 'unit'; readonly id: number }
   | { readonly kind: 'building'; readonly id: number }
+  | { readonly kind: 'marker'; readonly marker: UiMarkerRef }
 
 /** 選取狀態：null = 未選取（點空白取消）。 */
 export type Selection = SelectionTarget | null

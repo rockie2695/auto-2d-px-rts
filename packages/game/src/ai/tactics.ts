@@ -332,10 +332,15 @@ export function nearestWalkable(
   return null
 }
 
+/** 集結點預設前移比例分母（Prompt 10.17 W4）：往 own↔enemy keep 中點 1/3 處。 */
+export const RALLY_FORWARD_DIV = 3
+
 /**
- * 集結點（Prompt 10.13）：AI 依局勢選點——
- * - 無威脅 → keep 旁的可走格（原行為）。
- * - 有威脅（`threat`）→ 往受威脅建築方向**前移**到中點附近的可走格
+ * 集結點（Prompt 10.13；10.17 W4 前移）：AI 依局勢選點——
+ * - **無威脅**（W4）→ 由自家 keep 往**雙方 keep 中點**（地圖中心方向）前移 `1/DIV`
+ *   的可走格——待命部隊前推到中線附近，不再死守家門（更早接觸、更快反應）。
+ *   以**正規化（藍方）座標**計算再鏡射回來 → 紅藍集結點精確互為鏡像（公平性）。
+ * - **有威脅**（`threat`）→ 覆寫：往受威脅建築方向前移到中點附近的可走格
  *   （防守儲備更靠近前線）；沒有 keep 時退回出生點。
  */
 export function rallyPoint(
@@ -353,12 +358,33 @@ export function rallyPoint(
       ? spawn
       : { x: keep.x + Math.floor(keep.w / 2), y: keep.y + Math.floor(keep.h / 2) }
   const home = nearestWalkable(world, base, mirrorOrder) ?? { x: spawn.x, y: spawn.y }
-  if (threat === null) return home
-  const forward: TilePos = {
-    x: Math.round((home.x + threat.buildingCenterTile.x) / 2),
-    y: Math.round((home.y + threat.buildingCenterTile.y) / 2),
+
+  // W4：預設點 = 由自家 keep 往**雙方 keep 中點**前移 1/DIV（正規化座標計算
+  // → 紅藍精確互為鏡像）；無敵 keep 時退回 keep 旁的 home。
+  const enemyKeep = world.buildings.find(
+    (building) => building.player !== playerId && building.hp > 0 && building.defId === 'keep',
+  )
+  let staging = home
+  if (enemyKeep !== undefined) {
+    const last = world.map.size - 1
+    const canonical = (tile: TilePos): TilePos =>
+      playerId === 'enemy' ? { x: last - tile.x, y: last - tile.y } : { x: tile.x, y: tile.y }
+    const own = canonical(base)
+    const foe = canonical(buildingCenterTile(enemyKeep))
+    const stage: TilePos = {
+      x: own.x + Math.trunc((foe.x - own.x) / RALLY_FORWARD_DIV),
+      y: own.y + Math.trunc((foe.y - own.y) / RALLY_FORWARD_DIV),
+    }
+    staging = nearestWalkable(world, canonical(stage), mirrorOrder) ?? home
   }
-  return nearestWalkable(world, forward, mirrorOrder) ?? home
+
+  // 有威脅 → 覆寫：由預設點再往受威脅建築方向前移到中點（防守儲備更靠近前線）。
+  if (threat === null) return staging
+  const forward: TilePos = {
+    x: Math.round((staging.x + threat.buildingCenterTile.x) / 2),
+    y: Math.round((staging.y + threat.buildingCenterTile.y) / 2),
+  }
+  return nearestWalkable(world, forward, mirrorOrder) ?? staging
 }
 
 /** 生產點前移格數（集結點往主目標方向）。 */

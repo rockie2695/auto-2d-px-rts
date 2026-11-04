@@ -2,6 +2,8 @@ import { fileURLToPath } from 'node:url'
 
 import { describe, expect, it, vi } from 'vitest'
 
+import { MAP_SIZE } from '@auto-2d-px-rts/shared'
+
 import { DEFAULT_POLICIES } from './ai/policy.ts'
 import { getActiveSession, matchEnded, resolveMatchResult, startGameSession } from './session.ts'
 import type { GameSession, UnitInfo } from './session.ts'
@@ -371,6 +373,29 @@ describe('手動結束與 replay 產出（Prompt 10.5）', () => {
     const markers = calls[calls.length - 1]?.[0] as Array<{ kind: string; player: string }>
     expect(markers.filter((marker) => marker.kind === 'rally')).toHaveLength(2) // 雙方各一
     expect(markers.filter((marker) => marker.kind === 'gather')).toHaveLength(2)
+    session.stop()
+  })
+
+  it('標記可查詢（Prompt 10.17：getMarkers／getMarkerInfo 供點擊顯示）', async () => {
+    const app = makeFakeApp()
+    const scene = makeFakeScene()
+    const session: GameSession = await startGameSession(app as never, scene as never)
+
+    const markers = session.getMarkers()
+    expect(markers).toHaveLength(4) // 我方／敵方 × 集結點／生產點
+    for (const marker of markers) {
+      const info = session.getMarkerInfo({ kind: marker.kind, player: marker.player })
+      expect(info).not.toBeNull()
+      expect(info?.title).toContain(marker.player === 'player' ? '我方' : '敵方')
+      expect(info?.description.length ?? 0).toBeGreaterThan(0)
+      expect(info?.tileX).toBe(marker.tile.x)
+      expect(info?.tileY).toBe(marker.tile.y)
+    }
+    // 紅藍集結點互為鏡像（W4 前移仍對稱）。
+    const blue = markers.find((m) => m.kind === 'rally' && m.player === 'player')
+    const red = markers.find((m) => m.kind === 'rally' && m.player === 'enemy')
+    const last = MAP_SIZE - 1
+    expect(red?.tile).toEqual({ x: last - (blue?.tile.x ?? 0), y: last - (blue?.tile.y ?? 0) })
     session.stop()
   })
 

@@ -3,8 +3,9 @@ import { describe, expect, it } from 'vitest'
 import { UNITS_PER_TILE } from '../sim/types.ts'
 import type { WorldSnapshot } from '../sim/world.ts'
 
-import { pickBuilding, pickTarget, pickUnit, screenToWorld } from './hitTest.ts'
-import { UNIT_RENDER_SIZE } from './constants.ts'
+import { pickBuilding, pickMarker, pickTarget, pickUnit, screenToWorld } from './hitTest.ts'
+import type { MarkerLike } from './hitTest.ts'
+import { TILE_SIZE, UNIT_RENDER_SIZE } from './constants.ts'
 
 /**
  * 點擊拾取測試（Prompt 9 驗收：點單位看到資訊）。
@@ -183,6 +184,37 @@ describe('pickTarget（Prompt 9.1）', () => {
   it('空白處 → null（點空地取消選取）', () => {
     const snapshot = snapshotWithBuildings([{ id: 1, defId: 'keep', x: 10, y: 10 }])
     expect(pickTarget(snapshot, 900, 900, SIZE_OF)).toBeNull()
+  })
+})
+
+describe('pickMarker（Prompt 10.17：點集結點／生產點）', () => {
+  const markers: MarkerLike[] = [
+    { kind: 'rally', player: 'player', tile: { x: 4, y: 6 } },
+    { kind: 'gather', player: 'player', tile: { x: 6, y: 8 } },
+    { kind: 'rally', player: 'enemy', tile: { x: 20, y: 20 } },
+    { kind: 'gather', player: 'enemy', tile: { x: 22, y: 22 } },
+  ]
+
+  /** 格心世界 px。 */
+  const center = (tile: { x: number; y: number }): { x: number; y: number } => ({
+    x: tile.x * TILE_SIZE + TILE_SIZE / 2,
+    y: tile.y * TILE_SIZE + TILE_SIZE / 2,
+  })
+
+  it('點在標記框內 → 回傳該標記識別碼', () => {
+    const rally = center({ x: 4, y: 6 })
+    expect(pickMarker(markers, rally.x, rally.y)).toEqual({ kind: 'rally', player: 'player' })
+    const gather = center({ x: 6, y: 8 })
+    expect(pickMarker(markers, gather.x, gather.y)).toEqual({ kind: 'gather', player: 'player' })
+    const foe = center({ x: 20, y: 20 })
+    expect(pickMarker(markers, foe.x, foe.y)).toEqual({ kind: 'rally', player: 'enemy' })
+  })
+
+  it('點在標記框外 → null', () => {
+    const rally = center({ x: 4, y: 6 })
+    expect(pickMarker(markers, rally.x + 8, rally.y)).toBeNull() // 超出命中框半邊長 7
+    expect(pickMarker(markers, 1200, 1200)).toBeNull()
+    expect(pickMarker([], rally.x, rally.y)).toBeNull()
   })
 })
 
