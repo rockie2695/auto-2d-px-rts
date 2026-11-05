@@ -21,7 +21,8 @@ import { runStrategicCycle, STRATEGIC_INTERVAL_TICKS } from './strategy.ts'
 import { loadContentPackFromDir } from '../data/loadFromDir.ts'
 import { createWorld, orderMove, stepWorld } from '../sim/world.ts'
 import { tileOf } from '../sim/types.ts'
-import { createTestWorld, makeUnitDef, putUnit } from '../sim/testFixtures.ts'
+import { createTestWorld, makeBuildingDef, makeUnitDef, putUnit } from '../sim/testFixtures.ts'
+import { addBuilding } from '../sim/economy.ts'
 import type { PlayerId, TilePos, World } from '../sim/types.ts'
 
 /**
@@ -687,5 +688,60 @@ describe('微操層整合（真實內容、seed 42）', () => {
 
   it('相同 seed → 單位位置一致', () => {
     expect(runReal(200).positions).toBe(runReal(200).positions)
+  })
+})
+
+/* ------------------------------------------------------------------ */
+/* 攻城收尾（Prompt 10.18）                                            */
+/* ------------------------------------------------------------------ */
+
+describe('攻城收尾（Prompt 10.18）', () => {
+  const KEEP = makeBuildingDef({ id: 'keep', size: [3, 3], hp: 400 })
+
+  it('目標建築在射程外 → 前防守衛格（與佔地正交相鄰、必然進射程）', () => {
+    const world = createTestWorld({ size: 32, units: [MELEE], buildings: [KEEP] })
+    const keep = addBuilding(world, 'enemy', 'keep', { x: 10, y: 10 }, { built: true, nodeId: null })
+    const id = putUnit(world, 'player', 'melee', { x: 15, y: 15 }) // 距 keep 外框 > 0.8 格
+
+    const squad: Squad = {
+      index: 0,
+      mission: 'attack',
+      memberIds: [id],
+      target: { x: 20, y: 20 },
+      targetBuildingId: keep.id,
+      power: 100,
+      centroid: { x: 15, y: 15 },
+      engaging: false,
+    }
+    const plan = planWith(world, { x: 2, y: 2 }, [squad])
+
+    const decision = computeMicroPlan(world, 'player', plan).find((d) => d.unitId === id)
+    expect(decision?.action).toBe('formation')
+    expect(decision?.moveDest).not.toBeNull()
+    const dest = decision?.moveDest
+    if (dest === null || dest === undefined) return
+    // 目的地與 keep 佔地正交相鄰（外框外一格）→ 抵達後必在射程內。
+    const onRing = dest.x === 9 || dest.x === 13 || dest.y === 9 || dest.y === 13
+    expect(onRing).toBe(true)
+  })
+
+  it('目標建築已在射程內 → 照常跟隨隊形位（不被攻城校正覆寫）', () => {
+    const world = createTestWorld({ size: 32, units: [MELEE], buildings: [KEEP] })
+    const keep = addBuilding(world, 'enemy', 'keep', { x: 10, y: 10 }, { built: true, nodeId: null })
+    const id = putUnit(world, 'player', 'melee', { x: 9, y: 10 }) // 貼著外框（0.5 格 ≤ 射程）
+
+    const squad: Squad = {
+      index: 0,
+      mission: 'attack',
+      memberIds: [id],
+      target: { x: 9, y: 10 },
+      targetBuildingId: keep.id,
+      power: 100,
+      centroid: { x: 9, y: 10 },
+      engaging: false,
+    }
+    const plan = planWith(world, { x: 2, y: 2 }, [squad])
+    const decision = computeMicroPlan(world, 'player', plan).find((d) => d.unitId === id)
+    expect(decision?.reason ?? '').not.toContain('攻城接近格')
   })
 })

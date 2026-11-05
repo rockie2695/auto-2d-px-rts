@@ -192,6 +192,8 @@ describe('主動防禦（保護建築與水晶，Prompt 10.6）', () => {
     const world = worldWithBases()
     addBuilding(world, 'player', 'mine', { x: 8, y: 8 }, { built: true, nodeId: null })
     putUnit(world, 'enemy', 'u', { x: 16, y: 8 }) // 距礦場 8 格 > 6
+    // 敵我兵力對等（Prompt 10.18 攻勢加成 = 0）→ 純守備編制可測。
+    putUnit(world, 'enemy', 'u', { x: 28, y: 28 })
     putUnit(world, 'player', 'u', { x: 3, y: 3 })
     putUnit(world, 'player', 'u', { x: 3, y: 4 })
 
@@ -573,6 +575,8 @@ describe('撤退（Prompt 7）', () => {
   it('附近無敵方 → 弱小隊也不撤退', () => {
     const world = worldWithBases()
     putUnit(world, 'player', 'u', { x: 4, y: 4 })
+    // 遠方敵軍（敵我 1:1，加成 0）——測「附近無敵不撤退」，不是「全圖無敵」。
+    putUnit(world, 'enemy', 'u', { x: 28, y: 28 })
     const plan = computeTacticalPlan(world, 'player', resolvePolicies({ aggression: 0 }))
     expect(plan.squads[0]?.mission).toBe('defend')
   })
@@ -582,6 +586,10 @@ describe('撤退（Prompt 7）', () => {
     const hurt = putUnit(world, 'player', 'u', { x: 4, y: 4 })
     const fine = putUnit(world, 'player', 'u', { x: 5, y: 4 })
     const fine2 = putUnit(world, 'player', 'u', { x: 6, y: 4 })
+    // 遠方敵軍（3 名 ≥ 我方有效戰力 2.15，加成 0）→ 維持平衡編制可測補位。
+    for (const tile of [{ x: 28, y: 28 }, { x: 29, y: 28 }, { x: 30, y: 29 }]) {
+      putUnit(world, 'enemy', 'u', tile)
+    }
     const hurtUnit = world.units.find((unit) => unit.id === hurt)
     if (hurtUnit === undefined) throw new Error('找不到受傷單位')
     hurtUnit.hp = 15 // 15% < 20%
@@ -628,6 +636,9 @@ describe('計畫與確定性（Prompt 7 / 8）', () => {
     const world = worldWithBases()
     const hurt = putUnit(world, 'player', 'u', { x: 6, y: 6 })
     const fine = putUnit(world, 'player', 'u', { x: 7, y: 6 })
+    // 遠方敵軍（2 名 ≥ 我方有效戰力 1.1，加成 0）→ 維持純守備編制可測補位。
+    putUnit(world, 'enemy', 'u', { x: 28, y: 28 })
+    putUnit(world, 'enemy', 'u', { x: 29, y: 29 })
     const hurtUnit = world.units.find((unit) => unit.id === hurt)
     if (hurtUnit === undefined) throw new Error('找不到受傷單位')
     hurtUnit.hp = 10

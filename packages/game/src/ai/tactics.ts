@@ -163,9 +163,19 @@ export function countSquads(unitCount: number, sizing: { count: number; size: nu
   return count
 }
 
-/** 依 aggression 決定各隊任務（index 由小到大：harass → attack → defend）。 */
-export function assignMissions(squadCount: number, policies: PolicyValues): SquadMission[] {
-  const aggression = clampSlider(policies.aggression)
+/**
+ * 依 aggression（＋攻勢加成）決定各隊任務（index 由小到大：harass → attack → defend）。
+ *
+ * `aggressionBonus`（Prompt 10.18）：由**全局戰力優勢**導出的額外加權——
+ * 我方明顯強於敵方時提高出擊比例（不再照本宣科用固定 aggression 讓半數兵力守家）；
+ * 敵方**已無單位**時加成 1.0 → 全軍出擊收尾（否則優勢方看戲、戰局拖成平手）。
+ */
+export function assignMissions(
+  squadCount: number,
+  policies: PolicyValues,
+  aggressionBonus = 0,
+): SquadMission[] {
+  const aggression = clampSlider(policies.aggression + aggressionBonus)
   const attackCount = Math.round(squadCount * aggression)
   const harassCount = squadCount >= 3 && attackCount >= 2 ? 1 : 0
   const missions: SquadMission[] = []
@@ -385,6 +395,61 @@ export function rallyPoint(
     y: Math.round((staging.y + threat.buildingCenterTile.y) / 2),
   }
   return nearestWalkable(world, forward, mirrorOrder) ?? staging
+}
+
+/**
+ * 攻城接近格（Prompt 10.18）：選一個**與建築佔地正交相鄰**的可走格——
+ * 格心距外框 0.5 格，近戰射程 0.8 格必在射程內。
+ *
+ * 舊版用 `nearestWalkable(建築中心格)`：中心格被建築佔住 → 回傳最近可走格，
+ * 常是**對角**那一格（距外框 ≈ 0.99 格 > 近戰 0.8 格）→ 部隊站定後 sim 打不到、
+ * 微操也不會再靠近 → **攻城卡死**（無敵方單位時也啃不掉主堡，戰局拖成平手）。
+ *
+ * 取離 `from` 最近者；平手以**正規化座標**（敵方鏡像）比序 → 紅藍互為鏡像。
+ * 無可走鄰格回 null（呼叫端退回中心附近搜尋）。
+ */
+export function siegeApproachTile(
+  world: World,
+  playerId: PlayerId,
+  building: Building,
+  from: TilePos,
+): TilePos | null {
+  const mirrorOrder = playerId === 'enemy'
+  const last = world.map.size - 1
+  const canon = (tile: TilePos): TilePos =>
+    mirrorOrder ? { x: last - tile.x, y: last - tile.y } : tile
+  const fromC = canon(from)
+  let best: TilePos | null = null
+  let bestScore: readonly [number, number, number] | null = null
+  for (let x = building.x - 1; x <= building.x + building.w; x++) {
+    for (let y = building.y - 1; y <= building.y + building.h; y++) {
+      const onRing =
+        x === building.x - 1 ||
+        x === building.x + building.w ||
+        y === building.y - 1 ||
+        y === building.y + building.h
+      if (!onRing) continue
+      if (x < 0 || y < 0 || x > last || y > last) continue
+      const tile: TilePos = { x, y }
+      if (isBlockedAt(world, tile)) continue
+      const c = canon(tile)
+      const score: readonly [number, number, number] = [
+        Math.abs(c.x - fromC.x) + Math.abs(c.y - fromC.y),
+        c.x,
+        c.y,
+      ]
+      if (
+        bestScore === null ||
+        score[0] < bestScore[0] ||
+        (score[0] === bestScore[0] &&
+          (score[1] < bestScore[1] || (score[1] === bestScore[1] && score[2] < bestScore[2])))
+      ) {
+        bestScore = score
+        best = tile
+      }
+    }
+  }
+  return best
 }
 
 /** 生產點前移格數（集結點往主目標方向）。 */
@@ -619,9 +684,33 @@ export function computeTacticalPlan(
   const seedCenters: TilePos[] = []
   for (const squad of previous?.squads ?? []) seedCenters[squad.index] = squad.centroid
   const groups = groupByProximity(groupable, rawCount, sizing.size, seedCenters, previousIndex)
+
+  // 攻勢優勢加權（Prompt 10.18）：全局戰力比 → 出擊比例加成。
+  // - 敵方**已無單位** → 加成 1.0（全軍出擊，收掉剩下的建築，不再看戲拖平手）。
+  // - 我方戰力比 > 1 → 加成隨優勢成長（上限 0.6）；優勢越大越少兵力守家。
+  // 兩側以同一公式各自計算（鏡像局面 → 同加成，公平性不破）。
+  let myPower = 0
+  let foePower = 0
+  let foeUnits = 0
+  for (const unit of world.units) {
+    if (unit.hp <= 0) continue
+    const power = unitPower(world, unit)
+    if (unit.player === playerId) myPower += power
+    else {
+      foePower += power
+      foeUnits += 1
+    }
+  }
+  let aggressionBonus = 0
+  if (foeUnits === 0) aggressionBonus = 1
+  else if (foePower > 0 && myPower > foePower) {
+    aggressionBonus = Math.min(0.6, ((myPower / foePower) - 1) * 0.5)
+  }
+
   const missions = assignMissions(
     groups.filter((group) => group.length > 0).length,
     policies,
+    aggressionBonus,
   )
 
   // squad.index ＝ group index（可能因空群而有跳號）：與上一循環的鍵同一索引空間，
@@ -702,7 +791,10 @@ export function computeTacticalPlan(
       continue
     }
     const center = buildingCenter(target)
-    const approach = nearestWalkable(world, tileOf(center.x, center.y), playerId === 'enemy')
+    // 攻城接近格（Prompt 10.18）：優先取**射程內**的正交鄰格；退回中心附近搜尋。
+    const approach =
+      siegeApproachTile(world, playerId, target, squad.centroid) ??
+      nearestWalkable(world, tileOf(center.x, center.y), playerId === 'enemy')
     if (approach === null) {
       squad.mission = 'defend'
       squad.targetBuildingId = null
@@ -730,7 +822,9 @@ export function computeTacticalPlan(
         const econ = pickTarget(world, influence, centroidFixed, econCandidates)
         if (econ !== null) {
           const econCenter = buildingCenter(econ)
-          const econApproach = nearestWalkable(world, tileOf(econCenter.x, econCenter.y), playerId === 'enemy')
+          const econApproach =
+            siegeApproachTile(world, playerId, econ, squad.centroid) ??
+            nearestWalkable(world, tileOf(econCenter.x, econCenter.y), playerId === 'enemy')
           if (econApproach !== null) {
             squad.mission = 'harass'
             squad.targetBuildingId = econ.id

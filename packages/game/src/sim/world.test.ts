@@ -40,6 +40,29 @@ describe('移動（SPEC §2.2 固定點）', () => {
     expect(unit?.path).toBeNull() // 抵達後清除路徑
   })
 
+  it('原地命令（A* 回空路徑）不再永久凍結，之後仍能移動（Prompt 10.18 修）', () => {
+    // 重現線上病灶：微操下「目的地＝當前所處格」的移動命令時，`findPath`
+    // 起點＝終點回傳 **空陣列**；舊版 `stepMovement` 只跳過不清理，
+    // 而 `shouldIssueMove` 見 `dest` 相符也不再下單 → 單位**永久卡死**
+    // （觀感：「有優勢卻全軍待命」）。
+    const world = createTestWorld({ units: [makeUnitDef({ id: 'u' })] })
+    const id = putUnit(world, 'player', 'u', { x: 5, y: 5 })
+    expect(orderMove(world, id, { x: 5, y: 5 })).toBe(true)
+
+    stepWorld(world)
+
+    const unit = world.units.find((candidate) => candidate.id === id)
+    expect(unit?.path ?? null).toBeNull() // 空路徑已清理（不再卡死）
+    expect(unit?.dest ?? null).toBeNull()
+
+    // 之後仍能正常接受新命令並抵達。
+    expect(orderMove(world, id, { x: 9, y: 5 })).toBe(true)
+    for (let tick = 0; tick < 80; tick++) stepWorld(world)
+    const after = world.units.find((candidate) => candidate.id === id)
+    expect(after?.x).toBe(centerOf({ x: 9, y: 5 }).x)
+    expect(after?.y).toBe(centerOf({ x: 9, y: 5 }).y)
+  })
+
   it('路徑被建築擋住時重算，仍能抵達目的地', () => {
     const world = createTestWorld({
       size: 12,

@@ -1,4 +1,4 @@
-import { setAttackTarget } from '../sim/combat.ts'
+import { distanceSquaredToBuilding, setAttackTarget } from '../sim/combat.ts'
 import { isBlockedAt, tileOf, UNITS_PER_TILE } from '../sim/types.ts'
 import { orderMove } from '../sim/world.ts'
 import type { PlayerId, TilePos, Unit, World } from '../sim/types.ts'
@@ -6,6 +6,7 @@ import { enemyThreatAtPoint, unitThreatMilli } from './influence.ts'
 import {
   nearestWalkable,
   rallyPoint,
+  siegeApproachTile,
   ENGAGE_POWER_RATIO,
   FOCUS_RADIUS_TILES,
 } from './tactics.ts'
@@ -35,6 +36,8 @@ import type { Squad, TacticalPlan } from './tactics.ts'
  * 3. 有小隊 → **編隊**：移往集結隊形的位置（`squad.target` 周圍環狀 slot，
  *    **近戰內環、遠程外環**，Prompt 10.7）；
  *    attack／harass 任務同時對 `squad.targetBuildingId` 聚火。
+ *    **攻城收尾（Prompt 10.18）**：目標是建築而隊形位／自身在射程外時，
+ *    改往與佔地正交相鄰的**射程內**接近格——否則部隊站在射程外永遠打不到。
  * 4. 否則（新兵／尚未編隊）→ **待機**：回集結點。
  *
  * A\* 節流（SPEC §9.4「路徑每 500ms 重算」）：目的地未變且非重算 tick 時沿用現有
@@ -499,14 +502,35 @@ export function computeMicroPlan(
 
     // 3. 有小隊 → 移往隊形位置（attack／harass 同時對目標建築聚火）。
     if (squad !== undefined) {
-      const slot = formationSlot(world, squad.target, slotByUnit.get(unit.id) ?? 0, mirrorOrder)
+      let slot = formationSlot(world, squad.target, slotByUnit.get(unit.id) ?? 0, mirrorOrder)
+      let siege = false
+      // 攻城收尾（Prompt 10.18）：目標是建築時，若隊形位／本身**打不到**該建築
+      // （射程以外），改往與佔地正交相鄰的射程內接近格——否則部隊站在射程外
+      // 永遠打不到、攻城卡死（無敵方單位時也啃不掉主堡）。
+      if (squad.targetBuildingId !== null) {
+        const building = world.buildings.find(
+          (candidate) => candidate.id === squad.targetBuildingId && candidate.hp > 0,
+        )
+        if (
+          building !== undefined &&
+          distanceSquaredToBuilding(unit, building) > rangeFixed * rangeFixed
+        ) {
+          const approach = siegeApproachTile(world, playerId, building, unitTile)
+          if (approach !== null) {
+            slot = approach
+            siege = true
+          }
+        }
+      }
       decisions.push({
         unitId: unit.id,
         action: 'formation',
         squadIndex,
         moveDest: shouldIssueMove(world, unit, slot) ? slot : null,
         attackTargetId: squad.targetBuildingId,
-        reason: `小隊 #${squadIndex}（${squad.mission}）→ 隊形位 (${slot.x},${slot.y})`,
+        reason: siege
+          ? `小隊 #${squadIndex}（${squad.mission}）攻城接近格 (${slot.x},${slot.y})（原隊形位在射程外）`
+          : `小隊 #${squadIndex}（${squad.mission}）→ 隊形位 (${slot.x},${slot.y})`,
       })
       continue
     }

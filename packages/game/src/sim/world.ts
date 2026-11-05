@@ -330,7 +330,15 @@ export function orderMove(world: World, unitId: number, dest: TilePos): boolean 
 
 function stepMovement(world: World): void {
   for (const unit of world.units) {
-    if (unit.hp <= 0 || unit.path === null || unit.path.length === 0) continue
+    if (unit.hp <= 0) continue
+    // 空路徑（`findPath` 起點＝終點時的退化結果）視同**無路徑**（Prompt 10.18 修）：
+    // 舊版只 `continue` 不清理，`path = []` 又不觸發 `shouldIssueMove` 重下單
+    // → 單位永久凍結（觀感：「有優勢卻全軍待命」，實為卡死）。
+    if (unit.path !== null && unit.path.length === 0) {
+      unit.path = null
+      unit.dest = null
+    }
+    if (unit.path === null) continue
     const def = world.defs.units[unit.defId]
     if (def === undefined) throw new Error(`未知單位定義：${unit.defId}`)
 
