@@ -9,10 +9,12 @@ import type { Viewport } from './viewport.ts'
  * 拾取用**當前快照**（不用插值位置），讓判定貼合最新 sim 狀態。
  */
 
-/** 地圖標記（集結點／生產點）的識別碼（Prompt 10.17：可點擊看說明）。 */
+/** 地圖標記（出廠集合格）的識別碼（Prompt 10.17：可點擊看說明；Prompt 10.19 只剩生產建築點）。 */
 export interface MarkerRef {
-  readonly kind: 'rally' | 'gather'
+  readonly kind: 'gather'
   readonly player: PlayerId
+  /** 出廠集合格所屬的生產建築 id。 */
+  readonly buildingId: number
 }
 
 /** 點擊拾取結果：先單位、再建築、最後地圖標記（優先權由高而低）。 */
@@ -91,8 +93,9 @@ export function pickTarget(
 
 /** 拾取用的標記形狀（與 render/scene 的 `MapMarker` 結構相同；此處不 import 避免循環）。 */
 export interface MarkerLike {
-  readonly kind: 'rally' | 'gather'
+  readonly kind: 'gather'
   readonly player: PlayerId
+  readonly buildingId: number
   readonly tile: { readonly x: number; readonly y: number }
 }
 
@@ -100,8 +103,8 @@ export interface MarkerLike {
 const MARKER_HALF = 7
 
 /**
- * 地圖標記拾取（Prompt 10.17）：點集結點／生產點 → 回傳其識別碼（kind + player）。
- * 取**陣列順序第一個命中者**（session 推入順序固定：我方集結 → 我方生產 → 敵方…，
+ * 地圖標記拾取（Prompt 10.19）：點出廠集合格 → 回傳其識別碼（kind + player + buildingId）。
+ * 取**陣列順序第一個命中者**（session 推入順序固定：buildingId 升冪、先我方後敵方，
  * 確定性）；無命中回 null。單位／建築的優先權在呼叫端處理（先 `pickTarget`）。
  */
 export function pickMarker(
@@ -114,7 +117,7 @@ export function pickMarker(
     const cy = marker.tile.y * TILE_SIZE + TILE_SIZE / 2
     if (worldX < cx - MARKER_HALF || worldX > cx + MARKER_HALF) continue
     if (worldY < cy - MARKER_HALF || worldY > cy + MARKER_HALF) continue
-    return { kind: marker.kind, player: marker.player }
+    return { kind: marker.kind, player: marker.player, buildingId: marker.buildingId }
   }
   return null
 }

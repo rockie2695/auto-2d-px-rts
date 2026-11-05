@@ -65,8 +65,8 @@ function planWith(world: World, rallies: TilePos, squads: Squad[]): TacticalPlan
     tick: world.tick,
     player: 'player',
     rally: rallies,
-    // 測試預設生產點＝集結點（微操「未編隊」分支以生產點為目標）。
-    gather: rallies,
+    // 測試預設無生產建築（spawns 空 → 微操「未編隊」分支退回集結點）。
+    spawns: [],
     squads,
     disengaged: [],
     influence: computeInfluenceMap(world, 'player'),
@@ -578,6 +578,26 @@ describe('編隊、待機與路徑節流（Prompt 8）', () => {
     const decision = computeMicroPlan(world, 'player', plan).find((d) => d.unitId === unitId)
     expect(decision?.action).toBe('rally')
     expect(decision?.moveDest).toEqual(rally)
+  })
+
+  it('未編隊 → 前往最近一間生產建築的出廠集合格（Prompt 10.19）', () => {
+    const BARRACKS = makeBuildingDef({ id: 'barracks', produces: ['melee'] })
+    const world = createTestWorld({ size: 32, units: [MELEE], buildings: [BARRACKS] })
+    const left = addBuilding(world, 'player', 'barracks', { x: 2, y: 2 }, { built: true, nodeId: null })
+    const right = addBuilding(world, 'player', 'barracks', { x: 26, y: 26 }, { built: true, nodeId: null })
+    const unitId = putUnit(world, 'player', 'melee', { x: 22, y: 20 }) // 離右邊的建築近
+    const rally: TilePos = { x: 3, y: 3 }
+    const plan: TacticalPlan = {
+      ...planWith(world, rally, []),
+      spawns: [
+        { buildingId: left.id, tile: { x: 6, y: 2 } },
+        { buildingId: right.id, tile: { x: 22, y: 26 } },
+      ],
+    }
+    const decision = computeMicroPlan(world, 'player', plan).find((d) => d.unitId === unitId)
+    expect(decision?.action).toBe('rally')
+    expect(decision?.moveDest).toEqual({ x: 22, y: 26 }) // 最近建築的點，不是集結點
+    expect(decision?.reason).toContain('出廠集合格')
   })
 
   it('路徑節流：非重算 tick 且目的地未變 → 不下新移動令；500ms 到點則重算', () => {

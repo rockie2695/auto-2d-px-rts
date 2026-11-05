@@ -12,19 +12,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
  * session 以 mock 隔離（只驗面板把 `getMarkerInfo` 的結果畫出來）。
  */
 
-const RALLY_INFO = {
-  kind: 'rally' as const,
+const BARRACKS_INFO = {
+  kind: 'gather' as const,
   player: 'player' as const,
   tileX: 11,
   tileY: 11,
-  title: '我方集結點',
-  description: '部隊待命與集結的位置：測試說明',
+  title: '我方兵營出廠集合格',
+  description: '新兵出廠後先到此格集結：測試說明',
 }
 
 vi.mock('../session.ts', () => ({
   getActiveSession: () => ({
-    getMarkerInfo: (ref: { kind: string; player: string }) =>
-      ref.kind === 'rally' && ref.player === 'player' ? RALLY_INFO : null,
+    getMarkerInfo: (ref: { kind: string; player: string; buildingId: number }) =>
+      ref.kind === 'gather' && ref.player === 'player' ? BARRACKS_INFO : null,
   }),
 }))
 
@@ -61,16 +61,18 @@ afterEach(() => {
 })
 
 describe('<InfoPanel> 標記（Prompt 10.17）', () => {
-  it('選取集結點標記 → 顯示名稱、陣營、座標與用途', async () => {
+  it('選取出廠集合格標記 → 顯示名稱、陣營、座標與用途', async () => {
     const container = render(<InfoPanel />)
     act(() => {
-      useUiStore.getState().select({ kind: 'marker', marker: { kind: 'rally', player: 'player' } })
+      useUiStore
+        .getState()
+        .select({ kind: 'marker', marker: { kind: 'gather', player: 'player', buildingId: 1 } })
     })
     // 面板以 200ms 輪詢拉資料；推進假計時器觸發一次。
     await act(async () => {
       await vi.advanceTimersByTimeAsync(250)
     })
-    expect(container.textContent).toContain('我方集結點')
+    expect(container.textContent).toContain('我方兵營出廠集合格')
     expect(container.textContent).toContain('我方')
     expect(container.textContent).toContain('(11, 11)')
     expect(container.textContent).toContain('測試說明')
@@ -79,7 +81,9 @@ describe('<InfoPanel> 標記（Prompt 10.17）', () => {
   it('查無標記資訊 → 顯示「此物件已不存在」', async () => {
     const container = render(<InfoPanel />)
     act(() => {
-      useUiStore.getState().select({ kind: 'marker', marker: { kind: 'gather', player: 'enemy' } })
+      useUiStore
+        .getState()
+        .select({ kind: 'marker', marker: { kind: 'gather', player: 'enemy', buildingId: 2 } })
     })
     await act(async () => {
       await vi.advanceTimersByTimeAsync(250)

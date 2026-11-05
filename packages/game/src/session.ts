@@ -115,13 +115,13 @@ export interface BuildingInfo {
   readonly tileY: number
 }
 
-/** 集結點／生產點標記資訊（ui 面板顯示用，Prompt 10.17：點標記看名稱與說明）。 */
+/** 出廠集合格標記資訊（ui 面板顯示用，Prompt 10.17：點標記看名稱與說明）。 */
 export interface MarkerInfo {
-  readonly kind: 'rally' | 'gather'
+  readonly kind: 'gather'
   readonly player: PlayerId
   readonly tileX: number
   readonly tileY: number
-  /** 名稱（例：「我方集結點」）。 */
+  /** 名稱（例：「我方兵營出廠集合格」）。 */
   readonly title: string
   /** 一行說明（用途與選點規則）。 */
   readonly description: string
@@ -202,7 +202,7 @@ export interface GameSession {
   /** 目前的地圖標記（Prompt 10.17）：供 ui 層拾取（單位／建築優先權在 ui 端處理）。 */
   getMarkers(): readonly MapMarker[]
   /** 標記資訊（Prompt 10.17）：名稱與說明；查無回 null。 */
-  getMarkerInfo(ref: { kind: 'rally' | 'gather'; player: PlayerId }): MarkerInfo | null
+  getMarkerInfo(ref: { kind: 'gather'; player: PlayerId; buildingId: number }): MarkerInfo | null
   /** 四角面板（Prompt 9.5）一次取齊的戰況。 */
   getBattleStats(): BattleStats
   /** 政策滑桿（Prompt 10）：讀取某玩家的滑桿值與冷卻狀態。 */
@@ -249,7 +249,8 @@ export async function startGameSession(app: Application, scene: GameScene): Prom
   for (const player of world.players) {
     plans[player.id] = computeTacticalPlan(world, player.id, policies[player.id])
   }
-  // 集結點／生產點標記（Prompt 10.13）：推入 render 顯示（方形／菱形）。
+  // 出廠集合格標記（Prompt 10.19）：每間生產建築一個（陣營級「集結點」轉為
+  // AI 內部概念，不再顯示——援引「玩家只看新兵會去哪」）。
   // 保留一份供拾取（Prompt 10.17：點標記看名稱／說明）。
   let markers: MapMarker[] = []
   const pushMarkers = (): void => {
@@ -257,8 +258,9 @@ export async function startGameSession(app: Application, scene: GameScene): Prom
     for (const player of world.players) {
       const plan = plans[player.id]
       if (plan === null) continue
-      next.push({ kind: 'rally', player: player.id, tile: plan.rally })
-      next.push({ kind: 'gather', player: player.id, tile: plan.gather })
+      for (const spawn of plan.spawns) {
+        next.push({ kind: 'gather', player: player.id, buildingId: spawn.buildingId, tile: spawn.tile })
+      }
     }
     markers = next
     scene.setMarkers(next)
@@ -489,30 +491,28 @@ export async function startGameSession(app: Application, scene: GameScene): Prom
       }
     },
     getMarkers: (): readonly MapMarker[] => markers,
-    getMarkerInfo: (ref: { kind: 'rally' | 'gather'; player: PlayerId }): MarkerInfo | null => {
+    getMarkerInfo: (
+      ref: { kind: 'gather'; player: PlayerId; buildingId: number },
+    ): MarkerInfo | null => {
       const marker = markers.find(
-        (candidate) => candidate.kind === ref.kind && candidate.player === ref.player,
+        (candidate) =>
+          candidate.kind === ref.kind &&
+          candidate.player === ref.player &&
+          candidate.buildingId === ref.buildingId,
       )
       if (marker === undefined) return null
       const side = marker.player === 'player' ? '我方' : '敵方'
-      if (marker.kind === 'rally') {
-        return {
-          kind: 'rally',
-          player: marker.player,
-          tileX: marker.tile.x,
-          tileY: marker.tile.y,
-          title: `${side}集結點`,
-          description:
-            '部隊待命與集結的位置：無威脅時由主堡往雙方主堡中點前移約 1/3，受威脅時再往威脅方向壓近。',
-        }
-      }
+      const building = world.buildings.find((candidate) => candidate.id === marker.buildingId)
+      const buildingName = building?.defId ?? '建築'
       return {
         kind: 'gather',
         player: marker.player,
         tileX: marker.tile.x,
         tileY: marker.tile.y,
-        title: `${side}生產點`,
-        description: '新兵出廠後的集合格：由集結點往主目標方向前移 4 格，歸隊後再出發。',
+        title: `${side}${buildingName}出廠集合格`,
+        description:
+          '新兵出廠後先到此格集結（由這間建築往主目標方向前移約 4 格），' +
+          'AI 再把同區新兵編成同一隊出擊。（AI 待命集結點為內部概念，會依局面自動調整，不在此顯示。）',
       }
     },
     getBattleStats: (): BattleStats => {

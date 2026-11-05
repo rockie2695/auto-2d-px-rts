@@ -45,12 +45,24 @@ const MINE = makeBuildingDef({
   ai: { value: 300 },
   requiresResourceNode: true,
 })
+const BARRACKS = makeBuildingDef({ id: 'barracks', size: [3, 3], produces: ['u'], ai: { value: 400 } })
 
 /** 32×32 合成世界（含 player/enemy 雙方基地）。 */
 function worldWithBases(): World {
   const world = createTestWorld({ size: 32, units: [UNIT], buildings: [KEEP, MINE] })
   addBuilding(world, 'player', 'keep', { x: 2, y: 2 }, { built: true, nodeId: null })
   addBuilding(world, 'enemy', 'keep', { x: 28, y: 28 }, { built: true, nodeId: null })
+  return world
+}
+
+/** 雙方基地＋各一間兵營（出廠集合格測試用，Prompt 10.19）。 */
+function worldWithSpawns(): World {
+  const world = createTestWorld({ size: 32, units: [UNIT], buildings: [KEEP, MINE, BARRACKS] })
+  addBuilding(world, 'player', 'keep', { x: 2, y: 2 }, { built: true, nodeId: null })
+  addBuilding(world, 'enemy', 'keep', { x: 28, y: 28 }, { built: true, nodeId: null })
+  addBuilding(world, 'player', 'barracks', { x: 6, y: 2 }, { built: true, nodeId: null })
+  // 紅兵營 = 藍兵營的 180° 點鏡射（佔地 [6..8]×[2..4] ↔ [23..25]×[27..29]）。
+  addBuilding(world, 'enemy', 'barracks', { x: 23, y: 27 }, { built: true, nodeId: null })
   return world
 }
 
@@ -284,13 +296,37 @@ describe('集結點／生產點與編組遲滯（Prompt 10.13）', () => {
     expect(dist(blue, home)).toBeLessThan(dist(home, enemyKeep) / 2)
   })
 
-  it('生產點：由集結點往主目標方向前移（介於集結點與敵 keep 之間）', () => {
-    const world = worldWithBases()
+  it('出廠集合格：每間生產建築一個、往主目標方向前移（Prompt 10.19）', () => {
+    const world = worldWithSpawns()
     putUnit(world, 'player', 'u', { x: 5, y: 5 })
     const plan = computeTacticalPlan(world, 'player', resolvePolicies({ aggression: 1, clusterSpread: 1 }))
+    expect(plan.spawns).toHaveLength(1)
+    const spawn = plan.spawns[0]
+    if (spawn === undefined) throw new Error('缺少出廠集合格')
+    const barracks = world.buildings.find((building) => building.id === spawn.buildingId)
+    expect(barracks).toBeDefined()
     const dist = (a: TilePos, b: TilePos) => Math.abs(a.x - b.x) + Math.abs(a.y - b.y)
     const enemyKeep = { x: 29, y: 29 } // 敵 keep（28,28）3×3 的中心
-    expect(dist(plan.gather, enemyKeep)).toBeLessThan(dist(plan.rally, enemyKeep))
+    const barracksCenter = { x: 7, y: 3 } // (6,2) 3×3 的中心
+    // 往主目標前移：比兵營中心更近敵 keep，但不貼著 keep（只前移約 4 格）。
+    expect(dist(spawn.tile, enemyKeep)).toBeLessThan(dist(barracksCenter, enemyKeep))
+    expect(dist(spawn.tile, enemyKeep)).toBeGreaterThan(dist(enemyKeep, barracksCenter) - 10)
+  })
+
+  it('出廠集合格鏡射對稱：紅藍互為鏡像（Prompt 10.19）', () => {
+    const world = worldWithSpawns()
+    putUnit(world, 'player', 'u', { x: 5, y: 5 })
+    putUnit(world, 'enemy', 'u', { x: 26, y: 26 })
+    const policies = resolvePolicies({ aggression: 1, clusterSpread: 1 })
+    const blue = computeTacticalPlan(world, 'player', policies)
+    const red = computeTacticalPlan(world, 'enemy', policies)
+    expect(blue.spawns).toHaveLength(1)
+    expect(red.spawns).toHaveLength(1)
+    const last = world.map.size - 1
+    const bTile = blue.spawns[0]?.tile
+    const rTile = red.spawns[0]?.tile
+    if (bTile === undefined || rTile === undefined) throw new Error('缺少出廠集合格')
+    expect(rTile).toEqual({ x: last - bTile.x, y: last - bTile.y })
   })
 
   it('編組遲滯：邊界單位小幅移動不換隊；大幅移動才換', () => {

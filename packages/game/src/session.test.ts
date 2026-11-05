@@ -364,36 +364,50 @@ describe('手動結束與 replay 產出（Prompt 10.5）', () => {
     session.stop()
   })
 
-  it('集結點／生產點標記推入 render（Prompt 10.13）', async () => {
+  it('出廠集合格標記推入 render（Prompt 10.19：每間生產建築一個；集結點不再顯示）', async () => {
     const app = makeFakeApp()
     const scene = makeFakeScene()
     const session: GameSession = await startGameSession(app as never, scene as never)
     const calls = scene.setMarkers.mock.calls
     expect(calls.length).toBeGreaterThan(0)
-    const markers = calls[calls.length - 1]?.[0] as Array<{ kind: string; player: string }>
-    expect(markers.filter((marker) => marker.kind === 'rally')).toHaveLength(2) // 雙方各一
+    const markers = calls[calls.length - 1]?.[0] as Array<{
+      kind: string
+      player: string
+      buildingId: number
+    }>
+    expect(markers.filter((marker) => marker.kind === 'rally')).toHaveLength(0) // 集結點轉內部概念
+    // 開局配置每陣營一間兵營 → 各一個出廠集合格。
     expect(markers.filter((marker) => marker.kind === 'gather')).toHaveLength(2)
+    // 同陣營 buildingId 不重複。
+    const idOf = (player: string): number[] =>
+      markers.filter((m) => m.kind === 'gather' && m.player === player).map((m) => m.buildingId)
+    expect(new Set(idOf('player')).size).toBe(idOf('player').length)
+    expect(new Set(idOf('enemy')).size).toBe(idOf('enemy').length)
     session.stop()
   })
 
-  it('標記可查詢（Prompt 10.17：getMarkers／getMarkerInfo 供點擊顯示）', async () => {
+  it('標記可查詢（Prompt 10.19：getMarkers／getMarkerInfo 供點擊顯示）', async () => {
     const app = makeFakeApp()
     const scene = makeFakeScene()
     const session: GameSession = await startGameSession(app as never, scene as never)
 
     const markers = session.getMarkers()
-    expect(markers).toHaveLength(4) // 我方／敵方 × 集結點／生產點
+    expect(markers.length).toBeGreaterThan(0)
     for (const marker of markers) {
-      const info = session.getMarkerInfo({ kind: marker.kind, player: marker.player })
+      const info = session.getMarkerInfo({
+        kind: marker.kind,
+        player: marker.player,
+        buildingId: marker.buildingId,
+      })
       expect(info).not.toBeNull()
       expect(info?.title).toContain(marker.player === 'player' ? '我方' : '敵方')
       expect(info?.description.length ?? 0).toBeGreaterThan(0)
       expect(info?.tileX).toBe(marker.tile.x)
       expect(info?.tileY).toBe(marker.tile.y)
     }
-    // 紅藍集結點互為鏡像（W4 前移仍對稱）。
-    const blue = markers.find((m) => m.kind === 'rally' && m.player === 'player')
-    const red = markers.find((m) => m.kind === 'rally' && m.player === 'enemy')
+    // 紅藍出廠集合格互為鏡像（開局佈局鏡射對稱）。
+    const blue = markers.find((m) => m.player === 'player')
+    const red = markers.find((m) => m.player === 'enemy')
     const last = MAP_SIZE - 1
     expect(red?.tile).toEqual({ x: last - (blue?.tile.x ?? 0), y: last - (blue?.tile.y ?? 0) })
     session.stop()

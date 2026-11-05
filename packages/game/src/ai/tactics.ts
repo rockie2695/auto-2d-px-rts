@@ -1,4 +1,4 @@
-import { getPlayer, isBlockedAt, tileOf, UNITS_PER_TILE } from '../sim/types.ts'
+import { getPlayer, isBlockedAt, isConstructed, tileOf, UNITS_PER_TILE } from '../sim/types.ts'
 import type { Building, PlayerId, TilePos, Unit, World } from '../sim/types.ts'
 import { computeInfluenceMap, DEFENSE_RADIUS_TILES, enemyThreatAtPoint, enemyThreatAtTile, pickMostUrgentThreat, unitThreatMilli } from './influence.ts'
 import type { BuildingThreat, InfluenceMap } from './influence.ts'
@@ -121,13 +121,29 @@ export interface ContactState {
   known: Record<number, number[]>
 }
 
+/**
+ * 生產建築的出廠集合格（Prompt 10.19）：新兵出廠後先到**其出處建築**的集合格。
+ */
+export interface SpawnPoint {
+  /** 生產建築 id。 */
+  buildingId: number
+  /** 出廠集合格（該建築往主目標方向前移 `SPAWN_FORWARD_TILES` 格）。 */
+  tile: TilePos
+}
+
 export interface TacticalPlan {
   tick: number
   player: PlayerId
-  /** 集結點（無威脅＝keep 旁；有威脅＝往受威脅建築方向前移，Prompt 10.13）。 */
+  /**
+   * 集結點（**AI 內部**，不再顯示給玩家——Prompt 10.19）：無威脅＝W4 前移點、
+   * 有威脅＝往受威脅建築方向壓近；守備隊站位／撤退目的地用，AI 依局面自動調整。
+   */
   rally: TilePos
-  /** 生產點（Prompt 10.13）：新兵出廠後的集合格——集結點往主目標方向前移。 */
-  gather: TilePos
+  /**
+   * 出廠集合格（Prompt 10.19）：**每間**自家生產建築一筆（buildingId 升冪）。
+   * 新兵出廠後前往最近一間生產建築的出廠集合格，AI 再就近聚類編組。
+   */
+  spawns: SpawnPoint[]
   squads: Squad[]
   /** hp < retreatHpPct 而脫離戰鬥的單位 id（守備隊補位者仍列於此，供資訊面板顯示）。 */
   disengaged: number[]
@@ -452,45 +468,95 @@ export function siegeApproachTile(
   return best
 }
 
-/** 生產點前移格數（集結點往主目標方向）。 */
-const GATHER_FORWARD_TILES = 4
+/** 出廠集合格前移格數（建築中心往主目標方向，Prompt 10.19）。 */
+const SPAWN_FORWARD_TILES = 4
 
-/** 建築中心格。 */
+/** 建築中心格（3×3 等**奇數**尺寸精確；偶數尺寸會截斷，鏡射敏感處請用 `buildingCenter` 單位座標）。 */
 function buildingCenterTile(building: Building): TilePos {
   return tileOf(buildingCenter(building).x, buildingCenter(building).y)
 }
 
+/** 出廠集合格（Prompt 10.19）方向前移的固定點距離（單位）。 */
+const SPAWN_FORWARD_PX = SPAWN_FORWARD_TILES * UNITS_PER_TILE
+
 /**
- * 生產點（Prompt 10.13）：新兵出廠後的集合格——
- * 由集結點往**主目標**（進攻／騷擾隊的目標建築，否則敵方 keep）方向前移 4 格；
- * 找不到目標則同集結點。整數比例、確定性、鏡射一致。
+ * 出廠集合格（Prompt 10.19，取代 Prompt 10.13 的單一全隊生產點）：
+ * **每間**自家可生產單位的建築（`produces` 非空、已建成、存活）各有一個集合格——
+ * 由該建築中心往**主目標**方向前移 `SPAWN_FORWARD_TILES` 格；
+ * 主目標＝進攻／騷擾隊的目標建築（計畫取第一隊），無則敵方 keep、再無則留守原地。
+ * 新兵出廠移往**最近一間**生產建築的集合格；AI 的就近聚類編組自然把
+ * 同區新兵編成同一隊——玩家看到的點即「這間建築出的兵會先到哪」。
+ *
+ * 鏡射對稱（對偶數尺寸建築尤須如此）：**一律先鏡到固定點單位座標**再算——
+ * 紅方把建築中心與主目標都映到 `mapPx − px`（整數精確、無截斷失真），在
+ * 正規化（藍方）座標算前移向量後鏡射回來，最後才 `Math.floor` 轉格交給
+ * `nearestWalkable`（掃描序鏡像）→ 紅藍互為鏡像。若先轉格再鏡射，2×2 建築的
+ * 「中心格」差 1 格（藍 (6,28) ↔ 鏡射後應為 (25,3)，截斷成 (26,4) 不對稱——
+ * session 標記測發現）。
  */
-function gatherPoint(
+export function spawnPoints(
   world: World,
   playerId: PlayerId,
   rally: TilePos,
   squads: readonly Squad[],
-): TilePos {
+): SpawnPoint[] {
   const mirrorOrder = playerId === 'enemy'
+  const mapPx = world.map.size * UNITS_PER_TILE
+
+  // 主目標（正規化單位座標）：進攻／騷擾隊的目標建築 → 敵方 keep。
+  let objectivePx: { x: number; y: number } | null = null
   const attacker = squads.find(
     (squad) =>
       (squad.mission === 'attack' || squad.mission === 'harass') && squad.targetBuildingId !== null,
   )
-  let objective: TilePos | null = attacker?.target ?? null
-  if (objective === null) {
+  if (attacker !== undefined) {
+    const target = world.buildings.find(
+      (building) => building.id === attacker.targetBuildingId && building.hp > 0,
+    )
+    objectivePx = target === undefined ? null : buildingCenter(target)
+  }
+  if (objectivePx === null) {
     const enemyKeep = world.buildings.find(
       (building) => building.player !== playerId && building.defId === 'keep' && building.hp > 0,
     )
-    objective = enemyKeep === undefined ? null : buildingCenterTile(enemyKeep)
+    objectivePx = enemyKeep === undefined ? null : buildingCenter(enemyKeep)
   }
-  if (objective === null) return rally
-  const dx = objective.x - rally.x
-  const dy = objective.y - rally.y
-  const steps = Math.max(Math.abs(dx), Math.abs(dy))
-  if (steps === 0) return rally
-  const stepX = Math.round((dx * GATHER_FORWARD_TILES) / steps)
-  const stepY = Math.round((dy * GATHER_FORWARD_TILES) / steps)
-  return nearestWalkable(world, { x: rally.x + stepX, y: rally.y + stepY }, mirrorOrder) ?? rally
+  const mirrorPx = (point: { x: number; y: number }): { x: number; y: number } =>
+    mirrorOrder ? { x: mapPx - point.x, y: mapPx - point.y } : point
+  const objectiveC = objectivePx === null ? null : mirrorPx(objectivePx)
+
+  const spawns: SpawnPoint[] = []
+  for (const building of world.buildings) {
+    if (building.player !== playerId || building.hp <= 0) continue
+    if (!isConstructed(building)) continue
+    const def = world.defs.buildings[building.defId]
+    if (def === undefined || def.produces.length === 0) continue
+    const centerPx = mirrorPx(buildingCenter(building))
+    let tile = rally
+    if (objectiveC !== null) {
+      const dx = objectiveC.x - centerPx.x
+      const dy = objectiveC.y - centerPx.y
+      const steps = Math.max(Math.abs(dx), Math.abs(dy))
+      if (steps > 0) {
+        const candidatePx = {
+          x: centerPx.x + Math.trunc((dx * SPAWN_FORWARD_PX) / steps),
+          y: centerPx.y + Math.trunc((dy * SPAWN_FORWARD_PX) / steps),
+        }
+        // 候選格先在**正規化座標**定格，再鏡射回實座標——紅方不獨立地對
+        // 鏡射 px 取 floor：偶數尺寸建築的中心候選會落在**格邊界**上
+        // （中心 px 為 100 的倍數），floor 在鏡射方向會翻到錯邊的格
+        // （藍 24 ↔ 紅取到 8 而非 7）。由正規化格鏡射而来 → 紅藍逐格對稱。
+        const tileC = tileOf(candidatePx.x, candidatePx.y)
+        const candidateTrue = mirrorOrder
+          ? { x: world.map.size - 1 - tileC.x, y: world.map.size - 1 - tileC.y }
+          : tileC
+        tile = nearestWalkable(world, candidateTrue, mirrorOrder) ?? rally
+      }
+    }
+    spawns.push({ buildingId: building.id, tile })
+  }
+  spawns.sort((a, b) => a.buildingId - b.buildingId)
+  return spawns
 }
 
 /** 建築中心（固定點）。 */
@@ -1090,10 +1156,10 @@ export function computeTacticalPlan(
     }
   }
 
-  // 生產點（Prompt 10.13）：主目標定案後才計算。
-  const gather = gatherPoint(world, playerId, rally, squads)
+  // 出廠集合格（Prompt 10.19）：主目標定案後才計算（每間生產建築一筆）。
+  const spawns = spawnPoints(world, playerId, rally, squads)
 
-  return { tick: world.tick, player: playerId, rally, gather, squads, disengaged, influence, contact, events }
+  return { tick: world.tick, player: playerId, rally, spawns, squads, disengaged, influence, contact, events }
 }
 
 

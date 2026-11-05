@@ -195,29 +195,23 @@ export class GameScene {
 
     this.objG.clear()
 
-    // 地圖標記（Prompt 10.13）：集結點＝方形、生產點＝菱形，分陣營上色 + 深色描邊。
+    // 地圖標記（Prompt 10.19）：出廠集合格＝菱形（每間生產建築一個），分陣營上色 + 深色描邊。
     this.markersG.clear()
     for (const marker of this.markers) {
       const color = marker.player === 'player' ? COLOR_UNIT_PLAYER : COLOR_UNIT_ENEMY
       const cx = marker.tile.x * TILE_SIZE + TILE_SIZE / 2
       const cy = marker.tile.y * TILE_SIZE + TILE_SIZE / 2
       const r = 5
-      if (marker.kind === 'rally') {
-        this.markersG
-          .rect(cx - r, cy - r, r * 2, r * 2)
-          .fill(color)
-          .stroke({ width: 1, color: 0x10131a })
-      } else {
-        this.markersG
-          .poly([cx, cy - r - 1, cx + r + 1, cy, cx, cy + r + 1, cx - r - 1, cy])
-          .fill(color)
-          .stroke({ width: 1, color: 0x10131a })
-      }
+      this.markersG
+        .poly([cx, cy - r - 1, cx + r + 1, cy, cx, cy + r + 1, cx - r - 1, cy])
+        .fill(color)
+        .stroke({ width: 1, color: 0x10131a })
       // 標記選取框（Prompt 10.17）：點中的標記外描一圈亮框。
       if (
         this.selected?.kind === 'marker' &&
         this.selected.marker.kind === marker.kind &&
-        this.selected.marker.player === marker.player
+        this.selected.marker.player === marker.player &&
+        this.selected.marker.buildingId === marker.buildingId
       ) {
         this.markersG
           .rect(cx - r - 4, cy - r - 4, (r + 4) * 2, (r + 4) * 2)
@@ -432,10 +426,12 @@ function hpColor(ratio: number): number {
 /* 攻擊特效（Prompt 10.10：讓「誰在打誰」看得見）                        */
 /* ------------------------------------------------------------------ */
 
-/** 地圖標記（Prompt 10.13）：集結點（方形）／生產點（菱形），分陣營上色。 */
+/** 地圖標記（Prompt 10.19）：出廠集合格（菱形，每間生產建築一個），分陣營上色。 */
 export interface MapMarker {
-  kind: 'rally' | 'gather'
+  kind: 'gather'
   player: 'player' | 'enemy'
+  /** 出廠集合格所屬的生產建築 id。 */
+  buildingId: number
   tile: { x: number; y: number }
 }
 

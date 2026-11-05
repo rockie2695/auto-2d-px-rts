@@ -2,8 +2,10 @@ import { create } from 'zustand'
 
 /** 地圖標記識別碼（與 render/hitTest 的 `MarkerRef` 結構相同；ui 層不 import render 執行期）。 */
 export interface UiMarkerRef {
-  readonly kind: 'rally' | 'gather'
+  readonly kind: 'gather'
   readonly player: 'player' | 'enemy'
+  /** 出廠集合格所屬的生產建築 id。 */
+  readonly buildingId: number
 }
 
 /** 選中的目標（Prompt 9.1：單位／建築；Prompt 10.17：地圖標記）。 */

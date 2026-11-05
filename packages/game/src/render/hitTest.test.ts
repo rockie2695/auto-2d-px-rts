@@ -187,12 +187,11 @@ describe('pickTarget（Prompt 9.1）', () => {
   })
 })
 
-describe('pickMarker（Prompt 10.17：點集結點／生產點）', () => {
+describe('pickMarker（Prompt 10.19：點出廠集合格）', () => {
   const markers: MarkerLike[] = [
-    { kind: 'rally', player: 'player', tile: { x: 4, y: 6 } },
-    { kind: 'gather', player: 'player', tile: { x: 6, y: 8 } },
-    { kind: 'rally', player: 'enemy', tile: { x: 20, y: 20 } },
-    { kind: 'gather', player: 'enemy', tile: { x: 22, y: 22 } },
+    { kind: 'gather', player: 'player', buildingId: 1, tile: { x: 4, y: 6 } },
+    { kind: 'gather', player: 'player', buildingId: 2, tile: { x: 6, y: 8 } },
+    { kind: 'gather', player: 'enemy', buildingId: 3, tile: { x: 20, y: 20 } },
   ]
 
   /** 格心世界 px。 */
@@ -201,20 +200,32 @@ describe('pickMarker（Prompt 10.17：點集結點／生產點）', () => {
     y: tile.y * TILE_SIZE + TILE_SIZE / 2,
   })
 
-  it('點在標記框內 → 回傳該標記識別碼', () => {
-    const rally = center({ x: 4, y: 6 })
-    expect(pickMarker(markers, rally.x, rally.y)).toEqual({ kind: 'rally', player: 'player' })
-    const gather = center({ x: 6, y: 8 })
-    expect(pickMarker(markers, gather.x, gather.y)).toEqual({ kind: 'gather', player: 'player' })
+  it('點在標記框內 → 回傳該標記識別碼（含 buildingId）', () => {
+    const first = center({ x: 4, y: 6 })
+    expect(pickMarker(markers, first.x, first.y)).toEqual({
+      kind: 'gather',
+      player: 'player',
+      buildingId: 1,
+    })
+    const second = center({ x: 6, y: 8 })
+    expect(pickMarker(markers, second.x, second.y)).toEqual({
+      kind: 'gather',
+      player: 'player',
+      buildingId: 2,
+    })
     const foe = center({ x: 20, y: 20 })
-    expect(pickMarker(markers, foe.x, foe.y)).toEqual({ kind: 'rally', player: 'enemy' })
+    expect(pickMarker(markers, foe.x, foe.y)).toEqual({
+      kind: 'gather',
+      player: 'enemy',
+      buildingId: 3,
+    })
   })
 
   it('點在標記框外 → null', () => {
-    const rally = center({ x: 4, y: 6 })
-    expect(pickMarker(markers, rally.x + 8, rally.y)).toBeNull() // 超出命中框半邊長 7
+    const first = center({ x: 4, y: 6 })
+    expect(pickMarker(markers, first.x + 8, first.y)).toBeNull() // 超出命中框半邊長 7
     expect(pickMarker(markers, 1200, 1200)).toBeNull()
-    expect(pickMarker([], rally.x, rally.y)).toBeNull()
+    expect(pickMarker([], first.x, first.y)).toBeNull()
   })
 })
 

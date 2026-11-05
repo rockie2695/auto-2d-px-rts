@@ -10,7 +10,31 @@ import {
   ENGAGE_POWER_RATIO,
   FOCUS_RADIUS_TILES,
 } from './tactics.ts'
-import type { Squad, TacticalPlan } from './tactics.ts'
+import type { Squad, SpawnPoint, TacticalPlan } from './tactics.ts'
+
+/** 最近一間生產建築的出廠集合格（平手取 buildingId 小者；Prompt 10.19）。 */
+function nearestSpawnTile(
+  spawns: readonly SpawnPoint[],
+  unitTile: TilePos,
+): { tile: TilePos; buildingId: number } | null {
+  let best:
+    | { tile: TilePos; buildingId: number; score: readonly [number, number] }
+    | null = null
+  for (const spawn of spawns) {
+    const score: readonly [number, number] = [
+      Math.abs(spawn.tile.x - unitTile.x) + Math.abs(spawn.tile.y - unitTile.y),
+      spawn.buildingId,
+    ]
+    if (
+      best === null ||
+      score[0] < best.score[0] ||
+      (score[0] === best.score[0] && score[1] < best.score[1])
+    ) {
+      best = { tile: spawn.tile, buildingId: spawn.buildingId, score }
+    }
+  }
+  return best === null ? null : { tile: best.tile, buildingId: best.buildingId }
+}
 
 /**
  * AI 微操層（SPEC §9.3，Prompt 8）：每 100ms（= 2 tick）對每個單位跑一次
@@ -38,7 +62,8 @@ import type { Squad, TacticalPlan } from './tactics.ts'
  *    attack／harass 任務同時對 `squad.targetBuildingId` 聚火。
  *    **攻城收尾（Prompt 10.18）**：目標是建築而隊形位／自身在射程外時，
  *    改往與佔地正交相鄰的**射程內**接近格——否則部隊站在射程外永遠打不到。
- * 4. 否則（新兵／尚未編隊）→ **待機**：回集結點。
+ * 4. 否則（新兵／尚未編隊）→ **待機**：前往最近一間生產建築的出廠集合格
+ *    （Prompt 10.19；無生產建築則集結點）。
  *
  * A\* 節流（SPEC §9.4「路徑每 500ms 重算」）：目的地未變且非重算 tick 時沿用現有
  * 路徑；`tick % MICRO_REPATH_TICKS === 0` 定期重算；目的地變化（風箏）立即重算。
@@ -324,6 +349,9 @@ export function computeMicroPlan(
     const squadIndex = squad === undefined ? null : squad.index
     const unitTile = tileOf(unit.x, unit.y)
     const atRally = unitTile.x === rally.x && unitTile.y === rally.y
+    // 出廠集合格（Prompt 10.19）：最近一間生產建築的集合格（平手取 buildingId 小者）；
+    // 沒有生產建築（spawns 空）→ 退回集結點。
+    const spawnAnchor = nearestSpawnTile(plan?.spawns ?? [], unitTile)
 
     // 1. 撤退：hp < retreatHpPct × maxHp（JSON）→ 移往集結點；射程內有敵人 →
     //    邊退邊打（保持最近射程內敵人為攻擊目標，每微操循環更新；移動仍朝集結點——
@@ -380,7 +408,7 @@ export function computeMicroPlan(
           near.distSq <=
             (rangeFixed + 2 * UNITS_PER_TILE) * (rangeFixed + 2 * UNITS_PER_TILE)
         if (nearbyEnemy && near !== null) {
-          const escape = kiteDest(world, playerId, unit, near.unit, plan?.gather ?? rally)
+          const escape = kiteDest(world, playerId, unit, near.unit, spawnAnchor?.tile ?? rally)
           decisions.push({
             unitId: unit.id,
             action: 'disengage',
@@ -535,16 +563,29 @@ export function computeMicroPlan(
       continue
     }
 
-    // 4. 待機：新兵／尚未編隊 → 前往**生產點**（Prompt 10.13；無則集結點）。
-    const gather = plan?.gather ?? rally
+    // 4. 待機：新兵／尚未編隊 → 前往**最近一間生產建築**的出廠集合格
+    //    （Prompt 10.19；無生產建築則集結點）。AI 再就近聚類編組。
+    const gather = spawnAnchor?.tile ?? rally
     const atGather = unitTile.x === gather.x && unitTile.y === gather.y
+    const buildingName =
+      spawnAnchor === null
+        ? ''
+        : world.buildings.find((candidate) => candidate.id === spawnAnchor.buildingId)?.defId ??
+          `#${spawnAnchor.buildingId}`
     decisions.push({
       unitId: unit.id,
       action: 'rally',
       squadIndex: null,
       moveDest: shouldIssueMove(world, unit, gather) ? { x: gather.x, y: gather.y } : null,
       attackTargetId: null,
-      reason: atGather ? '未編隊：在生產點待命' : '未編隊：前往生產點',
+      reason:
+        spawnAnchor === null
+          ? atGather
+            ? '未編隊：在集結點待命'
+            : '未編隊：前往集結點'
+          : atGather
+            ? `未編隊：在出廠集合格待命（${buildingName}）`
+            : `未編隊：前往出廠集合格（${buildingName}）`,
     })
   }
 
