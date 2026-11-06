@@ -6,6 +6,7 @@ const MISSION_LABEL: Record<string, string> = {
   defend: '守備',
   attack: '進攻',
   harass: '騷擾',
+  stage: '集結待戰',
   retreat: '撤退',
 }
 

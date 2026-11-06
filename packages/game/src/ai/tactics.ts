@@ -25,6 +25,14 @@ import type { PolicyValues } from './policy.ts'
  * - `attackCount = round(squadCount × aggression)`；`attackCount ≥ 2` 且隊數 ≥ 3 時
  *   其中 1 隊為 `harass`（打敵方經濟），其餘 `attack`，剩下的 `defend`。
  * - 進攻目標評分 = `建築value × 1/(敵方格威脅+1) × 1/(1+距離)`（價值高 × 防守弱 × 距離近）。
+ * - **攻擊波次門檻（Prompt 10.21，多點蓄兵）**：進攻／騷擾隊要過出擊門檻才前進——
+ *   `cohort 戰力×1e6 ≥ 守備戰力 milli × waveRatioMilli(policies)`
+ *   （`waveRatioMilli = round(lerp(550, 1100, clusterSpread))`，散兵快打 ↔ 集結總攻）
+ *   **且**合併交戰評估判殺得掉守軍（決定性優勢）。cohort＝重心最近蓄兵錨格
+ *   （各生產建築的出廠集合格，無生產建築→集結點）相同的進攻隊：同點蓄兵共享
+ *   門檻，不添油；成軍後**同一循環多路一起出擊**，各隊各自鎖定目標（不同 cohort
+ *   可同時打不同位置）。守衛 0 → 門檻自動為 0 → 全軍出擊（Prompt 10.18 不回退）。
+ *   已投入戰場（重心離目標 ≤ 8 格或上一循環在迎戰）不中途翻 stage，避免開打一半掉頭。
  * - **集結再攻（Prompt 10.7）**：成員鬆散（最遠成員離重心 > `REGROUP_DISTANCE_TILES`
  *   = 5 格）的攻擊隊先往「重心→目標」方向的集結點聚攏，到齊後才直接鎖定目標建築。
  * - **主動防禦（Prompt 10.6）**：敵軍進入我方建築守備半徑（`DEFENSE_RADIUS_TILES`
@@ -69,6 +77,27 @@ export const FOCUS_RADIUS_TILES = 8
  */
 export const ENGAGE_POWER_RATIO = 0.9
 
+/**
+ * 攻擊波次門檻（Prompt 10.21）：進攻／騷擾隊要**波次成形**才壓上
+ * `squad.power × 1e6 ≥ 守備戰力 milli × waveRatioMilli(policies)`。
+ * `clusterSpread` 決定波次風格：0（散兵快打）→ 550 milli（我方戰力達守備 55%
+ * 即可出擊）、1（集結總攻）→ 1100 milli（近乎全勝才壓上），中間線性內插。
+ */
+export const WAVE_RATIO_MIN_MILLI = 550
+export const WAVE_RATIO_MAX_MILLI = 1100
+
+/** 出擊波次比例（milli，Prompt 10.21）：由 `clusterSpread` 內插 550..1100。 */
+export function waveRatioMilli(policies: PolicyValues): number {
+  return Math.round(
+    WAVE_RATIO_MIN_MILLI + (WAVE_RATIO_MAX_MILLI - WAVE_RATIO_MIN_MILLI) * policies.clusterSpread,
+  )
+}
+
+/** 已投入戰場半徑（tile，Prompt 10.21）：重心離目標建築 ≤ 8 格或正在迎戰 → 不中途翻 stage。 */
+export const COMMITTED_RADIUS_TILES = 8
+
+const COMMITTED_RADIUS_SQUARED = COMMITTED_RADIUS_TILES * COMMITTED_RADIUS_TILES
+
 /** 接觸注意半徑（tile，Prompt 10.15 W1）：敵人進到小隊重心此半徑內算「接觸」。
  *  接觸本身不等于接戰——射程內照樣由模擬層自動接戰，AI 層只在接觸時做**重新評估**。 */
 export const CONTACT_NOTICE_RADIUS_TILES = 6
@@ -85,15 +114,15 @@ export const PINCER_STANDOFF_TILES = 3
 /** 最多幾支小隊響應夾擊（Prompt 10.15 W2）。 */
 export const PINCER_MAX_RESPONDERS = 2
 
-export type SquadMission = 'defend' | 'attack' | 'harass' | 'retreat'
+export type SquadMission = 'defend' | 'attack' | 'harass' | 'stage' | 'retreat'
 
 export interface Squad {
   index: number
   mission: SquadMission
   memberIds: number[]
-  /** 任務目標格（attack/harass = 目標建築旁可走格；defend = 集結點或攔截點；retreat = 集結點）。 */
+  /** 任務目標格（attack/harass = 目標建築旁可走格；defend = 集結點或攔截點；stage/retreat = 集結點）。 */
   target: TilePos
-  /** attack/harass 的目標建築 id；其餘為 null。 */
+  /** attack/harass 的目標建築 id；其餘（含 stage）為 null。 */
   targetBuildingId: number | null
   /** 隊伍有效戰力（Σ value × hp/maxHp，整數）。 */
   power: number
@@ -137,6 +166,8 @@ export interface TacticalPlan {
   /**
    * 集結點（**AI 內部**，不再顯示給玩家——Prompt 10.19）：無威脅＝W4 前移點、
    * 有威脅＝往受威脅建築方向壓近；守備隊站位／撤退目的地用，AI 依局面自動調整。
+   * 蓄兵（stage，Prompt 10.21）不在此會師——回各生產建築的蓄兵錨格（多點）；
+   * 無生產建築時才以本點充當單一蓄兵錨格。
    */
   rally: TilePos
   /**
@@ -500,9 +531,6 @@ export function spawnPoints(
   rally: TilePos,
   squads: readonly Squad[],
 ): SpawnPoint[] {
-  const mirrorOrder = playerId === 'enemy'
-  const mapPx = world.map.size * UNITS_PER_TILE
-
   // 主目標（正規化單位座標）：進攻／騷擾隊的目標建築 → 敵方 keep。
   let objectivePx: { x: number; y: number } | null = null
   const attacker = squads.find(
@@ -521,6 +549,36 @@ export function spawnPoints(
     )
     objectivePx = enemyKeep === undefined ? null : buildingCenter(enemyKeep)
   }
+  return spawnTilesFor(world, playerId, rally, objectivePx)
+}
+
+/**
+ * 蓄兵點（Prompt 10.21 B 版）：每間自家生產建築一個蓄兵錨格——
+ * 與出廠集合格同格，但**主目標固定為敵方主堡**（不依賴當下攻擊隊的目標，
+ * 與 squad 狀態解耦 → 每循環確定、鏡像對稱）。無生產建築 → 全部退回集結點
+ * （cohort key 自然合併成單一「全軍蓄兵點」）。
+ *
+ * stage 隊在此成結（cohort＝同錨格的 stage 隊共享門檻），成軍後同循環
+ * 多路一起出擊、各自鎖定目標。
+ */
+function stageSpawnPoints(world: World, playerId: PlayerId, rally: TilePos): SpawnPoint[] {
+  const enemyKeep = world.buildings.find(
+    (building) => building.player !== playerId && building.defId === 'keep' && building.hp > 0,
+  )
+  const objectivePx = enemyKeep === undefined ? null : buildingCenter(enemyKeep)
+  return spawnTilesFor(world, playerId, rally, objectivePx)
+}
+
+/** 出廠集合格逐建築計算（`objectivePx` 由呼叫端決定，鏡像規則見 `spawnPoints`）。 */
+function spawnTilesFor(
+  world: World,
+  playerId: PlayerId,
+  rally: TilePos,
+  objectivePx: { x: number; y: number } | null,
+): SpawnPoint[] {
+  const mirrorOrder = playerId === 'enemy'
+  const mapPx = world.map.size * UNITS_PER_TILE
+
   const mirrorPx = (point: { x: number; y: number }): { x: number; y: number } =>
     mirrorOrder ? { x: mapPx - point.x, y: mapPx - point.y } : point
   const objectiveC = objectivePx === null ? null : mirrorPx(objectivePx)
@@ -557,6 +615,33 @@ export function spawnPoints(
   }
   spawns.sort((a, b) => a.buildingId - b.buildingId)
   return spawns
+}
+
+/**
+ * 最近一個出廠集合格／蓄兵點（曼哈頓距離最近；平手取 buildingId 小者，
+ * Prompt 10.19 / 10.21）。曼哈頓距離在點鏡射下不變 → 紅藍選點對稱。
+ */
+export function nearestSpawnPoint(
+  spawns: readonly SpawnPoint[],
+  ownTile: TilePos,
+): { tile: TilePos; buildingId: number } | null {
+  let best:
+    | { tile: TilePos; buildingId: number; score: readonly [number, number] }
+    | null = null
+  for (const spawn of spawns) {
+    const score: readonly [number, number] = [
+      Math.abs(spawn.tile.x - ownTile.x) + Math.abs(spawn.tile.y - ownTile.y),
+      spawn.buildingId,
+    ]
+    if (
+      best === null ||
+      score[0] < best.score[0] ||
+      (score[0] === best.score[0] && score[1] < best.score[1])
+    ) {
+      best = { tile: spawn.tile, buildingId: spawn.buildingId, score }
+    }
+  }
+  return best === null ? null : { tile: best.tile, buildingId: best.buildingId }
 }
 
 /** 建築中心（固定點）。 */
@@ -693,6 +778,26 @@ function canKillGroup(
  * `previous`（Prompt 10.13）：前一循環的計畫——供編組 warm start 與遲滯，
  * 避免邊界單位每循環乒乓換隊（反覆切組＝原地發呆）。
  */
+/**
+ * 「px 均值取格」的鏡像安全版（Prompt 10.22）：小隊重心、接觸迎戰格等由單位
+ * px 平均值落格。紅方一律先在**正規化（藍方）座標**對均值取格、再鏡回實座標——
+ * 均值恰落在格邊界時，直接對紅方實座標 floor 會翻到錯邊的格（藍重心
+ * tile (17,16) ↔ 紅實座標取到 (14,15) 而非鏡像的 (14,15)… 一步之差），
+ * 之後的分隊／迎戰目標就像 fullMirrorProbe tick 310 實測那樣逐步分叉。
+ * canonical 路徑：紅 px 均值 → `mapPx − mean` → floor → `size−1` 鏡回 → 與藍方同格。
+ */
+function tileOfMeanPx(
+  mapSize: number,
+  mirrorOrder: boolean,
+  avgX: number,
+  avgY: number,
+): TilePos {
+  if (!mirrorOrder) return tileOf(avgX, avgY)
+  const mapPx = mapSize * UNITS_PER_TILE
+  const canonical = tileOf(mapPx - avgX, mapPx - avgY)
+  return { x: mapSize - 1 - canonical.x, y: mapSize - 1 - canonical.y }
+}
+
 export function computeTacticalPlan(
   world: World,
   playerId: PlayerId,
@@ -832,10 +937,47 @@ export function computeTacticalPlan(
       sumY += unit.y
     }
     const memberCount = Math.max(1, squad.memberIds.length)
-    squad.centroid = tileOf(sumX / memberCount, sumY / memberCount)
+    // 重心取格走 canonical 路徑（Prompt 10.22）：紅藍對鏡像均值同格 → 分隊與
+    // 後續迎戰目標互為鏡像（全場對鏡不破）。
+    squad.centroid = tileOfMeanPx(
+      world.map.size,
+      playerId === 'enemy',
+      sumX / memberCount,
+      sumY / memberCount,
+    )
   }
 
   // 進攻／騷擾目標。
+  // 蓄兵點（Prompt 10.21 B 版）：每間生產建築一個 stage 錨格——主目標固定敵方主堡，
+  // 與 squad 狀態解耦（每循環確定、鏡像對稱）。在目標分配迴圈前算好。
+  const stageSpawns = stageSpawnPoints(world, playerId, rally)
+  // 蓄兵 cohort（Prompt 10.21 B 版，多點蓄兵＋同時多路進攻）：各進攻隊以
+  // **重心最近蓄兵錨格**為 cohort 鍵（無生產建築 → 一律集結點 key）。
+  // 同錨位的攻擊隊**共享波次門檻**——cohort 總戰力過「目標守備 × waveRatio」
+  // 且合併殺得掉守軍才壓上；未成軍 → 全體轉 stage 在蓄兵點等支援。
+  // 單隊兵力上限（clusterSpread 決定 4..18）不再造成死鎖：新兵出廠先到同一
+  // 錨格會師、cohort 戰力持續成長，一旦成形**同循環多路一起出擊**（各隊
+  // 各自鎖定目標 → 不同 cohort／不同隊可同時打不同位置與不同目標）。
+  // 判定只看戰力比與錨格 → 紅藍在鏡像局面以同一公式各算，公平性不破。
+  // （cohort 覆蓋單隊判定：cohort 戰力 ≥ 任一成員隊、成員集包含隊員集 →
+  // cohort 過門檻 ⇔ 至少採取最寬判定，不會卡死強隊。）
+  const anchorKey = (tile: TilePos): string => {
+    const anchor = nearestSpawnPoint(stageSpawns, tile)
+    return anchor === null ? 'rally' : `b${anchor.buildingId}`
+  }
+  const cohorts = new Map<string, { power: number; memberIds: number[] }>()
+  for (const squad of squads) {
+    if (squad.mission !== 'attack' && squad.mission !== 'harass') continue
+    const key = anchorKey(squad.centroid)
+    let cohort = cohorts.get(key)
+    if (cohort === undefined) {
+      cohort = { power: 0, memberIds: [] }
+      cohorts.set(key, cohort)
+    }
+    cohort.power += squad.power
+    cohort.memberIds.push(...squad.memberIds)
+  }
+
   for (const squad of squads) {
     if (squad.mission !== 'attack' && squad.mission !== 'harass') continue
     let candidates = enemyTargets(world, playerId, squad.mission === 'harass')
@@ -868,19 +1010,55 @@ export function computeTacticalPlan(
     }
     squad.targetBuildingId = target.id
 
-    // 交戰評估（Prompt 10.8）：目標處守軍殺不掉 → 降級等待支援。
-    // attack 打不贏 → 轉 harass（改打敵方經濟）；harass 也打不贏 → 轉 defend（守家等兵）。
+    // 攻擊波次門檻（Prompt 10.21）：未投入戰場的進攻／騷擾隊要等波次成形才壓上——
+    // 我方戰力 ≥ 目標守備戰力 × waveRatio（clusterSpread 決定：散兵快打 ↔ 集結總攻），
+    // 且交戰評估判殺得掉守軍（決定性優勢）。兩者未齊 → 轉 stage「集結待戰」：
+    // 回集結點會師（就近聚類自然合流），等支援成軍，不再一味添油進攻。
+    // 守衛 0（defense.powerMilli = 0）→ 門檻自動為 0 → 全軍出擊（Prompt 10.18 不回退）；
+    // 已投入戰場（重心貼近目標 ≤ COMMITTED_RADIUS_TILES 格，或上一循環在迎戰）不中途翻
+    // stage——開打一半掉頭比輸掉更糟；劣勢時照 Prompt 10.8 降級鏈處理。
     const defense = defendersNear(world, playerId, center)
-    if (
-      !canKillGroup(
+    const killable = canKillGroup(
+      world,
+      unitById,
+      squad.memberIds,
+      squad.power * 1000,
+      defense.powerMilli,
+      defense.enemies,
+    )
+    const targetTile = tileOf(center.x, center.y)
+    const committed =
+      squad.engaging === true ||
+      (squad.centroid.x - targetTile.x) ** 2 + (squad.centroid.y - targetTile.y) ** 2 <=
+        COMMITTED_RADIUS_SQUARED
+    if (!committed) {
+      // 以 cohort 總戰力過門檻（同錨位進攻隊共享波次；無同錨位隊時即自身戰力）。
+      const cohort = cohorts.get(anchorKey(squad.centroid))
+      const cohortPower = cohort?.power ?? squad.power
+      const cohortMembers = cohort?.memberIds ?? squad.memberIds
+      const gateMet = cohortPower * 1000 * 1000 >= defense.powerMilli * waveRatioMilli(policies)
+      const killableCohort = canKillGroup(
         world,
         unitById,
-        squad.memberIds,
-        squad.power * 1000,
+        cohortMembers,
+        cohortPower * 1000,
         defense.powerMilli,
         defense.enemies,
       )
-    ) {
+      if (!gateMet || !killableCohort) {
+        // 轉 stage「集結待戰」：回**最近一間生產建築的蓄兵點**成結（Prompt 10.21 B 版，
+        // 無生產建築 → 集結點）。同錨格的進攻隊共享門檻，總戰力成形後
+        // 同一循環多路一起出擊。
+        squad.mission = 'stage'
+        squad.target =
+          nearestSpawnPoint(stageSpawns, squad.centroid)?.tile ?? { x: rally.x, y: rally.y }
+        squad.targetBuildingId = null
+        squad.engaging = false
+        continue
+      }
+    } else if (!killable) {
+      // 交戰評估（Prompt 10.8）：目標處守軍殺不掉 → 降級等待支援。
+      // attack 打不贏 → 轉 harass（改打敵方經濟）；harass 也打不贏 → 轉 defend（守家等兵）。
       if (squad.mission === 'attack') {
         const econCandidates = enemyTargets(world, playerId, true).filter(
           (candidate) => candidate.id !== target.id,
@@ -920,8 +1098,8 @@ export function computeTacticalPlan(
   // 主動防禦（Prompt 10.6）：敵軍進入守備半徑（DEFENSE_RADIUS_TILES）→ 攔截。
   // - 受威脅建築（平手時優先水晶礦場）旁的來襲敵軍重心成為守備隊的攔截目標——
   //   保護建築與水晶收入，而不是窩在集結點等敵人打上門。
-  // - 全軍出擊（沒有守備隊）時：把離受威脅建築最近的一支攻擊／騷擾隊拉回守備；
-  //   retreat 隊不拉（已在撤）。（threat 已於函式開頭偵測，集結點選點共用。）
+  // - 全軍出擊（沒有守備隊）時：把離受威脅建築最近的一支攻擊／騷擾／集結待戰隊拉回
+  //   守備；retreat 隊不拉（已在撤）。（threat 已於函式開頭偵測，集結點選點共用。）
   if (threat !== null) {
     const intercept =
       nearestWalkable(world, threat.centroid, playerId === 'enemy') ?? { x: rally.x, y: rally.y }
@@ -930,7 +1108,7 @@ export function computeTacticalPlan(
       let closest: Squad | null = null
       let closestDistance = Number.POSITIVE_INFINITY
       for (const squad of squads) {
-        if (squad.mission !== 'attack' && squad.mission !== 'harass') continue
+        if (squad.mission === 'defend' || squad.mission === 'retreat') continue
         const dx = squad.centroid.x - threat.buildingCenterTile.x
         const dy = squad.centroid.y - threat.buildingCenterTile.y
         const distance = dx * dx + dy * dy
@@ -1037,7 +1215,13 @@ export function computeTacticalPlan(
     const known = contact.known[squad.index] ?? []
     const knownIds = new Set(known)
     const newIds = seen.filter((enemy) => !knownIds.has(enemy.id))
-    const enemyTile = tileOf(sumX / seen.length, sumY / seen.length)
+    // 迎戰目標格（敵群重心）同樣走 canonical 路徑（Prompt 10.22）。
+    const enemyTile = tileOfMeanPx(
+      world.map.size,
+      playerId === 'enemy',
+      sumX / seen.length,
+      sumY / seen.length,
+    )
     contact.known[squad.index] = seen.map((enemy) => enemy.id)
     contactBySquad.set(squad.index, { enemies: seen, powerMilli: contactPower, tile: enemyTile })
 

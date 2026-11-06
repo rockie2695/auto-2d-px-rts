@@ -4,37 +4,14 @@ import { orderMove } from '../sim/world.ts'
 import type { PlayerId, TilePos, Unit, World } from '../sim/types.ts'
 import { enemyThreatAtPoint, unitThreatMilli } from './influence.ts'
 import {
+  nearestSpawnPoint,
   nearestWalkable,
   rallyPoint,
   siegeApproachTile,
   ENGAGE_POWER_RATIO,
   FOCUS_RADIUS_TILES,
 } from './tactics.ts'
-import type { Squad, SpawnPoint, TacticalPlan } from './tactics.ts'
-
-/** 最近一間生產建築的出廠集合格（平手取 buildingId 小者；Prompt 10.19）。 */
-function nearestSpawnTile(
-  spawns: readonly SpawnPoint[],
-  unitTile: TilePos,
-): { tile: TilePos; buildingId: number } | null {
-  let best:
-    | { tile: TilePos; buildingId: number; score: readonly [number, number] }
-    | null = null
-  for (const spawn of spawns) {
-    const score: readonly [number, number] = [
-      Math.abs(spawn.tile.x - unitTile.x) + Math.abs(spawn.tile.y - unitTile.y),
-      spawn.buildingId,
-    ]
-    if (
-      best === null ||
-      score[0] < best.score[0] ||
-      (score[0] === best.score[0] && score[1] < best.score[1])
-    ) {
-      best = { tile: spawn.tile, buildingId: spawn.buildingId, score }
-    }
-  }
-  return best === null ? null : { tile: best.tile, buildingId: best.buildingId }
-}
+import type { Squad, TacticalPlan } from './tactics.ts'
 
 /**
  * AI 微操層（SPEC §9.3，Prompt 8）：每 100ms（= 2 tick）對每個單位跑一次
@@ -93,12 +70,12 @@ export const CHASE_SUPPORT_RADIUS_TILES = 4
 export const SAFE_RETREAT_RADIUS_TILES = 8
 
 /**
- * 殘血門檻（Prompt 10.13，HP 撤退分級）：
- * `hp < 10%` → **一律回家**（避免被一刀撿頭）；
- * `10% ≤ hp < retreatHpPct`（單位 JSON，現 0.5）→ **只在附近敵威脅 > 自身戰力 × 0.9** 時撤退；
+ * 殘血門檻（Prompt 10.13，HP 撤退分級；Prompt 10.21 調 0.1 → 0.2 保守保命）：
+ * `hp < 20%` → **一律回家**（避免被一刀撿頭）；
+ * `20% ≤ hp < retreatHpPct`（單位 JSON，現 0.5）→ **只在附近敵威脅 > 自身戰力 × 0.9** 時撤退；
  * 以上 → 正常作戰（半血但優勢時不退）。
  */
-export const CRITICAL_HP_PCT = 0.1
+export const CRITICAL_HP_PCT = 0.2
 
 export type MicroAction =
   | 'retreat'
@@ -146,8 +123,26 @@ function distanceSquared(ax: number, ay: number, bx: number, by: number): number
 
 /** 是否該重下移動令：閒置、目的地變更，或到 500ms 重算點。
  *  已站上目的地且路徑結束 → 不再重下（省 A*，杜絕「原地反覆下令」）。 */
+/** 單一 px 的鏡像安全取格（Prompt 10.22）：紅方先在正規化（藍方）座標取格再鏡回
+ *  實座標——單位／敵人 px 恰停在格邊界（200 的倍數）時，直接對紅方實座標 floor
+ *  會翻到錯邊的格（藍 tile 10 ↔ 紅應為 21 卻得 22），使紅藍的 AI 決策（追擊
+ *  目的地、風箏反向、集結錨選擇）差一格。回傳的格＝鏡射一致的格：藍方等於
+ *  `tileOf(x, y)`，紅方等於 `31 − tileOf(mapPx − x, mapPx − y)` 的鏡像。 */
+function mirrorTileOf(
+  world: World,
+  playerId: PlayerId,
+  x: number,
+  y: number,
+): TilePos {
+  if (playerId !== 'enemy') return tileOf(x, y)
+  const size = world.map.size
+  const mapPx = size * UNITS_PER_TILE
+  const canonical = tileOf(mapPx - x, mapPx - y)
+  return { x: size - 1 - canonical.x, y: size - 1 - canonical.y }
+}
+
 function shouldIssueMove(world: World, unit: Unit, dest: TilePos): boolean {
-  const tile = tileOf(unit.x, unit.y)
+  const tile = mirrorTileOf(world, unit.player, unit.x, unit.y)
   if (tile.x === dest.x && tile.y === dest.y && unit.path === null) return false
   if (unit.path === null && unit.dest === null) return true
   if (unit.dest === null || unit.dest.x !== dest.x || unit.dest.y !== dest.y) return true
@@ -253,8 +248,8 @@ function kiteDest(
   enemy: Unit,
   rally: TilePos,
 ): TilePos {
-  const from = tileOf(unit.x, unit.y)
-  const enemyTile = tileOf(enemy.x, enemy.y)
+  const from = mirrorTileOf(world, playerId, unit.x, unit.y)
+  const enemyTile = mirrorTileOf(world, playerId, enemy.x, enemy.y)
   const dx = Math.sign(from.x - enemyTile.x)
   const dy = Math.sign(from.y - enemyTile.y)
   const step = 2
@@ -347,11 +342,11 @@ export function computeMicroPlan(
     if (def === undefined) continue
     const squad = squadByUnit.get(unit.id)
     const squadIndex = squad === undefined ? null : squad.index
-    const unitTile = tileOf(unit.x, unit.y)
+    const unitTile = mirrorTileOf(world, playerId, unit.x, unit.y)
     const atRally = unitTile.x === rally.x && unitTile.y === rally.y
     // 出廠集合格（Prompt 10.19）：最近一間生產建築的集合格（平手取 buildingId 小者）；
     // 沒有生產建築（spawns 空）→ 退回集結點。
-    const spawnAnchor = nearestSpawnTile(plan?.spawns ?? [], unitTile)
+    const spawnAnchor = nearestSpawnPoint(plan?.spawns ?? [], unitTile)
 
     // 1. 撤退：hp < retreatHpPct × maxHp（JSON）→ 移往集結點；射程內有敵人 →
     //    邊退邊打（保持最近射程內敵人為攻擊目標，每微操循環更新；移動仍朝集結點——
@@ -367,7 +362,7 @@ export function computeMicroPlan(
       const near = nearestEnemy(world, unit)
       const threatened = near !== null && near.distSq <= safeLimit * safeLimit
       // 分級（Prompt 10.13）：
-      // 1) 殘血 < 10%：一律回家（不被一刀撿頭）。
+      // 1) 殘血 < 20%：一律回家（不被一刀撿頭）。
       const critical = hpFraction < CRITICAL_HP_PCT
       // 2) 10% ≤ hp < retreatHpPct（JSON 0.5）：附近敵威脅 > 自身戰力 × 0.9 才退
       //    （還打得贏就繼續；保留「附近無敵不撤退」的安全距離）。
@@ -495,7 +490,7 @@ export function computeMicroPlan(
           }
         }
         if (supported) {
-          const enemyTile = tileOf(near.unit.x, near.unit.y)
+          const enemyTile = mirrorTileOf(world, playerId, near.unit.x, near.unit.y)
           decisions.push({
             unitId: unit.id,
             action: 'chase',

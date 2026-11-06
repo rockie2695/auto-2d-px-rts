@@ -76,7 +76,7 @@ describe('組合根 getUnitInfo / getBattleStats（Prompt 9.5）', () => {
     expect(stats.enemyUnits).toBeGreaterThan(0)
     expect(stats.squads.length).toBeGreaterThan(0)
     for (const squad of stats.squads) {
-      expect(squad.mission).toMatch(/defend|attack|harass|retreat/)
+      expect(squad.mission).toMatch(/defend|attack|harass|stage|retreat/)
       expect(squad.memberCount).toBeGreaterThan(0)
       expect(Number.isFinite(squad.distTiles)).toBe(true)
     }
@@ -90,7 +90,7 @@ describe('組合根 getUnitInfo / getBattleStats（Prompt 9.5）', () => {
     const info = findSquadMemberUnit(session)
     expect(info).not.toBeNull()
     if (info !== null) {
-      expect(info.squadMission).toMatch(/defend|attack|harass|retreat/)
+      expect(info.squadMission).toMatch(/defend|attack|harass|stage|retreat/)
       expect(info.decision !== null && info.decision.length > 0).toBe(true)
       // Prompt 10.13：單位資訊附射程與移動速度。
       expect(info.rangeTiles).toBeGreaterThan(0)

@@ -55,8 +55,18 @@ const SIEGE = makeUnitDef({
   ai: { value: 100, preferredRange: 0.5, retreatHpPct: 0.2 },
 })
 
+/** 中傷帶寬（retreatHpPct 0.5）：HP 撤退分級測試用（20–50% 打不贏才退）。
+ *  預設 def 的 retreatHpPct 是 0.2，與 Prompt 10.21 調整後的
+ *  `CRITICAL_HP_PCT = 0.2` 重疊 → 中傷帶為空；此 def 撐出 20–50% 帶。 */
+const MID = makeUnitDef({
+  id: 'mid',
+  role: 'melee',
+  stats: { hp: 100, dmg: 10, range: 0.8, attackSpeed: 1.0, moveSpeed: 1.0 },
+  ai: { value: 100, preferredRange: 0.8, retreatHpPct: 0.5 },
+})
+
 function microWorld(): World {
-  return createTestWorld({ size: 32, units: [MELEE, ARCHER, SIEGE], buildings: [] })
+  return createTestWorld({ size: 32, units: [MELEE, ARCHER, SIEGE, MID], buildings: [] })
 }
 
 /** 手工組一個戰術計畫（微操測試精準控制小隊與集結點）。 */
@@ -244,7 +254,7 @@ describe('撤退（Prompt 8 / Prompt 10 邊退邊打）', () => {
     putUnit(world, 'enemy', 'melee', { x: 15, y: 10 }) // 距 5 格：射程外
     const hurt = world.units.find((unit) => unit.id === hurtId)
     if (hurt === undefined) throw new Error('找不到受傷單位')
-    hurt.hp = 8 // 殘血 < 10%：一律撤退
+    hurt.hp = 8 // 殘血 < 20%：一律撤退
 
     const rally: TilePos = { x: 2, y: 2 }
     const plan = planWith(world, rally, [makeSquad(0, [hurtId], { x: 20, y: 20 })])
@@ -255,7 +265,7 @@ describe('撤退（Prompt 8 / Prompt 10 邊退邊打）', () => {
     expect(decision?.reason).not.toContain('邊退邊打')
   })
 
-  it('HP 撤退分級（Prompt 10.13）：殘血 < 10% 一律退；10–50% 打不贏才退、打得贏繼續', () => {
+  it('HP 撤退分級（Prompt 10.13，10.21 調門檻 20%）：殘血 < 20% 一律退；20–50% 打不贏才退、打得贏繼續', () => {
     // 殘血 8%：附近的敵人再遠也一律回家。
     const worldA = microWorld()
     const criticalId = putUnit(worldA, 'player', 'melee', { x: 10, y: 10 })
@@ -267,20 +277,20 @@ describe('撤退（Prompt 8 / Prompt 10 邊退邊打）', () => {
     expect(critical?.action).toBe('retreat')
     expect(critical?.reason).toContain('殘血')
 
-    // 中傷 15% + 敵人很遠（威脅 < 自身戰力 × 0.9）→ 繼續作戰（不退）。
+    // 中傷 30%（20–50% 帶）＋ 敵人很遠（威脅 < 自身戰力 × 0.9）→ 繼續作戰（不退）。
     const worldB = microWorld()
-    const midId = putUnit(worldB, 'player', 'melee', { x: 10, y: 10 })
+    const midId = putUnit(worldB, 'player', 'mid', { x: 10, y: 10 })
     putUnit(worldB, 'enemy', 'melee', { x: 16, y: 10 }) // 距 6 格：威脅遠低於自身
     const midUnit = worldB.units.find((unit) => unit.id === midId)
     if (midUnit === undefined) throw new Error('找不到單位')
-    midUnit.hp = 15
+    midUnit.hp = 30
     const planB = planWith(worldB, { x: 2, y: 2 }, [makeSquad(0, [midId], { x: 20, y: 20 })])
     const mid = computeMicroPlan(worldB, 'player', planB).find((d) => d.unitId === midId)
     expect(mid?.action).not.toBe('retreat')
 
-    // 中傷 15% + 大量敵軍貼身（威脅 > 自身戰力 × 0.9）→ 撤退。
+    // 中傷 30% (20–50% 帶) + 大量敵軍貼身（威脅 > 自身戰力 × 0.9）→ 撤退。
     const worldC = microWorld()
-    const weakId = putUnit(worldC, 'player', 'melee', { x: 10, y: 10 })
+    const weakId = putUnit(worldC, 'player', 'mid', { x: 10, y: 10 })
     for (const tile of [
       { x: 10, y: 10 },
       { x: 11, y: 10 },
@@ -291,7 +301,7 @@ describe('撤退（Prompt 8 / Prompt 10 邊退邊打）', () => {
     }
     const weakUnit = worldC.units.find((unit) => unit.id === weakId)
     if (weakUnit === undefined) throw new Error('找不到單位')
-    weakUnit.hp = 15
+    weakUnit.hp = 25
     const planC = planWith(worldC, { x: 2, y: 2 }, [makeSquad(0, [weakId], { x: 20, y: 20 })])
     const weak = computeMicroPlan(worldC, 'player', planC).find((d) => d.unitId === weakId)
     expect(weak?.action).toBe('retreat')
@@ -370,7 +380,7 @@ describe('撤退（Prompt 8 / Prompt 10 邊退邊打）', () => {
     putUnit(world, 'enemy', 'melee', { x: 11, y: 10 }) // 附近有敵 → 觸發撤退
     const hurt = world.units.find((unit) => unit.id === hurtId)
     if (hurt === undefined) throw new Error('找不到受傷單位')
-    hurt.hp = 8 // 殘血 < 10%：一律撤退
+    hurt.hp = 8 // 殘血 < 20%：一律撤退
 
     const rally: TilePos = { x: 2, y: 2 }
     const plan = planWith(world, rally, [makeSquad(0, [hurtId], { x: 20, y: 20 })])
@@ -385,7 +395,7 @@ describe('撤退（Prompt 8 / Prompt 10 邊退邊打）', () => {
     const lonelyId = putUnit(lonelyWorld, 'player', 'melee', { x: 10, y: 10 })
     const lonely = lonelyWorld.units.find((unit) => unit.id === lonelyId)
     if (lonely === undefined) throw new Error('找不到受傷單位')
-    lonely.hp = 15
+    lonely.hp = 30
     const lonelyPlan = planWith(lonelyWorld, { x: 2, y: 2 }, [makeSquad(0, [lonelyId], { x: 20, y: 20 })])
     const lonelyDecision = computeMicroPlan(lonelyWorld, 'player', lonelyPlan).find(
       (d) => d.unitId === lonelyId,

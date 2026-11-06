@@ -345,6 +345,10 @@ export async function startGameSession(app: Application, scene: GameScene): Prom
   /** 戰術任務變動的原因句（規則式、確定性）。 */
   const missionChangeReason = (playerId: PlayerId, from: Squad['mission'], to: Squad['mission']): string => {
     if (to === 'retreat') return '戰力處於劣勢'
+    if (to === 'stage') {
+      // 攻擊波次門檻（Prompt 10.21）沒過 → 回集結點會師，等支援成軍再出擊。
+      return '戰力未達出擊門檻，集結待戰'
+    }
     if (to === 'harass') {
       // attack → harass 可能是交戰評估降級（打不贏轉騷擾等支援，Prompt 10.8）。
       if (from === 'attack') return '戰力不足以正面交戰，轉為騷擾等待支援'

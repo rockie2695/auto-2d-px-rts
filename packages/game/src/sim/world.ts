@@ -291,35 +291,59 @@ function placeMirroredOpening(world: World, playerId: PlayerId): void {
 
 /**
  * 移動命令：以 A\* 規劃路徑（SPEC §9.4）。
- * 敵方單位使用**鏡像鄰居序**（Prompt 10.9/10.11）——鏡射起訖走出互為鏡像的路徑。
  * 失敗（無路徑）回傳 false。
+ *
+ * 鏡像對稱（Prompt 10.22 修，取代 Prompt 10.11 的鏡像鄰居序）：
+ * 紅方**全程在正規化（藍方）座標跑 A\***——起點由正規化 px 取格、終點與
+ * 可走格謂詞先鏡射、算出的路徑鏡回實座標。若直接以實座標取格，單位 px 恰停
+ * **格邊界**時 `tileOf` 會翻到錯邊的格（藍 (10,28) 佔 px 2000；紅鏡像 px 4400
+ * 卻佔 (22,3) 而非鏡像格 (21,3)）→ 兩側 A\* 起點不同步、路徑長度分叉
+ * （fullMirrorProbe 實測 tick 200 B7/R8 path 11 vs 12 的根因）。
+ * canonical 空間單一公式：藍紅對鏡像局面做**同一查詢**、得**同一 canonical 路徑**
+ * → 鄰居序無需鏡像分支（`mirrorOrder` 保留給直接呼叫 `findPath` 的測試/工具）。
  */
 export function orderMove(world: World, unitId: number, dest: TilePos): boolean {
   const unit = world.units.find((candidate) => candidate.id === unitId)
   if (unit === undefined) return false
-  const start = tileOf(unit.x, unit.y)
+  const size = world.map.size
+  const enemy = unit.player === 'enemy'
+  const mapPx = size * UNITS_PER_TILE
+  // 正規化（藍方）座標：紅方先以 tile 鏡射再算（`N-1-x` 格鏡像，非 px 絕對值）——
+  // 單位 px 恰停格邊界時 px 層鏡像會翻錯邊（藍 (10,28) ↔ 紅應為 (21,3)，px 絕對值
+  // 鏡算得 (22,3)），故統一在**格座標**鏡射、最後才轉回實座標。
+  const toCanonTile = (tile: TilePos): TilePos =>
+    enemy ? { x: size - 1 - tile.x, y: size - 1 - tile.y } : tile
+  // 正規化（藍方）座標：紅方的**起點**由正規化 px 取格（先鏡 px 再 floor）——
+  // 單位 px 恰停在**格邊界**時 `tileOf` 於鏡射側會翻到錯邊的格（藍佔 (10,28)、
+  // px 2000；紅鏡像 px 4400 直接取格得 (22,3)，而鏡射格應為 (21,3)）→ 藍紅
+  // canonical 起點差一、A* 路徑長度分叉（fullMirrorProbe tick 200 path 11 vs 12）。
+  // 先鏡 px 再取格，兩側得到**同一格**（紅 px 4400 → canonical px 2000 → 格 (10,28)）
+  // → 對鏡局面做同一查詢、走同一路徑。終點是格座標，直接用格鏡射。
+  const canonPx = enemy
+    ? { x: mapPx - unit.x, y: mapPx - unit.y }
+    : { x: unit.x, y: unit.y }
+  const canonStart = tileOf(canonPx.x, canonPx.y)
+  const canonGoal = toCanonTile(dest)
+  const toTrueTile = (tile: TilePos): TilePos => toCanonTile(tile)
+
   // 等價路徑抽選鹽（Prompt 10.14）：以**正規化（藍方座標）起點＋tick＋比賽種子**
-  // 雜湊——鏡射查詢同值（公平性不破）、跨種子抽出不同但等價的路徑（種子活化）。
-  const canonical =
-    unit.player === 'enemy'
-      ? { x: world.map.size - 1 - start.x, y: world.map.size - 1 - start.y }
-      : start
+  // 雜湊——canonical 空間下兩側輸入相同 → 同值同路徑（公平性不破）、跨種子
+  // 抽出不同但等價的路徑（種子活化）。
   const path = findPath(
     {
-      size: world.map.size,
-      walkable: (tile) => !isBlockedAt(world, tile),
-      mirrorOrder: unit.player === 'enemy',
-      tieBreakSalt: hashFate(world.seed, canonical.x, canonical.y, world.tick),
+      size,
+      walkable: (tile) => !isBlockedAt(world, toTrueTile(tile)),
+      tieBreakSalt: hashFate(world.seed, canonStart.x, canonStart.y, world.tick),
     },
-    start,
-    dest,
+    canonStart,
+    canonGoal,
   )
   if (path === null) {
     unit.path = null
     unit.dest = null
     return false
   }
-  unit.path = path
+  unit.path = path.map(toTrueTile)
   unit.dest = { x: dest.x, y: dest.y }
   return true
 }

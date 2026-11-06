@@ -14,6 +14,7 @@ import {
   RETREAT_POWER_RATIO,
   squadSizing,
   TACTICAL_INTERVAL_TICKS,
+  waveRatioMilli,
 } from './tactics.ts'
 import type { TacticalPlan } from './tactics.ts'
 import { MICRO_INTERVAL_TICKS, runMicroCycle } from './micro.ts'
@@ -556,21 +557,167 @@ describe('交戰評估（打不贏就騷擾／守家，Prompt 10.8）', () => {
     }
   })
 
-  it('attack 打不贏守軍 → 降級 harass 打敵方經濟（等待支援）', () => {
-    const world = worldWithBases()
-    const econMine = addBuilding(world, 'enemy', 'mine', { x: 24, y: 24 }, { built: true, nodeId: null })
-    putUnit(world, 'player', 'u', { x: 4, y: 4 }) // 1 兵 vs 敵 keep 旁 3 守軍
-    for (const tile of [{ x: 26, y: 26 }, { x: 27, y: 26 }, { x: 26, y: 27 }]) {
-      putUnit(world, 'enemy', 'u', tile)
+  it('已投入戰場（貼近目標）的攻擊隊打不贏 → 降級 harass（不中途翻 stage，Prompt 10.8）', () => {
+    const RAIDER = makeUnitDef({ id: 'raider', role: 'ranged' })
+    const world = createTestWorld({ size: 32, units: [UNIT, RAIDER], buildings: [KEEP, MINE] })
+    addBuilding(world, 'player', 'keep', { x: 2, y: 2 }, { built: true, nodeId: null })
+    const econMine = addBuilding(world, 'enemy', 'mine', { x: 20, y: 20 }, { built: true, nodeId: null })
+    addBuilding(world, 'enemy', 'keep', { x: 28, y: 28 }, { built: true, nodeId: null })
+    // 敵主堡守軍 = 全遠程 raider（近戰殺不掉）。我方 6 兵聚攏在 (24,24)：
+    // 重心離主堡重心 (29,29) 約 7 格 ≤ 8 → 視為已投入戰場，跳過波次門檻，
+    // 走 10.8 降級鏈（攻不動 → 改打敵方經濟），不翻 stage 開打一半掉頭。
+    for (const tile of [
+      { x: 23, y: 24 },
+      { x: 24, y: 23 },
+      { x: 24, y: 24 },
+      { x: 24, y: 25 },
+      { x: 25, y: 24 },
+      { x: 25, y: 25 },
+    ]) {
+      putUnit(world, 'player', 'u', tile)
     }
-    // 敵礦場旁 2 守軍（第一目標評分仍選 keep，評估後降級改打礦場）。
-    putUnit(world, 'enemy', 'u', { x: 25, y: 24 })
-    putUnit(world, 'enemy', 'u', { x: 24, y: 25 })
+    // 守軍全部在小隊重心 6 格（接觸注意半徑）**之外** → 不觸發接觸重評估覆寫目標。
+    for (const tile of [{ x: 30, y: 28 }, { x: 31, y: 28 }, { x: 31, y: 29 }]) {
+      putUnit(world, 'enemy', 'raider', tile)
+    }
+    // 敵礦場旁 2 守軍（第一目標評分仍選高價值主堡，評估後降級改打礦場）。
+    putUnit(world, 'enemy', 'u', { x: 18, y: 19 })
+    putUnit(world, 'enemy', 'u', { x: 19, y: 18 })
 
     const plan = computeTacticalPlan(world, 'player', resolvePolicies({ aggression: 1, clusterSpread: 1 }))
     const squad = plan.squads[0]
     expect(squad?.mission).toBe('harass')
     expect(squad?.targetBuildingId).toBe(econMine.id) // 改打敵方經濟（水晶）
+  })
+
+  it('未達攻擊波次門檻（無生產建築）→ stage 集結待戰（退回集結點錨，Prompt 10.21）', () => {
+    const world = worldWithBases()
+    putUnit(world, 'player', 'u', { x: 6, y: 6 }) // 1 兵 vs 主堡守軍 3 名：門檻不過、非決定性
+    for (const tile of [{ x: 26, y: 26 }, { x: 27, y: 26 }, { x: 26, y: 27 }]) {
+      putUnit(world, 'enemy', 'u', tile)
+    }
+
+    const plan = computeTacticalPlan(world, 'player', resolvePolicies({ aggression: 1, clusterSpread: 1 }))
+    const squad = plan.squads[0]
+    expect(squad?.mission).toBe('stage')
+    expect(squad?.target).toEqual(plan.rally) // 無生產建築 → 集結點即蓄兵錨
+    expect(squad?.targetBuildingId).toBeNull()
+  })
+
+  it('多點蓄兵：stage 隊回最近生產建築的蓄兵錨格（不湧回單一集結點，Prompt 10.21 B 版）', () => {
+    const world = worldWithSpawns()
+    // 敵主堡守軍 5 名 → 2 兵過不了門檻也殺不掉 → stage。
+    for (const tile of [
+      { x: 26, y: 26 },
+      { x: 27, y: 26 },
+      { x: 26, y: 27 },
+      { x: 27, y: 27 },
+      { x: 25, y: 26 },
+    ]) {
+      putUnit(world, 'enemy', 'u', tile)
+    }
+    // 新兵在自家兵營（6,2）附近出爐。
+    putUnit(world, 'player', 'u', { x: 5, y: 5 })
+    putUnit(world, 'player', 'u', { x: 5, y: 6 })
+
+    const plan = computeTacticalPlan(world, 'player', resolvePolicies({ aggression: 1, clusterSpread: 1 }))
+    const squad = plan.squads[0]
+    expect(squad?.mission).toBe('stage')
+    // 自家產生單位的建築只有兵營 → 蓄兵錨 = 兵營的出廠集合格（非集結點）。
+    expect(plan.spawns).toHaveLength(1)
+    expect(squad?.target).toEqual(plan.spawns[0]?.tile)
+    expect(squad?.target).not.toEqual(plan.rally)
+  })
+
+  it('蓄兵 cohort 共享門檻：個別隊殺不掉、合軍成軍 → 同循環全部出擊（消單隊上限死鎖）', () => {
+    const world = worldWithBases()
+    // 12 個我方新兵（clusterSpread 0 → 單隊上限 4 → 拆成多支 3~4 兵小隊）。
+    for (let index = 0; index < 12; index++) {
+      putUnit(world, 'player', 'u', { x: 4 + (index % 3), y: 4 + Math.floor(index / 3) })
+    }
+    // 敵主堡守軍 12 名：個別 3~4 兵隊殺不掉；cohort 12 兵（≥ 0.9 × 12 守）成軍 → 全部出擊。
+    for (const tile of [
+      { x: 26, y: 26 },
+      { x: 27, y: 26 },
+      { x: 26, y: 27 },
+      { x: 27, y: 27 },
+      { x: 25, y: 26 },
+      { x: 25, y: 27 },
+      { x: 25, y: 25 },
+      { x: 26, y: 25 },
+      { x: 25, y: 24 },
+      { x: 26, y: 24 },
+      { x: 27, y: 24 },
+      { x: 27, y: 25 },
+    ]) {
+      putUnit(world, 'enemy', 'u', tile)
+    }
+
+    const plan = computeTacticalPlan(world, 'player', resolvePolicies({ aggression: 1, clusterSpread: 0 }))
+    expect(plan.squads.length).toBeGreaterThanOrEqual(3)
+    for (const squad of plan.squads) {
+      expect(squad.mission).toBe('attack')
+      expect(squad.targetBuildingId).not.toBeNull()
+    }
+  })
+
+  it('cohort 未成軍 → 多支小隊全部 stage 在同一蓄兵錨（等支援，不添油）', () => {
+    const world = worldWithBases()
+    for (let index = 0; index < 6; index++) {
+      putUnit(world, 'player', 'u', { x: 4 + (index % 3), y: 4 + Math.floor(index / 3) })
+    }
+    // 敵主堡守軍 18 名：6 兵 cohort 仍殺不掉（0.9 × 18 > 6）→ 全體 stage 等支援。
+    for (const tile of [
+      { x: 26, y: 26 },
+      { x: 27, y: 26 },
+      { x: 26, y: 27 },
+      { x: 27, y: 27 },
+      { x: 25, y: 26 },
+      { x: 25, y: 27 },
+      { x: 25, y: 25 },
+      { x: 26, y: 25 },
+      { x: 25, y: 24 },
+      { x: 26, y: 24 },
+      { x: 27, y: 24 },
+      { x: 27, y: 25 },
+      { x: 25, y: 28 },
+      { x: 26, y: 28 },
+      { x: 25, y: 29 },
+      { x: 26, y: 29 },
+      { x: 27, y: 28 },
+      { x: 27, y: 29 },
+    ]) {
+      putUnit(world, 'enemy', 'u', tile)
+    }
+
+    const plan = computeTacticalPlan(world, 'player', resolvePolicies({ aggression: 1, clusterSpread: 0 }))
+    expect(plan.squads.length).toBeGreaterThanOrEqual(2)
+    for (const squad of plan.squads) {
+      expect(squad.mission).toBe('stage')
+      expect(squad.target).toEqual(plan.rally) // 無生產建築 → 集結點即蓄兵錨
+      expect(squad.targetBuildingId).toBeNull()
+    }
+  })
+
+  it('波次門檻公式（Prompt 10.21）：clusterSpread 內插 550..1100 milli', () => {
+    expect(waveRatioMilli(resolvePolicies({ clusterSpread: 0 }))).toBe(550)
+    expect(waveRatioMilli(resolvePolicies({ clusterSpread: 0.5 }))).toBe(825)
+    expect(waveRatioMilli(resolvePolicies({ clusterSpread: 1 }))).toBe(1100)
+  })
+
+  it('戰力過波次門檻且殺得掉守軍 → 正常進攻（不 stage）', () => {
+    const world = worldWithBases()
+    for (let index = 0; index < 6; index++) {
+      putUnit(world, 'player', 'u', { x: 4 + (index % 3), y: 4 + Math.floor(index / 3) })
+    }
+    for (const tile of [{ x: 26, y: 26 }, { x: 27, y: 26 }, { x: 26, y: 27 }]) {
+      putUnit(world, 'enemy', 'u', tile)
+    }
+
+    const plan = computeTacticalPlan(world, 'player', resolvePolicies({ aggression: 1, clusterSpread: 1 }))
+    const squad = plan.squads[0]
+    expect(squad?.mission).toBe('attack')
+    expect(squad?.targetBuildingId).not.toBeNull()
   })
 })
 
