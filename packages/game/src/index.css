@@ -211,6 +211,61 @@ body,
   margin-bottom: 2px;
 }
 
+/* 陣營色帶（Prompt 10.20）：藍＝我方、紅＝敵方（與小隊列表同色板）。 */
+.decision-log li.actor-player {
+  border-left: 3px solid #7ec7ff;
+  padding-left: 4px;
+}
+
+.decision-log li.actor-enemy {
+  border-left: 3px solid #ff9f7a;
+  padding-left: 4px;
+}
+
+/* 篩選片（Prompt 10.20）：同排小按鈕，選中者加深。 */
+.decision-log-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 4px;
+}
+
+.decision-log-chip {
+  padding: 1px 6px;
+  border: 1px solid #3a4657;
+  border-radius: 3px;
+  background: #1b2130;
+  color: #9aa5b1;
+  font-size: 11px;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.decision-log-chip:hover {
+  border-color: #55637a;
+}
+
+.decision-log-chip.active {
+  border-color: #7ec7ff;
+  color: #e8eef7;
+}
+
+.decision-log-chip.team-player.active {
+  border-color: #7ec7ff;
+}
+
+.decision-log-chip.team-enemy.active {
+  border-color: #ff9f7a;
+}
+
+.decision-log-chip-sep {
+  width: 1px;
+  height: 12px;
+  margin: 0 2px;
+  background: #3a4657;
+}
+
 .decision-log-time {
   color: #6f8ecf;
   margin-right: 4px;

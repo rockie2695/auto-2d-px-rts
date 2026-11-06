@@ -181,6 +181,79 @@ describe('DecisionLogPanel（左下）', () => {
     expect(layerLabel('tactical')).toBe('戰術')
     expect(layerLabel('policy')).toBe('政策')
   })
+
+  it('陣營色帶（Prompt 10.20）：藍列 actor-player、紅列 actor-enemy', () => {
+    const entries: DecisionLogEntry[] = [
+      { ...logEntry(1, 20, '藍方決策', 'strategic'), actor: 'player' },
+      { ...logEntry(2, 40, '紅方決策', 'strategic'), actor: 'enemy' },
+    ]
+    const container = render(<DecisionLogPanel entries={entries} />)
+    const items = container.querySelectorAll('ol.decision-log li')
+    expect(items[0]?.className).toContain('actor-enemy') // 新的在上（紅）
+    expect(items[1]?.className).toContain('actor-player')
+  })
+
+  it('篩選片（Prompt 10.20）：先篩選再取 20 條；陣營 × 層級可組合', () => {
+    const entries: DecisionLogEntry[] = []
+    for (let index = 1; index <= 25; index++) {
+      const actor = index % 2 === 0 ? 'player' : 'enemy'
+      entries.push({
+        ...logEntry(index, index * 20, `決策 ${index}`, index % 3 === 0 ? 'tactical' : 'strategic'),
+        actor,
+      })
+    }
+    const container = render(<DecisionLogPanel entries={entries} />)
+
+    // 藍：25 條中 12 條（偶數 index）全顯示（未滿 20）。
+    act(() => {
+      ;(container.querySelector('[data-testid="decision-log-chip-team-player"]') as HTMLButtonElement).click()
+    })
+    let items = container.querySelectorAll('ol.decision-log li')
+    expect(items.length).toBe(12)
+    expect(Array.from(items).every((item) => item.className.includes('actor-player'))).toBe(true)
+
+    // 藍 × 戰略：12 條藍中非 3 的倍數者 → 8 條。
+    act(() => {
+      ;(container.querySelector('[data-testid="decision-log-chip-layer-strategic"]') as HTMLButtonElement).click()
+    })
+    items = container.querySelectorAll('ol.decision-log li')
+    expect(items.length).toBe(8)
+
+    // 紅 × 戰術：紅為奇數 index、戰術為 3 的倍數 → 4 條。
+    act(() => {
+      ;(container.querySelector('[data-testid="decision-log-chip-team-all"]') as HTMLButtonElement).click()
+      ;(container.querySelector('[data-testid="decision-log-chip-team-enemy"]') as HTMLButtonElement).click()
+      ;(container.querySelector('[data-testid="decision-log-chip-layer-tactical"]') as HTMLButtonElement).click()
+    })
+    items = container.querySelectorAll('ol.decision-log li')
+    expect(items.length).toBe(4)
+    expect(items[0]?.textContent).toContain('決策 21') // 最新（紅 × 戰術：3,9,15,21）
+  })
+
+  it('篩選後仍只顯示最近 20 條（先篩選再切片）', () => {
+    const entries: DecisionLogEntry[] = []
+    for (let index = 1; index <= 30; index++) {
+      entries.push({ ...logEntry(index, index * 20, `紅決策 ${index}`, 'strategic'), actor: 'enemy' })
+    }
+    const container = render(<DecisionLogPanel entries={entries} />)
+    act(() => {
+      ;(container.querySelector('[data-testid="decision-log-chip-team-enemy"]') as HTMLButtonElement).click()
+    })
+    const items = container.querySelectorAll('ol.decision-log li')
+    expect(items.length).toBe(20)
+    expect(items[0]?.textContent).toContain('紅決策 30')
+    expect(items[19]?.textContent).toContain('紅決策 11') // 第 10 條被淘汰
+  })
+
+  it('篩選無結果 → 尚未有決策', () => {
+    const entries: DecisionLogEntry[] = [logEntry(1, 20, '藍方決策', 'strategic')]
+    const container = render(<DecisionLogPanel entries={entries} />)
+    act(() => {
+      ;(container.querySelector('[data-testid="decision-log-chip-team-enemy"]') as HTMLButtonElement).click()
+    })
+    expect(container.querySelector('ol.decision-log')).toBeNull()
+    expect(textOf(container)).toContain('尚未有決策')
+  })
 })
 
 /* ---------- 小隊狀態 ---------- */
