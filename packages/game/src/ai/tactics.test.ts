@@ -13,6 +13,13 @@ import {
   REGROUP_DISTANCE_TILES,
   RETREAT_POWER_RATIO,
   squadSizing,
+  SUDDEN_DEATH_HARD_TICK,
+  SUDDEN_DEATH_PHASE_WINDOW_TICKS,
+  SUDDEN_DEATH_START_TICK,
+  SUDDEN_DEATH_STEP_TICKS,
+  suddenDeathMultiplierMilli,
+  suddenDeathPhaseTicks,
+  suddenDeathStage,
   TACTICAL_INTERVAL_TICKS,
   waveRatioMilli,
 } from './tactics.ts'
@@ -718,6 +725,120 @@ describe('交戰評估（打不贏就騷擾／守家，Prompt 10.8）', () => {
     const squad = plan.squads[0]
     expect(squad?.mission).toBe('attack')
     expect(squad?.targetBuildingId).not.toBeNull()
+  })
+})
+
+describe('突變期（Prompt 10.23：對稱局的確定破局壓力）', () => {
+  it('階段邊界：7199 none ／ 7200 ramp ／ 10799 ramp ／ 10800 allin', () => {
+    expect(suddenDeathStage(SUDDEN_DEATH_START_TICK - 1)).toBe('none')
+    expect(suddenDeathStage(SUDDEN_DEATH_START_TICK)).toBe('ramp')
+    expect(suddenDeathStage(SUDDEN_DEATH_HARD_TICK - 1)).toBe('ramp')
+    expect(suddenDeathStage(SUDDEN_DEATH_HARD_TICK)).toBe('allin')
+  })
+
+  it('門檻乘數遞減：1000 → 750 → 563 → 422（每 1200 tick ×0.75，全整數 milli）', () => {
+    expect(suddenDeathMultiplierMilli(SUDDEN_DEATH_START_TICK - 1)).toBe(1000)
+    expect(suddenDeathMultiplierMilli(SUDDEN_DEATH_START_TICK)).toBe(750)
+    expect(suddenDeathMultiplierMilli(SUDDEN_DEATH_START_TICK + SUDDEN_DEATH_STEP_TICKS - 1)).toBe(750)
+    expect(suddenDeathMultiplierMilli(SUDDEN_DEATH_START_TICK + SUDDEN_DEATH_STEP_TICKS)).toBe(563)
+    expect(suddenDeathMultiplierMilli(SUDDEN_DEATH_START_TICK + 2 * SUDDEN_DEATH_STEP_TICKS)).toBe(422)
+    expect(suddenDeathMultiplierMilli(12000)).toBe(422) // 封頂（硬期限由 stage 停用接手）
+  })
+
+  it('門檻遞減破局（Prompt 10.23）：同戰力未成軍隊跨該陣營 ramp 相位出擊、相前一 tick 仍 stage', () => {
+    // 1 攻擊兵（戰力 100 = 100000 milli）vs 敵主堡旁 1 守軍（100000 milli）：
+    // clusterSpread 1 → 門檻 1100 milli 需戰力×1.1 —— 相位前一 tick 未過 → stage；
+    // 相位 tick 起乘數 ×0.75 → 門檻 825 milli —— 100000 ≥ 100000×0.825 → attack
+    // （且殺得掉守軍：100000 ≥ 100000×0.9）。相位由 hashFate(種子×7200×陣營) 抽出。
+    const build = () => {
+      const world = worldWithBases()
+      putUnit(world, 'player', 'u', { x: 4, y: 4 })
+      putUnit(world, 'enemy', 'u', { x: 26, y: 26 })
+      return world
+    }
+    const policies = resolvePolicies({ aggression: 1, clusterSpread: 1 })
+
+    const before = build()
+    before.tick = SUDDEN_DEATH_START_TICK - 1
+    const beforePlan = computeTacticalPlan(before, 'player', policies)
+    expect(beforePlan.squads[0]?.mission).toBe('stage')
+
+    const amp = suddenDeathPhaseTicks(before.seed, SUDDEN_DEATH_START_TICK, 'player')
+    expect(amp).toBeGreaterThanOrEqual(0)
+    expect(amp).toBeLessThan(SUDDEN_DEATH_PHASE_WINDOW_TICKS)
+    const started = build()
+    started.tick = SUDDEN_DEATH_START_TICK + amp
+    const startedPlan = computeTacticalPlan(started, 'player', policies)
+    expect(startedPlan.squads[0]?.mission).toBe('attack')
+    expect(startedPlan.squads[0]?.targetBuildingId).not.toBeNull()
+  })
+
+  it('破局相位差（Prompt 10.23）：hashFate 抽籤——同種子必同值、窗內、跨陣營可不同', () => {
+    const seed = 42
+    const blue = suddenDeathPhaseTicks(seed, SUDDEN_DEATH_START_TICK, 'player')
+    const red = suddenDeathPhaseTicks(seed, SUDDEN_DEATH_START_TICK, 'enemy')
+    expect(suddenDeathPhaseTicks(seed, SUDDEN_DEATH_START_TICK, 'player')).toBe(blue) // 確定
+    expect(suddenDeathPhaseTicks(seed, SUDDEN_DEATH_HARD_TICK, 'player')).toBe(
+      suddenDeathPhaseTicks(seed, SUDDEN_DEATH_HARD_TICK, 'player'),
+    )
+    expect(blue).toBeGreaterThanOrEqual(0)
+    expect(red).toBeLessThan(SUDDEN_DEATH_PHASE_WINDOW_TICKS)
+    // 至少一個錨點上兩陣相位不同（否則破局失效——hashFate avalanche 保證常見）。
+    const differingAnchors =
+      (suddenDeathPhaseTicks(seed, SUDDEN_DEATH_START_TICK, 'player') !==
+        suddenDeathPhaseTicks(seed, SUDDEN_DEATH_START_TICK, 'enemy') ? 1 : 0) +
+      (suddenDeathPhaseTicks(seed, SUDDEN_DEATH_HARD_TICK, 'player') !==
+        suddenDeathPhaseTicks(seed, SUDDEN_DEATH_HARD_TICK, 'enemy') ? 1 : 0)
+    expect(differingAnchors).toBeGreaterThanOrEqual(1)
+  })
+
+  it('硬期限（按本陣營 hard 相位）：stage 停用——未成軍隊不再轉蓄兵、全軍壓上', () => {
+    // 6 兵 vs 敵主堡 18 守軍：任何乘數都過不了「殺得掉守軍」→ 7199 全體 stage；
+    // 硬期限後 gate 與殺傷評估全跳過（未 committed）→ 各隊 attack。
+    const build = () => {
+      const world = worldWithBases()
+      for (let index = 0; index < 6; index++) {
+        putUnit(world, 'player', 'u', { x: 4 + (index % 3), y: 4 + Math.floor(index / 3) })
+      }
+      for (const tile of [
+        { x: 26, y: 26 },
+        { x: 27, y: 26 },
+        { x: 26, y: 27 },
+        { x: 27, y: 27 },
+        { x: 25, y: 26 },
+        { x: 25, y: 27 },
+        { x: 25, y: 25 },
+        { x: 26, y: 25 },
+        { x: 25, y: 24 },
+        { x: 26, y: 24 },
+        { x: 27, y: 24 },
+        { x: 27, y: 25 },
+        { x: 25, y: 28 },
+        { x: 26, y: 28 },
+        { x: 25, y: 29 },
+        { x: 26, y: 29 },
+        { x: 27, y: 28 },
+        { x: 27, y: 29 },
+      ]) {
+        putUnit(world, 'enemy', 'u', tile)
+      }
+      return world
+    }
+    const policies = resolvePolicies({ aggression: 1, clusterSpread: 0 })
+
+    const before = build()
+    before.tick = SUDDEN_DEATH_START_TICK - 1
+    const beforePlan = computeTacticalPlan(before, 'player', policies)
+    expect(beforePlan.squads.length).toBeGreaterThanOrEqual(2)
+    for (const squad of beforePlan.squads) expect(squad.mission).toBe('stage')
+
+    const deadline = build()
+    deadline.tick = SUDDEN_DEATH_HARD_TICK + suddenDeathPhaseTicks(deadline.seed, SUDDEN_DEATH_HARD_TICK, 'player')
+    const deadlinePlan = computeTacticalPlan(deadline, 'player', policies)
+    for (const squad of deadlinePlan.squads) {
+      expect(squad.mission).toBe('attack')
+      expect(squad.targetBuildingId).not.toBeNull()
+    }
   })
 })
 

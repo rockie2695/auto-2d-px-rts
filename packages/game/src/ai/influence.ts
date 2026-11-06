@@ -1,5 +1,6 @@
 import { UNITS_PER_TILE } from '../sim/types.ts'
 import type { PlayerId, TilePos, World } from '../sim/types.ts'
+import { mirrorSafeTileOf } from './mirrorTile.ts'
 
 /**
  * 影響力地圖（SPEC §9.2，Prompt 7）：把 32×32 地圖切成 8×8 tile 的粗格子
@@ -124,6 +125,10 @@ export function detectBuildingThreats(world: World, playerId: PlayerId): Buildin
   const radiusFixed = DEFENSE_RADIUS_TILES * UNITS_PER_TILE
   const limit = radiusFixed * radiusFixed
   const threats: BuildingThreat[] = []
+  // 取格一律走鏡像安全路徑（Prompt 10.23 擴及全 AI 層）：偶數尺寸建築（barracks/
+  // tower 2×2）的中心 px 恰停**格邊界**，紅方直接 floor 會翻錯邊 → 威脅中心
+  // （攔截點／集結點）紅藍差一格、fullMirrorProbe 分叉。由正規化格鏡射而來 → 對稱。
+  const mirrorOrder = playerId === 'enemy'
 
   for (const building of world.buildings) {
     if (building.player !== playerId || building.hp <= 0) continue
@@ -151,16 +156,20 @@ export function detectBuildingThreats(world: World, playerId: PlayerId): Buildin
     threats.push({
       buildingId: building.id,
       buildingDefId: building.defId,
-      buildingCenterTile: {
-        x: Math.floor(centerX / UNITS_PER_TILE),
-        y: Math.floor(centerY / UNITS_PER_TILE),
-      },
+      buildingCenterTile: mirrorSafeTileOf(
+        world.map.size,
+        mirrorOrder,
+        centerX,
+        centerY,
+      ),
       isEconomic: world.defs.buildings[building.defId]?.requiresResourceNode === true,
       threatPower,
-      centroid: {
-        x: Math.floor(sumX / enemyIds.length / UNITS_PER_TILE),
-        y: Math.floor(sumY / enemyIds.length / UNITS_PER_TILE),
-      },
+      centroid: mirrorSafeTileOf(
+        world.map.size,
+        mirrorOrder,
+        sumX / enemyIds.length,
+        sumY / enemyIds.length,
+      ),
       enemyIds: [...enemyIds].sort((a, b) => a - b),
     })
   }

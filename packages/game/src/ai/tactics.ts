@@ -1,5 +1,7 @@
 import { getPlayer, isBlockedAt, isConstructed, tileOf, UNITS_PER_TILE } from '../sim/types.ts'
 import type { Building, PlayerId, TilePos, Unit, World } from '../sim/types.ts'
+import { hashFate } from '../sim/rng.ts'
+import { mirrorSafeTileOf } from './mirrorTile.ts'
 import { computeInfluenceMap, DEFENSE_RADIUS_TILES, enemyThreatAtPoint, enemyThreatAtTile, pickMostUrgentThreat, unitThreatMilli } from './influence.ts'
 import type { BuildingThreat, InfluenceMap } from './influence.ts'
 import { clampSlider } from './policy.ts'
@@ -33,6 +35,8 @@ import type { PolicyValues } from './policy.ts'
  *   門檻，不添油；成軍後**同一循環多路一起出擊**，各隊各自鎖定目標（不同 cohort
  *   可同時打不同位置）。守衛 0 → 門檻自動為 0 → 全軍出擊（Prompt 10.18 不回退）。
  *   已投入戰場（重心離目標 ≤ 8 格或上一循環在迎戰）不中途翻 stage，避免開打一半掉頭。
+ * - **突變期（Prompt 10.23）**：`tick ≥ 7200` 出兵門檻逐檔 ×0.75 遞減、`tick ≥ 10800`
+ *   stage 停用全軍出擊——對稱局的確定破局壓力（見 `SUDDEN_DEATH_*` 常數處的註）。
  * - **集結再攻（Prompt 10.7）**：成員鬆散（最遠成員離重心 > `REGROUP_DISTANCE_TILES`
  *   = 5 格）的攻擊隊先往「重心→目標」方向的集結點聚攏，到齊後才直接鎖定目標建築。
  * - **主動防禦（Prompt 10.6）**：敵軍進入我方建築守備半徑（`DEFENSE_RADIUS_TILES`
@@ -97,6 +101,80 @@ export function waveRatioMilli(policies: PolicyValues): number {
 export const COMMITTED_RADIUS_TILES = 8
 
 const COMMITTED_RADIUS_SQUARED = COMMITTED_RADIUS_TILES * COMMITTED_RADIUS_TILES
+
+/**
+ * 突變期（Prompt 10.23）：對稱局的**確定破局機制**——鏡像決策逐格一致（Prompt
+ * 10.22）後，完美對鏡會僵持到超時；實測（24 種子）perfectly-mirrored 交戰
+ * 逐對同 tick 互滅，平局是鏡像自戰的數學必然。兩件套破局：
+ * - **門檻遞進**：`tick ≥ 7200`（剩 4 分鐘）起每 1200 tick `waveRatioMilli ×
+ *   乘數`（1000→750→563→422）遞減——把壓著的兵力投出去；
+ * - **硬期限**：`tick ≥ 10800` stage 停用、全軍出擊（committed／10.8 降級鏈不變）。
+ * - **破局相位差**：若兩陣同 tick 同規則，交戰仍是鏡像互滅 → 不破局。因此
+ *   各陣營以 `hashFate(種子，錨點，陣營)` **獨立抽 0..1200 tick 的啟動相位**，
+ *   門檻遞減與硬期限按 `tick − 相位` 評估（`suddenDeathPhaseTicks`）——紅藍
+ *   同分布（無偏側）但通常錯開 → 非對稱首接觸 → 集火 id 平手裁決級聯破局。
+ *   同種子可復現；7200 前鏡像探針仍 0 mismatch（相位尚未生效）。
+ * 交戰一接觸，既有集火／id 平手裁決把局面撕開、勝者滾雪球；超時兜底為
+ * 總價值裁定（`matchSideValue`，session.ts）。
+ */
+
+/** 突變期起點（tick；12000 上限剩 4 分鐘）。 */
+export const SUDDEN_DEATH_START_TICK = 7200
+
+/** 門檻乘數遞減步距（tick）。 */
+export const SUDDEN_DEATH_STEP_TICKS = 1200
+
+/** 突變期硬期限（tick）：stage 停用、全軍出擊。 */
+export const SUDDEN_DEATH_HARD_TICK = 10800
+
+/** 每步的門檻乘數（milli；×0.75）。 */
+export const SUDDEN_DEATH_DECAY_MILLI = 750
+
+/** 突變期階段：`none` 未開始、`ramp` 門檻遞減中、`allin` 硬期限全軍出擊。 */
+export type SuddenDeathStage = 'none' | 'ramp' | 'allin'
+
+/**
+ * 破局相位窗（tick，Prompt 10.23）：突變期**各陣營獨立**抽 0..窗−1 的啟動相位差。
+ * 兩邊抽同一分布（hashFate 對種子×錨點×陣營 avalanche，無偏側），但完美鏡像
+ * 的紅藍通常相位不同 → 出兵門檻遞減／硬期限全軍出擊在實際 tick 上錯開 →
+ * 非對稱首接觸 → 集火 id 平手裁決級聯破局。昇冪鏡像自戰恆平局的破局噪聲。
+ */
+export const SUDDEN_DEATH_PHASE_WINDOW_TICKS = 1200
+
+/**
+ * 陣營的突變期啟動相位差（0..窗−1 tick）：`hashFate(種子，錨點，陣營)` 決定。
+ * 同種子同陣營必同值（確定性可復現）；錨點分 `ramp` 與 `allin` 兩处——
+ * 呼叫端以 `SUDDEN_DEATH_START_TICK`／`SUDDEN_DEATH_HARD_TICK` 作錨點分別抽籤。
+ */
+export function suddenDeathPhaseTicks(
+  seed: number,
+  anchorTick: number,
+  playerId: PlayerId,
+): number {
+  return Math.floor(
+    hashFate(seed, anchorTick, playerId === 'enemy' ? 1 : 0) * SUDDEN_DEATH_PHASE_WINDOW_TICKS,
+  )
+}
+
+/** 目前 tick 的突變期階段（`phaseTicks` 為該陣營抽到的啟動相位差，預設 0）。 */
+export function suddenDeathStage(tick: number, phaseTicks = 0): SuddenDeathStage {
+  if (tick < SUDDEN_DEATH_START_TICK + phaseTicks) return 'none'
+  return tick >= SUDDEN_DEATH_HARD_TICK + phaseTicks ? 'allin' : 'ramp'
+}
+
+/** 出兵門檻乘數（milli；未開始 = 1000，銳減至 422 封頂——硬期限由 stage 停用接手）。 */
+export function suddenDeathMultiplierMilli(tick: number, phaseTicks = 0): number {
+  if (tick < SUDDEN_DEATH_START_TICK + phaseTicks) return 1000
+  const steps = Math.min(
+    Math.floor((tick - SUDDEN_DEATH_START_TICK - phaseTicks) / SUDDEN_DEATH_STEP_TICKS) + 1,
+    3,
+  )
+  let milli = 1000
+  for (let index = 0; index < steps; index += 1) {
+    milli = Math.round((milli * SUDDEN_DEATH_DECAY_MILLI) / 1000)
+  }
+  return milli
+}
 
 /** 接觸注意半徑（tile，Prompt 10.15 W1）：敵人進到小隊重心此半徑內算「接觸」。
  *  接觸本身不等于接戰——射程內照樣由模擬層自動接戰，AI 層只在接觸時做**重新評估**。 */
@@ -436,12 +514,23 @@ export function rallyPoint(
   }
 
   // 有威脅 → 覆寫：由預設點再往受威脅建築方向前移到中點（防守儲備更靠近前線）。
+  // 中點一律在 **canonical（藍方）座標**內計算再鏡回（Prompt 10.23 鏡像修復）：
+  // `staging`（紅方已是實座標）與 `threat.buildingCenterTile`（鏡像安全取格的
+  // 實座標）若直接在實座標取中點，座標和為奇數時 `Math.round` 半數進位會破壞
+  // 鏡像等式（藍 round(s)=k ↔ 紅應 31−k 卻得 31−k+1）→ 紅藍集結點差一格、
+  // fullMirrorProbe 在 tick 1352 分叉。canonical 化後兩邊的捨入輸入完全相同。
   if (threat === null) return staging
-  const forward: TilePos = {
-    x: Math.round((staging.x + threat.buildingCenterTile.x) / 2),
-    y: Math.round((staging.y + threat.buildingCenterTile.y) / 2),
+  const last = world.map.size - 1
+  // 鏡射是對合（self-inverse）：canonical 化與鏡回是同一個映射。
+  const mirrorTile = (tile: TilePos): TilePos =>
+    mirrorOrder ? { x: last - tile.x, y: last - tile.y } : tile
+  const stagingC = mirrorTile(staging)
+  const threatC = mirrorTile(threat.buildingCenterTile)
+  const forwardC: TilePos = {
+    x: Math.round((stagingC.x + threatC.x) / 2),
+    y: Math.round((stagingC.y + threatC.y) / 2),
   }
-  return nearestWalkable(world, forward, mirrorOrder) ?? staging
+  return nearestWalkable(world, mirrorTile(forwardC), mirrorOrder) ?? staging
 }
 
 /**
@@ -659,9 +748,13 @@ function scoreTarget(value: number, threatMilli: number, distanceTiles: number):
   return value * defense * proximity
 }
 
-/** 從候選建築挑最高分者（平手取陣列中較前者，即 id 較小者）。 */
+/** 從候選建築挑最高分者（平手取陣列中較前者，即 id 較小者）。
+ *  威脅格由建築中心 px 落格——走鏡像安全路徑（Prompt 10.23）：偶數尺寸建築
+ *  （barracks/tower 2×2）的中心 px 恰停**格邊界**，紅方直接 floor 翻錯邊會讓
+ *  影響力查表取錯格 → 目標分數分叉 → 選中不同建築。 */
 function pickTarget(
   world: World,
+  playerId: PlayerId,
   influence: InfluenceMap,
   from: { x: number; y: number },
   candidates: readonly Building[],
@@ -674,7 +767,7 @@ function pickTarget(
     const dx = center.x - from.x
     const dy = center.y - from.y
     const distanceTiles = Math.sqrt(dx * dx + dy * dy) / UNITS_PER_TILE
-    const tile = tileOf(center.x, center.y)
+    const tile = mirrorSafeTileOf(world.map.size, playerId === 'enemy', center.x, center.y)
     const score = scoreTarget(value, enemyThreatAtTile(influence, tile), distanceTiles)
     if (score > bestScore) {
       bestScore = score
@@ -792,10 +885,7 @@ function tileOfMeanPx(
   avgX: number,
   avgY: number,
 ): TilePos {
-  if (!mirrorOrder) return tileOf(avgX, avgY)
-  const mapPx = mapSize * UNITS_PER_TILE
-  const canonical = tileOf(mapPx - avgX, mapPx - avgY)
-  return { x: mapSize - 1 - canonical.x, y: mapSize - 1 - canonical.y }
+  return mirrorSafeTileOf(mapSize, mirrorOrder, avgX, avgY)
 }
 
 export function computeTacticalPlan(
@@ -951,6 +1041,11 @@ export function computeTacticalPlan(
   // 蓄兵點（Prompt 10.21 B 版）：每間生產建築一個 stage 錨格——主目標固定敵方主堡，
   // 與 squad 狀態解耦（每循環確定、鏡像對稱）。在目標分配迴圈前算好。
   const stageSpawns = stageSpawnPoints(world, playerId, rally)
+  // 破局相位差（Prompt 10.23）：該陣營在突變期的兩段啟動相位（hashFate 各自抽籤——
+  // ramp 錨於起點、allin 錨於硬期限，兩陣通常不同）→ 門檻遞減／硬期限在實際
+  // tick 上錯開 → 非對稱首接觸破局。
+  const rampPhase = suddenDeathPhaseTicks(world.seed, SUDDEN_DEATH_START_TICK, playerId)
+  const hardPhase = suddenDeathPhaseTicks(world.seed, SUDDEN_DEATH_HARD_TICK, playerId)
   // 蓄兵 cohort（Prompt 10.21 B 版，多點蓄兵＋同時多路進攻）：各進攻隊以
   // **重心最近蓄兵錨格**為 cohort 鍵（無生產建築 → 一律集結點 key）。
   // 同錨位的攻擊隊**共享波次門檻**——cohort 總戰力過「目標守備 × waveRatio」
@@ -990,7 +1085,7 @@ export function computeTacticalPlan(
       x: squad.centroid.x * UNITS_PER_TILE + UNITS_PER_TILE / 2,
       y: squad.centroid.y * UNITS_PER_TILE + UNITS_PER_TILE / 2,
     }
-    const target = pickTarget(world, influence, centroidFixed, candidates)
+    const target = pickTarget(world, playerId, influence, centroidFixed, candidates)
     if (target === null) {
       // 沒有可攻擊目標 → 轉為守備，避免空轉。
       squad.mission = 'defend'
@@ -1002,7 +1097,14 @@ export function computeTacticalPlan(
     // 攻城接近格（Prompt 10.18）：優先取**射程內**的正交鄰格；退回中心附近搜尋。
     const approach =
       siegeApproachTile(world, playerId, target, squad.centroid) ??
-      nearestWalkable(world, tileOf(center.x, center.y), playerId === 'enemy')
+      nearestWalkable(
+        world,
+        // 建築中心 px 的 fallback 取格走鏡像安全路徑（Prompt 10.23）——
+        // 偶數尺寸建築（barracks/tower 2×2）的中心 px 必停格邊界，紅方直接
+        // floor 翻錯邊 → 攻城接近格紅藍差一格、fullMirrorProbe 分叉。
+        mirrorSafeTileOf(world.map.size, playerId === 'enemy', center.x, center.y),
+        playerId === 'enemy',
+      )
     if (approach === null) {
       squad.mission = 'defend'
       squad.targetBuildingId = null
@@ -1017,6 +1119,7 @@ export function computeTacticalPlan(
     // 守衛 0（defense.powerMilli = 0）→ 門檻自動為 0 → 全軍出擊（Prompt 10.18 不回退）；
     // 已投入戰場（重心貼近目標 ≤ COMMITTED_RADIUS_TILES 格，或上一循環在迎戰）不中途翻
     // stage——開打一半掉頭比輸掉更糟；劣勢時照 Prompt 10.8 降級鏈處理。
+    // 突變期（Prompt 10.23）：門檻乘 suddenDeathMultiplierMilli 遞減；硬期限後停用 stage。
     const defense = defendersNear(world, playerId, center)
     const killable = canKillGroup(
       world,
@@ -1026,17 +1129,28 @@ export function computeTacticalPlan(
       defense.powerMilli,
       defense.enemies,
     )
-    const targetTile = tileOf(center.x, center.y)
+    // committed 距離判斷的目標格也走鏡像安全路徑（Prompt 10.23）。
+    const targetTile = mirrorSafeTileOf(world.map.size, playerId === 'enemy', center.x, center.y)
     const committed =
       squad.engaging === true ||
       (squad.centroid.x - targetTile.x) ** 2 + (squad.centroid.y - targetTile.y) ** 2 <=
         COMMITTED_RADIUS_SQUARED
-    if (!committed) {
-      // 以 cohort 總戰力過門檻（同錨位進攻隊共享波次；無同錨位隊時即自身戰力）。
+    // 突變期階段按**該陣營的抽籤相位**評估（Prompt 10.23）：ramp 以起點錨相位、
+    // allin 以硬期限錨相位——紅藍啟動 tick 通常錯開（破局相位差）。
+    const suddenStage = suddenDeathStage(world.tick, hardPhase)
+    // 突變期硬期限（Prompt 10.23）：stage 停用——未成軍也直接壓上（不轉 stage），
+    // committed 的 10.8 降級鏈照舊；未 committed 且 allin → 落到下方集結再攻流程。
+    if (!committed && suddenStage !== 'allin') {
+      // 以 cohort 總戰力過門檻（同錨位進攻隊共享波次；無同錨位隊時即自身戰力），
+      // 乘以突變期遞減乘數（Prompt 10.23，按本陣營 ramp 相位評估）：
+      // 門檻逐檔大跌 → 把蓄著的兵投出去；紅藍相位差 → 錯開出兵時序破局。
       const cohort = cohorts.get(anchorKey(squad.centroid))
       const cohortPower = cohort?.power ?? squad.power
       const cohortMembers = cohort?.memberIds ?? squad.memberIds
-      const gateMet = cohortPower * 1000 * 1000 >= defense.powerMilli * waveRatioMilli(policies)
+      const ratioMilli = Math.round(
+        (waveRatioMilli(policies) * suddenDeathMultiplierMilli(world.tick, rampPhase)) / 1000,
+      )
+      const gateMet = cohortPower * 1000 * 1000 >= defense.powerMilli * ratioMilli
       const killableCohort = canKillGroup(
         world,
         unitById,
@@ -1056,19 +1170,23 @@ export function computeTacticalPlan(
         squad.engaging = false
         continue
       }
-    } else if (!killable) {
+    } else if (committed && !killable) {
       // 交戰評估（Prompt 10.8）：目標處守軍殺不掉 → 降級等待支援。
       // attack 打不贏 → 轉 harass（改打敵方經濟）；harass 也打不贏 → 轉 defend（守家等兵）。
       if (squad.mission === 'attack') {
         const econCandidates = enemyTargets(world, playerId, true).filter(
           (candidate) => candidate.id !== target.id,
         )
-        const econ = pickTarget(world, influence, centroidFixed, econCandidates)
+        const econ = pickTarget(world, playerId, influence, centroidFixed, econCandidates)
         if (econ !== null) {
           const econCenter = buildingCenter(econ)
           const econApproach =
             siegeApproachTile(world, playerId, econ, squad.centroid) ??
-            nearestWalkable(world, tileOf(econCenter.x, econCenter.y), playerId === 'enemy')
+            nearestWalkable(
+              world,
+              mirrorSafeTileOf(world.map.size, playerId === 'enemy', econCenter.x, econCenter.y),
+              playerId === 'enemy',
+            )
           if (econApproach !== null) {
             squad.mission = 'harass'
             squad.targetBuildingId = econ.id
@@ -1086,7 +1204,13 @@ export function computeTacticalPlan(
     // 集結再攻（Prompt 10.7）：成員鬆散（最遠成員離重心 > REGROUP_DISTANCE_TILES）
     // → 先往「重心→目標」方向的集結點聚攏；到齊後直接鎖定目標建築。
     if (squadSpreadSquared(unitById, squad) > REGROUP_LIMIT_SQUARED) {
-      const staging = stagingPoint(world, playerId, squad.centroid, tileOf(center.x, center.y))
+      // 目標格走鏡像安全路徑（Prompt 10.23）：偶數尺寸建築中心 px 必停格邊界。
+      const staging = stagingPoint(
+        world,
+        playerId,
+        squad.centroid,
+        mirrorSafeTileOf(world.map.size, playerId === 'enemy', center.x, center.y),
+      )
       if (staging !== null) {
         squad.target = staging
         continue

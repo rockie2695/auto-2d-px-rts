@@ -1,8 +1,9 @@
 import { distanceSquaredToBuilding, setAttackTarget } from '../sim/combat.ts'
-import { isBlockedAt, tileOf, UNITS_PER_TILE } from '../sim/types.ts'
+import { isBlockedAt, UNITS_PER_TILE } from '../sim/types.ts'
 import { orderMove } from '../sim/world.ts'
 import type { PlayerId, TilePos, Unit, World } from '../sim/types.ts'
 import { enemyThreatAtPoint, unitThreatMilli } from './influence.ts'
+import { mirrorSafeTileOf } from './mirrorTile.ts'
 import {
   nearestSpawnPoint,
   nearestWalkable,
@@ -122,27 +123,13 @@ function distanceSquared(ax: number, ay: number, bx: number, by: number): number
 }
 
 /** 是否該重下移動令：閒置、目的地變更，或到 500ms 重算點。
- *  已站上目的地且路徑結束 → 不再重下（省 A*，杜絕「原地反覆下令」）。 */
-/** 單一 px 的鏡像安全取格（Prompt 10.22）：紅方先在正規化（藍方）座標取格再鏡回
- *  實座標——單位／敵人 px 恰停在格邊界（200 的倍數）時，直接對紅方實座標 floor
- *  會翻到錯邊的格（藍 tile 10 ↔ 紅應為 21 卻得 22），使紅藍的 AI 決策（追擊
- *  目的地、風箏反向、集結錨選擇）差一格。回傳的格＝鏡射一致的格：藍方等於
- *  `tileOf(x, y)`，紅方等於 `31 − tileOf(mapPx − x, mapPx − y)` 的鏡像。 */
-function mirrorTileOf(
-  world: World,
-  playerId: PlayerId,
-  x: number,
-  y: number,
-): TilePos {
-  if (playerId !== 'enemy') return tileOf(x, y)
-  const size = world.map.size
-  const mapPx = size * UNITS_PER_TILE
-  const canonical = tileOf(mapPx - x, mapPx - y)
-  return { x: size - 1 - canonical.x, y: size - 1 - canonical.y }
-}
+ *  已站上目的地且路徑結束 → 不再重下（省 A*，杜絕「原地反覆下令」）。
+ *  比對單位格用鏡像安全取格（Prompt 10.22，Prompt 10.23 共用 `mirrorTile.ts`）
+ *  —紅方單位 px 在格邊界時若用直接 floor 的格比對，會與鏡像的藍方差一格
+ *  → 單邊重下移動令 → 單邊換路。 */
 
 function shouldIssueMove(world: World, unit: Unit, dest: TilePos): boolean {
-  const tile = mirrorTileOf(world, unit.player, unit.x, unit.y)
+  const tile = mirrorSafeTileOf(world.map.size, unit.player === 'enemy', unit.x, unit.y)
   if (tile.x === dest.x && tile.y === dest.y && unit.path === null) return false
   if (unit.path === null && unit.dest === null) return true
   if (unit.dest === null || unit.dest.x !== dest.x || unit.dest.y !== dest.y) return true
@@ -248,8 +235,8 @@ function kiteDest(
   enemy: Unit,
   rally: TilePos,
 ): TilePos {
-  const from = mirrorTileOf(world, playerId, unit.x, unit.y)
-  const enemyTile = mirrorTileOf(world, playerId, enemy.x, enemy.y)
+  const from = mirrorSafeTileOf(world.map.size, playerId === 'enemy', unit.x, unit.y)
+  const enemyTile = mirrorSafeTileOf(world.map.size, playerId === 'enemy', enemy.x, enemy.y)
   const dx = Math.sign(from.x - enemyTile.x)
   const dy = Math.sign(from.y - enemyTile.y)
   const step = 2
@@ -342,7 +329,7 @@ export function computeMicroPlan(
     if (def === undefined) continue
     const squad = squadByUnit.get(unit.id)
     const squadIndex = squad === undefined ? null : squad.index
-    const unitTile = mirrorTileOf(world, playerId, unit.x, unit.y)
+    const unitTile = mirrorSafeTileOf(world.map.size, playerId === 'enemy', unit.x, unit.y)
     const atRally = unitTile.x === rally.x && unitTile.y === rally.y
     // 出廠集合格（Prompt 10.19）：最近一間生產建築的集合格（平手取 buildingId 小者）；
     // 沒有生產建築（spawns 空）→ 退回集結點。
@@ -490,7 +477,12 @@ export function computeMicroPlan(
           }
         }
         if (supported) {
-          const enemyTile = mirrorTileOf(world, playerId, near.unit.x, near.unit.y)
+          const enemyTile = mirrorSafeTileOf(
+            world.map.size,
+            playerId === 'enemy',
+            near.unit.x,
+            near.unit.y,
+          )
           decisions.push({
             unitId: unit.id,
             action: 'chase',

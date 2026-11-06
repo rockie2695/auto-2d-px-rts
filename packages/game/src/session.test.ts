@@ -5,7 +5,14 @@ import { describe, expect, it, vi } from 'vitest'
 import { MAP_SIZE } from '@auto-2d-px-rts/shared'
 
 import { DEFAULT_POLICIES } from './ai/policy.ts'
-import { getActiveSession, matchEnded, resolveMatchResult, startGameSession } from './session.ts'
+import {
+  getActiveSession,
+  matchEnded,
+  matchSideValue,
+  resolveMatchResult,
+  suddenDeathLogText,
+  startGameSession,
+} from './session.ts'
 import type { GameSession, UnitInfo } from './session.ts'
 import { POLICY_COOLDOWN_TICKS } from './session.ts'
 import { addBuilding } from './sim/economy.ts'
@@ -259,18 +266,64 @@ describe('勝負判定（純函數）', () => {
     expect(resolveMatchResult(world)).toBe('draw')
   })
 
-  it('超時（雙 keep 俱在）→ 一律平手（不比水晶，Prompt 10.10）；matchEnded 為真', () => {
+  it('超時（雙 keep 俱在）→ 總價值多者勝、嚴格相等才平手（Prompt 10.23）；matchEnded 為真', () => {
     const world = keepWorld()
     world.tick = world.match.maxTicks
     expect(matchEnded(world)).toBe(true)
+    // 對稱殘局（同兩座 keep、cost 0、同水晶） → 價值嚴格相等 → 平手。
     expect(resolveMatchResult(world)).toBe('draw')
 
-    // 水晶差距不再影響超時判定（Prompt 10.10：超時 = 平手）。
     const player = world.players.find((p) => p.id === 'player')
     const enemy = world.players.find((p) => p.id === 'enemy')
     if (player === undefined || enemy === undefined) throw new Error('找不到玩家')
-    enemy.blueCrystal = 500
+    // 總價值多者勝（Prompt 10.23：取代 Prompt 10.10 的「一律平手」）。
+    enemy.blueCrystal += 500 // 超出對方 → 敵勝
+    expect(resolveMatchResult(world)).toBe('enemy')
+    player.blueCrystal += 800 // 反超 → 玩家勝
+    expect(resolveMatchResult(world)).toBe('player')
+    enemy.blueCrystal -= 500
+    player.blueCrystal -= 800
+    expect(resolveMatchResult(world)).toBe('draw') // 重新相等 → 平手
+
+    // 未超時（雙 keep 俱在）→ 一律平手（手動提前結束語義，Prompt 10.10 不變）。
+    world.tick = world.match.maxTicks - 1
+    expect(matchEnded(world)).toBe(false)
+    enemy.blueCrystal += 5000
     expect(resolveMatchResult(world)).toBe('draw')
+  })
+
+  it('matchSideValue：單位殘值按 hp 比例、建築殘值按有效最大 hp 折算（Prompt 10.23）', () => {
+    const world = keepWorld()
+    putUnit(world, 'player', 'u', { x: 4, y: 4 }) // cost 50、滿血 hp 100
+    // keep def cost 0（test fixture）→ 建築貢獻 0；基準 = 水晶 1000 + 單位 50。
+    expect(matchSideValue(world, 'player')).toBe(1050)
+
+    const unit = world.units.find((u) => u.player === 'player')
+    if (unit === undefined) throw new Error('找不到單位')
+    unit.hp = 50
+    expect(matchSideValue(world, 'player')).toBe(1025) // 單位殘值 50 × 50%
+
+    // 建築殘值：給 keep 成本 100 → 滿血折 +100；hp 40 → +40（殘值 = cost × hp/max）。
+    world.defs.buildings.keep = makeBuildingDef({
+      id: 'keep',
+      hp: 100,
+      cost: { blue_crystal: 100 },
+    })
+    unit.hp = 100
+    expect(matchSideValue(world, 'player')).toBe(1150)
+    const playerKeep = world.buildings.find((b) => b.player === 'player')
+    if (playerKeep === undefined) throw new Error('找不到玩家 keep')
+    playerKeep.hp = 40
+    expect(matchSideValue(world, 'player')).toBe(1090)
+  })
+
+  it('suddenDeathLogText（Prompt 10.23）：只在起點／硬期限那一 tick 回敘事文字', () => {
+    expect(suddenDeathLogText(7199)).toBeNull()
+    expect(suddenDeathLogText(7200)).toBe('突變期啟動：出兵門檻逐檔遞減')
+    expect(suddenDeathLogText(7201)).toBeNull()
+    expect(suddenDeathLogText(10799)).toBeNull()
+    expect(suddenDeathLogText(10800)).toBe('突變期硬期限：全軍出擊')
+    expect(suddenDeathLogText(10801)).toBeNull()
   })
 
   it('全滅（無建築且無單位）→ 結束且對方勝；雙方全滅 → 平手（Prompt 10.5 修）', () => {

@@ -7,7 +7,12 @@ import type { PolicyValues } from './ai/policy.ts'
 import { runStrategicCycle, STRATEGIC_INTERVAL_TICKS } from './ai/strategy.ts'
 import type { DecisionRecord } from './ai/strategy.ts'
 import { pickMostUrgentThreat } from './ai/influence.ts'
-import { computeTacticalPlan, TACTICAL_INTERVAL_TICKS } from './ai/tactics.ts'
+import {
+  computeTacticalPlan,
+  SUDDEN_DEATH_HARD_TICK,
+  SUDDEN_DEATH_START_TICK,
+  TACTICAL_INTERVAL_TICKS,
+} from './ai/tactics.ts'
 import type { Squad, TacticalPlan } from './ai/tactics.ts'
 import { loadContentPackFromFetch } from './data/loadFromFetch.ts'
 import { ReplayRecorder, REPLAY_SAMPLE_INTERVAL_TICKS } from './replay.ts'
@@ -165,9 +170,10 @@ export function matchEnded(world: World): boolean {
 
 /**
  * 勝負判定：一方主堡被毀 → 對方勝；同 tick 雙殺 → 全滅者敗（都還有部隊 → 平手）；
- * **超時（10:00 雙主堡俱在）→ 平手**（Prompt 10.10：不比水晶）。
+ * **超時（10:00 雙主堡俱在）→ 總價值多者勝、嚴格相等才平手**
+ * （Prompt 10.23 破局：鏡像僵持的兜底裁定——取代 Prompt 10.10 的「一律平手」）。
  * 全滅（無建築且無單位）同樣判負——無建築必含主堡已毀，此為 SPEC §11.1 的另一面。
- * 手動提前結束（雙主堡俱在且未超時）→ 平手。
+ * 手動提前結束（雙主堡俱在且未超時）→ 平手（Prompt 10.10 既有語義不變）。
  */
 export function resolveMatchResult(world: World): MatchResult {
   const playerAlive = keepAlive(world, 'player')
@@ -180,7 +186,47 @@ export function resolveMatchResult(world: World): MatchResult {
     if (playerWiped !== enemyWiped) return playerWiped ? 'enemy' : 'player'
     return 'draw'
   }
+  // 雙主堡俱在且已超時 → 超時值裁定（Prompt 10.23）；未超時（手動提前結束）→ 平手。
+  if (world.tick >= world.match.maxTicks) {
+    const playerValue = matchSideValue(world, 'player')
+    const enemyValue = matchSideValue(world, 'enemy')
+    if (playerValue !== enemyValue) return playerValue > enemyValue ? 'player' : 'enemy'
+  }
   return 'draw'
+}
+
+/**
+ * 陣營**總價值**（Prompt 10.23 超時值裁定）：水晶 + 單位殘值 + 建築殘值。
+ * 殘值 = `cost ×（現 hp ÷ 有效最大 hp）` 四捨五入——興建中建築的有效最大 hp
+ * 已按完成比例折算（SPEC §5）→ 殘值自動含完成度。全整數運算、跨平台一致。
+ */
+export function matchSideValue(world: World, playerId: PlayerId): number {
+  let value = world.players.find((player) => player.id === playerId)?.blueCrystal ?? 0
+  for (const unit of world.units) {
+    if (unit.player !== playerId || unit.hp <= 0) continue
+    const def = world.defs.units[unit.defId]
+    if (def === undefined) continue
+    value += Math.round((def.cost.blue_crystal * unit.hp) / Math.max(1, def.stats.hp))
+  }
+  for (const building of world.buildings) {
+    if (building.player !== playerId || building.hp <= 0) continue
+    const def = world.defs.buildings[building.defId]
+    if (def === undefined) continue
+    value += Math.round(
+      (def.cost.blue_crystal * building.hp) / buildingEffectiveMaxHp(def, building),
+    )
+  }
+  return value
+}
+
+/**
+ * 突變期敘事文字（Prompt 10.23）：只在突變期起點／硬期限的**那一 tick** 回傳
+ * 條目文字（每陣營記一條 tactical 日誌），其餘 tick 回傳 null——純敘事、
+ * 不影響任何決策與模擬結果。
+ */
+export function suddenDeathLogText(tick: number): string | null {
+  if (tick === SUDDEN_DEATH_START_TICK) return '突變期啟動：出兵門檻逐檔遞減'
+  return tick === SUDDEN_DEATH_HARD_TICK ? '突變期硬期限：全軍出擊' : null
 }
 
 /** 政策滑桿快照（Prompt 10：下方面板輪詢讀取）。 */
@@ -405,7 +451,17 @@ export async function startGameSession(app: Application, scene: GameScene): Prom
     pushMarkers() // 集結點／生產點可能變了（Prompt 10.13）
   }
 
+  /**
+   * 突變期敘事（Prompt 10.23，純日誌不影響決策）：只在跨門檻的**那一 tick**
+   * 各記一條／陣營（tick 遞增 1 → 精確相等即恰好觸發一次）。
+   */
   const onTick = (w: World): void => {
+    const suddenText = suddenDeathLogText(w.tick)
+    if (suddenText !== null) {
+      for (const player of w.players) {
+        pushLog({ tick: w.tick, layer: 'tactical', actor: player.id, text: suddenText })
+      }
+    }
     if (w.tick % STRATEGIC_INTERVAL_TICKS === 0) {
       for (const player of w.players) {
         logDecisionRecords(runStrategicCycle(w, player.id, policies[player.id]).records)
