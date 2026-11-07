@@ -211,6 +211,113 @@ describe('econMilitary 滑桿 → 建築選擇', () => {
   })
 })
 
+describe('建築預備金（Prompt 10.24 A：生產軌不得吞光建築預算）', () => {
+  function reserveWorld(startCrystal: number): World {
+    return createTestWorld({
+      size: 12,
+      units: [makeUnitDef({ id: 'u', cost: { blue_crystal: 50 } })],
+      buildings: [
+        makeBuildingDef({
+          id: 'tower',
+          size: [2, 2],
+          cost: { blue_crystal: 150 },
+          defense: { dmg: 10, range: 4.0, attackSpeed: 0.5 },
+        }),
+        makeBuildingDef({ id: 'rax', size: [2, 2], cost: { blue_crystal: 200 }, produces: ['u'] }),
+      ],
+      startCrystal,
+    })
+  }
+
+  it('最高分候選買不起 → 生產軌為它攢錢（水晶 − 預備金 < 單位造價 → 不排隊）', () => {
+    const world = reserveWorld(100)
+    // tower 分數 1.0（palette 先）與 rax 1.0 同分 → tower 是預備金目標（150）；
+    // 100 < 150 → 兩者都買不起；100 − 150 < 50 → 不生兵、分毫未動。
+    const actions = runCycles(world, 'player', DEFAULT_POLICIES, 3)
+    expect(actions.filter((action) => action.kind === 'build')).toHaveLength(0)
+    expect(actions.filter((action) => action.kind === 'train')).toHaveLength(0)
+    expect(world.players[0]?.blueCrystal).toBe(100)
+  })
+
+  it('攢到預備金 → 蓋最高分建築；蓋完預備金轉下一候選（仍不生兵）', () => {
+    const world = reserveWorld(160)
+    const actions = runCycles(world, 'player', DEFAULT_POLICIES, 2)
+    // cycle 1：build tower（150）→ 水晶 10；預備金 = rax 200 → 不生兵
+    // cycle 2：rax 1.0 買不起、tower 0.5 也買不起 → 不蓋；預備金 = rax 200 → 不生兵
+    expect(actions.filter((action) => action.kind === 'build')).toHaveLength(1)
+    expect(actions.filter((action) => action.kind === 'train')).toHaveLength(0)
+    expect(countBuildings(world, 'player', 'tower')).toBe(1)
+  })
+
+  it('全飽和（建築軌無候選）→ 預備金 0、全額造兵', () => {
+    const world = reserveWorld(500)
+    addBuilding(world, 'player', 'tower', { x: 2, y: 2 }, { built: true, nodeId: null })
+    addBuilding(world, 'player', 'tower', { x: 5, y: 2 }, { built: true, nodeId: null })
+    addBuilding(world, 'player', 'rax', { x: 2, y: 5 }, { built: true, nodeId: null })
+    addBuilding(world, 'player', 'rax', { x: 5, y: 5 }, { built: true, nodeId: null })
+    addBuilding(world, 'player', 'rax', { x: 8, y: 5 }, { built: true, nodeId: null })
+    const actions = runCycles(world, 'player', DEFAULT_POLICIES, 2)
+    expect(actions.filter((action) => action.kind === 'train')).toHaveLength(2)
+  })
+})
+
+describe('塔前置（Prompt 10.24 B：防線朝敵方 keep，紅藍互為鏡像）', () => {
+  function towerAnchorWorld(): World {
+    return createTestWorld({
+      size: 12,
+      units: [makeUnitDef({ id: 'u', cost: { blue_crystal: 50 } })],
+      buildings: [
+        makeBuildingDef({ id: 'keep', size: [3, 3] }),
+        makeBuildingDef({
+          id: 'tower',
+          size: [2, 2],
+          cost: { blue_crystal: 150 },
+          defense: { dmg: 10, range: 4.0, attackSpeed: 0.5 },
+        }),
+      ],
+      startCrystal: 1000,
+    })
+  }
+
+  it('藍塔蓋在 keep 朝敵 keep 方向 3 格附近；紅塔為其精確鏡像', () => {
+    const blue = towerAnchorWorld()
+    addBuilding(blue, 'player', 'keep', { x: 1, y: 1 }, { built: true, nodeId: null })
+    addBuilding(blue, 'enemy', 'keep', { x: 8, y: 8 }, { built: true, nodeId: null })
+    const red = towerAnchorWorld()
+    addBuilding(red, 'player', 'keep', { x: 1, y: 1 }, { built: true, nodeId: null })
+    addBuilding(red, 'enemy', 'keep', { x: 8, y: 8 }, { built: true, nodeId: null })
+
+    const blueActions = runCycles(blue, 'player', DEFAULT_POLICIES, 1)
+    const redActions = runCycles(red, 'enemy', DEFAULT_POLICIES, 1)
+    const blueBuild = blueActions.find((action) => action.kind === 'build')
+    expect(blueBuild?.kind).toBe('build')
+    const redBuild = redActions.find((action) => action.kind === 'build')
+    expect(redBuild?.kind).toBe('build')
+    if (blueBuild?.kind !== 'build' || redBuild?.kind !== 'build') return
+    expect(blueBuild.defId).toBe('tower')
+    expect(redBuild.defId).toBe('tower')
+    // 藍：keep 中心 (2,2) → 前置錨 = (2,2) + sign(8−2)×1 = (3,3) → 塔落 (4,2)。
+    expect(blueBuild.tile).toEqual({ x: 4, y: 2 })
+    // 紅：塔佔地 = 藍塔的**逐格鏡像**（鏡射後 2×2 佔地的左上角 = size−w−x）。
+    expect(redBuild.tile).toEqual({
+      x: (12 - 2) - blueBuild.tile.x,
+      y: (12 - 2) - blueBuild.tile.y,
+    })
+  })
+
+  it('無敵方 keep → 塔退回 keep 旁（錨點不前移）', () => {
+    const world = towerAnchorWorld()
+    addBuilding(world, 'player', 'keep', { x: 1, y: 1 }, { built: true, nodeId: null })
+    const actions = runCycles(world, 'player', DEFAULT_POLICIES, 1)
+    const build = actions.find((action) => action.kind === 'build')
+    expect(build?.kind).toBe('build')
+    if (build?.kind !== 'build') return
+    // 錨點 = keep 中心 (2,2)、**不位移** → 最近佔地序落在 keep 東側 (4,1)
+    // （不是前置方向特有的 (4,4)——若誤朝不存在的敵 keep 前移，才會出現對角位）。
+    expect(build.tile).toEqual({ x: 4, y: 1 })
+  })
+})
+
 /** 生產測試世界：預先蓋好 3 座兵營（built），只驗生產軌。 */
 function productionWorld(units: UnitDef[], counterMatrix?: TestWorldOptions['counterMatrix']): World {
   const world = createTestWorld({

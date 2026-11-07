@@ -17,6 +17,9 @@ import { hashFate } from '../sim/rng.ts'
  * - 建築軌：`U = weight × (1 − 飽和度)`；一礦都沒有時礦場強制 3.0
  *   （SPEC §8.1「除非一礦都沒有」，避免重經濟滑桿餓死）。
  * - 生產軌：`score = counterScore + tierScore + rangeScore − 稀缺性懲罰`。
+ * - **建築預備金（Prompt 10.24 A）**：建築軌未飽和時，生產軌不得把水晶花到
+ *   「下一個建築目標的造價」以下——否則單位生產吞光結餘、建築永遠饿死
+ *   （實測：水晶 9~49 震盪、塔只蓋得出開局一座）。全飽和 → 預備金 0。
  *
  * 每個實際執行的動作產出一條 `DecisionRecord`（Prompt 6.5）：
  * 候選分數、當時滑桿、主導因素與一行中文解釋（explain.ts 規則式模板）。
@@ -87,7 +90,15 @@ interface BuildingCandidate {
   score: number
   /** 放置點（mine 用最近空閒節點，其餘用最近有效位）。 */
   tile: TilePos
+  /** 水晶是否買得起。買不起的候選**保留在列表中**——供建築預備金
+   *  （Prompt 10.24 A：生產軌不得把水晶花到下一個建築目標造價以下）。 */
+  affordable: boolean
 }
+
+/** 帶防禦建築（塔）的放置錨點向敵方 keep 前移的格數（Prompt 10.24 B：前置防線）。
+ *  （平衡實測：3 格 → 24-seed 全平——塔太靠中路，雙方攻勢反覆被塔火拉回；
+ *   1 格 = keep 邊緣朝敵位移，同樣告別「塔與礦/兵營擠成一團」且攻勢不癱瘓。） */
+export const TOWER_FORWARD_TILES = 1
 
 /** 玩家的錨點：keep **中心格**（Prompt 10.9：點鏡射不變量——紅藍錨點互為精確鏡像，
  *  配合 mirrorOrder 平手裁決，兩側的建築位置決策逐項鏡像）。無 keep（合成世界）用出生點。 */
@@ -128,7 +139,8 @@ function saturationOf(world: World, playerId: PlayerId, defId: string): number {
 
 /**
  * 評估建築候選（含可行性）：
- * 不可負擔、無空閒節點、無放置空間的候選直接剔除（效用 -Infinity）。
+ * 無空閒節點、無放置空間的候選直接剔除；**買不起的候選保留**（`affordable` 標記，
+ * Prompt 10.24 A——建築軌執行時自然跳過，生產軌為它攬預備金）。
  */
 function evaluateBuildings(world: World, playerId: PlayerId, policies: PolicyValues): BuildingCandidate[] {
   const player = getPlayer(world, playerId)
@@ -143,13 +155,35 @@ function evaluateBuildings(world: World, playerId: PlayerId, policies: PolicyVal
     const def = world.defs.buildings[defId]
     if (def === undefined) continue
 
+    // 帶防禦的建築（塔，Prompt 10.24 B）：放置錨點朝敵方 keep 方向**符號位移**
+    // `TOWER_FORWARD_TILES` 格（前置防線，貼著 keep 蓋守不到礦與兵營）。
+    // 用 **sign 位移**而非比例截斷——sign 在鏡射下嚴格翻轉、無捨入，
+    // 比例截斷的 `.5` 進位正是 10.23 rallyPoint 鏡像缺陷的來源。
+    let buildAnchor = anchor
+    if (def.defense !== undefined) {
+      const enemyKeep = world.buildings.find(
+        (candidate) =>
+          candidate.player !== playerId && candidate.hp > 0 && candidate.defId === 'keep',
+      )
+      if (enemyKeep !== undefined) {
+        const foeX = enemyKeep.x + Math.floor(enemyKeep.w / 2)
+        const foeY = enemyKeep.y + Math.floor(enemyKeep.h / 2)
+        const clampTile = (value: number): number =>
+          Math.min(world.map.size - 1, Math.max(0, value))
+        buildAnchor = {
+          x: clampTile(anchor.x + Math.sign(foeX - anchor.x) * TOWER_FORWARD_TILES),
+          y: clampTile(anchor.y + Math.sign(foeY - anchor.y) * TOWER_FORWARD_TILES),
+        }
+      }
+    }
+
     // 可行性：放置點必須找得到。
     const [w, h] = def.size
     let tile: TilePos | null
     if (def.requiresResourceNode === true) {
-      tile = tryFindNearestFreeNode(world, anchor, mirrorOrder)?.tile ?? null
+      tile = tryFindNearestFreeNode(world, buildAnchor, mirrorOrder)?.tile ?? null
     } else {
-      tile = findNearestPlacement(world, anchor, w, h, mirrorOrder)
+      tile = findNearestPlacement(world, buildAnchor, w, h, mirrorOrder)
     }
     if (tile === null) continue
 
@@ -160,10 +194,13 @@ function evaluateBuildings(world: World, playerId: PlayerId, policies: PolicyVal
     if (def.requiresResourceNode === true && player.mineCount === 0) {
       score = Math.max(score, 3.0)
     }
-    // 不可負擔 → 剔除。
-    if (player.blueCrystal < def.cost.blue_crystal) continue
 
-    candidates.push({ defId, score, tile })
+    // 買得起與否改為**標記**（Prompt 10.24 A）：買不起的候選不從列表剔除——
+    // 它仍是建築軌的目標（建築軌執行時 placeBuilding 自然拒絕、落到次高），
+    // 且生產軌要為它**攢預備金**，否則單位生產每循環吞光結餘、建築永遠饿死。
+    const affordable = player.blueCrystal >= def.cost.blue_crystal
+
+    candidates.push({ defId, score, tile, affordable })
   }
 
   // 依分數降冪；平手保留 palette 順序（穩定、確定性）。
@@ -333,9 +370,16 @@ export function runStrategicCycle(
     enemyRangedCount: enemyCounts.ranged,
   }
 
-  // 建築軌：最高分優先，placeBuilding 拒絕（競態：節點被佔等）則嘗試次高。
+  // 建築軌：最高分優先（買不起的候選由 placeBuilding 自然拒絕、落到次高），
+  // placeBuilding 拒絕（競態：節點被佔等）則嘗試次高。記住執行位置——
+  // 供下方**建築預備金**取「下一個建築目標」。
   const buildingCandidates = evaluateBuildings(world, playerId, policies)
-  for (const candidate of buildingCandidates) {
+  let builtIndex = -1
+  for (let index = 0; index < buildingCandidates.length; index++) {
+    const candidate = buildingCandidates[index]
+    if (candidate === undefined || candidate.affordable !== true) {
+      continue // 買不起：這循環不蓋，生產軌為它攬錢
+    }
     const building = placeBuilding(world, playerId, candidate.defId, candidate.tile)
     if (building !== null) {
       actions.push({ kind: 'build', defId: candidate.defId, tile: candidate.tile })
@@ -361,11 +405,34 @@ export function runStrategicCycle(
           explanation: explanation.text,
         },
       })
+      builtIndex = index
       break
     }
   }
 
+  // 建築預備金（Prompt 10.24 A）：建築軌未飽和時，生產軌不得把水晶花到
+  // 「下一個建築目標的造價」以下——否則單位生產每循環吞光結餘（實測水晶
+  // 永遠在 9~49 震盪），150~200 的塔／兵營永遠攒不齊，開局那座塔只是吃
+  // 600 起始水晶的運氣。下一個目標 = 建成功 → 次高候選；未建成 → 最高分候選
+  // （可能就是買不起的那座——預備金機制的存在意義）。全飽和（列表空 /
+  // 已建最後一座）→ 預備金 0，全額造兵。
+  const nextBuilding =
+    builtIndex >= 0 ? buildingCandidates[builtIndex + 1] : buildingCandidates[0]
+  // 冲刺阈值版预备金（Prompt 10.24 A 修订）：下一建筑目标**快买得起**（当前
+  // 水晶 ≥ 造價 × RESERVE_SPRINT_THRESHOLD）才鎖下全額——否則不鎖、照常產兵。
+  // 全額常鎖版實測（消融 A）：開局 600 花完後 t2000–t6000 雙方 **0 單位**，
+  // 24-seed tally 崩成 1 藍/1 紅/22 平；衝刺版讓「產兵幾循環 → 攒滿 → 蓋建築」
+  // 自然交替，軍力節奏與建築達標兩全。
+  const SPRINT_THRESHOLD = 0.5
+  const reserve = (() => {
+    if (nextBuilding === undefined) return 0
+    const cost = world.defs.buildings[nextBuilding.defId]?.cost.blue_crystal ?? 0
+    if (cost === 0) return 0
+    return player.blueCrystal >= cost * SPRINT_THRESHOLD ? cost : 0
+  })()
+
   // 生產軌：最高分優先，queueTrain 拒絕則嘗試次高。
+  // **預備金保護**（Prompt 10.24 A）：扣掉預備金後仍買得起才排隊。
   // 命運抽籤（Prompt 10.11）：分數在 best − FATE_BAND 內的候選以 fate 抽選先後——
   // 同 tick 兩側同值（鏡像對稱）、跨種子變化（軍種組成因對局而異）。
   // （稀缺性差 0.15 級的近似同分也納入，否則同帶候選永遠固定先後。）
@@ -381,6 +448,11 @@ export function runStrategicCycle(
     ordered = [...tied.slice(cut), ...tied.slice(0, cut), ...rest]
   }
   for (const candidate of ordered) {
+    const unitDef = world.defs.units[candidate.defId]
+    // 預備金保護（Prompt 10.24 A）：扣掉預備金後買不起 → 不排隊（攢錢蓋建築）。
+    if (unitDef !== undefined && player.blueCrystal - reserve < unitDef.cost.blue_crystal) {
+      continue
+    }
     const producerId = chooseProducer(world, playerId, candidate.defId)
     if (producerId === null) continue
     if (queueTrain(world, producerId, candidate.defId)) {

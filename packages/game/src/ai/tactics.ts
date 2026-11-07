@@ -1,5 +1,6 @@
 import { getPlayer, isBlockedAt, isConstructed, tileOf, UNITS_PER_TILE } from '../sim/types.ts'
 import type { Building, PlayerId, TilePos, Unit, World } from '../sim/types.ts'
+import { distanceSquaredToBuilding } from '../sim/combat.ts'
 import { hashFate } from '../sim/rng.ts'
 import { mirrorSafeTileOf } from './mirrorTile.ts'
 import { computeInfluenceMap, DEFENSE_RADIUS_TILES, enemyThreatAtPoint, enemyThreatAtTile, pickMostUrgentThreat, unitThreatMilli } from './influence.ts'
@@ -214,8 +215,9 @@ export interface Squad {
 /** 接觸事件（Prompt 10.15）：一次接觸驅動的重新評估／夾擊呼叫，供決策日誌逐條顯示。 */
 export interface ContactEvent {
   squadIndex: number
-  /** `engage` = 迎戰；`keep` = 維持原命令；`pincer` = 呼叫友隊夾擊。 */
-  outcome: 'engage' | 'keep' | 'pincer'
+  /** `engage` = 迎戰；`keep` = 維持原命令；`pincer` = 呼叫友隊夾擊；
+   *  `retreat` = 受襲殺不掉且無友隊響應 → 撤回集結點（Prompt 10.24 D）。 */
+  outcome: 'engage' | 'keep' | 'pincer' | 'retreat'
   /** 人類可讀的完整句（規則生成、中文、確定性）。 */
   text: string
 }
@@ -1299,9 +1301,22 @@ export function computeTacticalPlan(
   /** 這循環的特殊事件（session 轉進決策日誌）。 */
   const events: ContactEvent[] = []
   /** 各小隊的本循環接觸（供夾擊呼叫；以小隊 index 為鍵）。 */
-  const contactBySquad = new Map<number, { enemies: Unit[]; powerMilli: number; tile: TilePos }>()
-  const noticeLimit = CONTACT_NOTICE_RADIUS_TILES * UNITS_PER_TILE
-  const replyLimit = PINCER_REPLY_RADIUS_TILES * UNITS_PER_TILE
+  const contactBySquad = new Map<
+    number,
+    { enemies: Unit[]; powerMilli: number; tile: TilePos; losing: boolean }
+  >()
+  /** 受襲殺不掉的小隊（新接觸評估未過 `canKillGroup` 者；無響應 → 撤退，Prompt 10.24 D）。 */
+  const losingSquadIndexes = new Set<number>()
+/**
+ * 塔火在 `contact.known` 裡的合成 id（Prompt 10.24 D）：塔不是單位、沒有敵單位
+ * id 可記——若不注入，塔火接觸的 `known` 恆空 → 「新接觸」判定恆 false →
+ * 評估分支永不執行（實測：守備隊被塔點射而死、戰術層零事件）。以偏移量合成
+ * id，避免與真實單位/建築 id 撞號（單位 id < 1_000_000 的上限由 unitCap 保證）。
+ */
+const TOWER_KNOWN_ID_OFFSET = 1_000_000
+
+const noticeLimit = CONTACT_NOTICE_RADIUS_TILES * UNITS_PER_TILE
+const replyLimit = PINCER_REPLY_RADIUS_TILES * UNITS_PER_TILE
 
   for (const squad of squads) {
     // 沿續接觸狀態（以 squad index 為鍵；warm start 同一索引空間）。
@@ -1329,7 +1344,23 @@ export function computeTacticalPlan(
       sumX += enemy.x
       sumY += enemy.y
     }
-    if (seen.length === 0) {
+    // 塔火（Prompt 10.24 D）：敵方帶 `defense` 的**已完工**建築若防禦射程覆蓋
+    // 小隊重心 → 視為接觸——unit 掃描對塔**隱形**，守備隊會站樁被點射到死而
+    // 戰術層毫無反應（接觸評估／夾擊呼叫全不觸發）。威脅 milli =
+    // `dmg × attackSpeed × 1000`（每秒期望傷害，全整數）；目標格 = 塔佔地中心。
+    let towerContact: Building | null = null
+    let towerThreatMilli = 0
+    for (const building of world.buildings) {
+      if (building.player === playerId || building.hp <= 0) continue
+      const def = world.defs.buildings[building.defId]
+      const defense = def?.defense
+      if (def === undefined || defense === undefined || !isConstructed(building)) continue
+      const rangeFixed = Math.round(defense.range * UNITS_PER_TILE)
+      if (distanceSquaredToBuilding(centroidFixed, building) > rangeFixed * rangeFixed) continue
+      towerContact = building
+      towerThreatMilli += Math.round(defense.dmg * defense.attackSpeed * 1000)
+    }
+    if (seen.length === 0 && towerContact === null) {
       contact.known[squad.index] = []
       squad.engaging = false // 視野內沒有敵人：迎戰狀態解除，回到原命令。
       continue
@@ -1338,57 +1369,95 @@ export function computeTacticalPlan(
 
     const known = contact.known[squad.index] ?? []
     const knownIds = new Set(known)
-    const newIds = seen.filter((enemy) => !knownIds.has(enemy.id))
-    // 迎戰目標格（敵群重心）同樣走 canonical 路徑（Prompt 10.22）。
-    const enemyTile = tileOfMeanPx(
-      world.map.size,
-      playerId === 'enemy',
-      sumX / seen.length,
-      sumY / seen.length,
-    )
-    contact.known[squad.index] = seen.map((enemy) => enemy.id)
-    contactBySquad.set(squad.index, { enemies: seen, powerMilli: contactPower, tile: enemyTile })
+    // 「新接觸」= 有新敵單位，**或塔火首次出現**（Prompt 10.24 D：塔不動但
+    // 以合成 id 記入 known——首循環必評估，之後走既有接觸路徑不重評）。
+    const towerKnownId =
+      towerContact === null ? null : TOWER_KNOWN_ID_OFFSET + towerContact.id
+    const hasNewContact =
+      seen.some((enemy) => !knownIds.has(enemy.id)) || towerKnownId !== null
+    // 迎戰目標格（敵群重心）同樣走 canonical 路徑（Prompt 10.22）；僅塔火時
+    // 目標 = 塔佔地中心（鏡像安全取格）。
+    const towerTile =
+      towerContact === null
+        ? null
+        : mirrorSafeTileOf(
+            world.map.size,
+            playerId === 'enemy',
+            (towerContact.x + towerContact.w / 2) * UNITS_PER_TILE,
+            (towerContact.y + towerContact.h / 2) * UNITS_PER_TILE,
+          )
+    const enemyTile =
+      seen.length > 0
+        ? tileOfMeanPx(world.map.size, playerId === 'enemy', sumX / seen.length, sumY / seen.length)
+        : (towerTile ?? squad.centroid)
+    contact.known[squad.index] = [
+      ...seen.map((enemy) => enemy.id),
+      ...(towerKnownId !== null ? [towerKnownId] : []),
+    ]
 
     const lastTick = contact.replanTick[squad.index] ?? 0
     const cooledDown = world.tick - lastTick >= CONTACT_REPLAN_COOLDOWN_TICKS
-    if (newIds.length === 0) {
+    if (!hasNewContact) {
       // 既有接觸：上一循環已在迎戰 → 目標跟著敵群現位走（不再重評估）。
+      // 塔不會動：迎戰對象含塔時保持塔的攻城接近格（勿被敵群重心覆寫回 null）。
       if (squad.engaging === true) {
-        squad.target = enemyTile
-        squad.targetBuildingId = null
+        if (towerContact !== null && towerTile !== null) {
+          squad.target =
+            siegeApproachTile(world, playerId, towerContact, squad.centroid) ?? towerTile
+          squad.targetBuildingId = towerContact.id
+        } else {
+          squad.target = enemyTile
+          squad.targetBuildingId = null
+        }
       }
       continue
     }
     if (!cooledDown) continue
 
     // **新接觸 → AI 重新評估**（模擬層射程內自動接戰照舊、不受影響）：
-    // 殺得掉 → 迎戰（小隊目標改敵群重心格）；殺不掉 → 維持原命令。
+    // 殺得掉（含塔火威脅）→ 迎戰；殺不掉 → 維持原命令（防守／蓄兵隊若最終
+    // 無友隊響應 → 撤退，見下方夾擊循環後）。
     contact.replanTick[squad.index] = world.tick
+    const totalContactPower = contactPower + towerThreatMilli
     const winnable = canKillGroup(
       world,
       unitById,
       squad.memberIds,
       squad.power * 1000,
-      contactPower,
+      totalContactPower,
       seen,
     )
     if (winnable) {
       squad.engaging = true
-      squad.target = enemyTile
-      squad.targetBuildingId = null
+      if (towerContact !== null && towerTile !== null) {
+        // 迎戰對象含塔：目標改塔的攻城接近格（正交相鄰射程內格）。
+        squad.target =
+          siegeApproachTile(world, playerId, towerContact, squad.centroid) ?? towerTile
+        squad.targetBuildingId = towerContact.id
+      } else {
+        squad.target = enemyTile
+        squad.targetBuildingId = null
+      }
       events.push({
         squadIndex: squad.index,
         outcome: 'engage',
-        text: `小隊 #${squad.index} 遭遇敵軍（戰力 ${squad.power} vs 威脅 ${Math.round(contactPower / 1000)}）：重新評估 → 迎戰`,
+        text: `小隊 #${squad.index} 遭遇敵軍（戰力 ${squad.power} vs 威脅 ${Math.round(totalContactPower / 1000)}）：重新評估 → 迎戰`,
       })
     } else {
       squad.engaging = false
+      losingSquadIndexes.add(squad.index)
       events.push({
         squadIndex: squad.index,
         outcome: 'keep',
-        text: `小隊 #${squad.index} 遭遇敵軍（戰力 ${squad.power} vs 威脅 ${Math.round(contactPower / 1000)}）：重新評估 → 維持原命令`,
+        text: `小隊 #${squad.index} 遭遇敵軍（戰力 ${squad.power} vs 威脅 ${Math.round(totalContactPower / 1000)}）：重新評估 → 維持原命令`,
       })
     }
+    contactBySquad.set(squad.index, {
+      enemies: seen,
+      powerMilli: totalContactPower,
+      tile: enemyTile,
+      losing: !winnable,
+    })
   }
 
   // 夾擊呼叫（W2）：受襲殺不掉的小隊向「附近殺得掉」的友隊求援；接應小隊
@@ -1407,15 +1476,29 @@ export function computeTacticalPlan(
     { x: 1, y: -1 },
   ]
   const mirrorOrder = playerId === 'enemy'
+  // 已有響應的受襲小隊（無響應 → 撤退，Prompt 10.24 D）。
+  const respondedContacts = new Set<number>()
   // 前一計畫各小隊的目標（供「接應位沒變就不重複記事件」判斷）。
   const previousTargets = new Map<number, TilePos>()
   for (const squad of previous?.squads ?? []) previousTargets.set(squad.index, squad.target)
-  for (const contactSquad of contactBySquad.values()) {
+  for (const [contactIndex, contactSquad] of contactBySquad) {
+    // 呼叫 gate（Prompt 10.24 D）：只有天真新接觸評估**殺不掉**的接觸才求援——
+    // 舊版任何接觸都會把附近友隊調去迂迴，殺得掉的接觸自己迎戰即可。
+    if (contactSquad.losing !== true) continue
     const losingPower = contactSquad.powerMilli
     const responders: Squad[] = []
     for (const squad of squads) {
       if (responders.length >= PINCER_MAX_RESPONDERS) break
-      if (squad.mission !== 'attack' && squad.mission !== 'harass') continue
+      if (squad.index === contactIndex) continue // 不響應自己的接觸
+      // 防守隊也響應（Prompt 10.24 D）：受襲點就在隔壁時，「附近殺得掉」的
+      // 守備隊袖手旁觀等於看隊友死——攻擊／騷擾／防守隊皆可接應。
+      if (
+        squad.mission !== 'attack' &&
+        squad.mission !== 'harass' &&
+        squad.mission !== 'defend'
+      ) {
+        continue
+      }
       const centroidFixed = {
         x: squad.centroid.x * UNITS_PER_TILE + UNITS_PER_TILE / 2,
         y: squad.centroid.y * UNITS_PER_TILE + UNITS_PER_TILE / 2,
@@ -1438,6 +1521,7 @@ export function computeTacticalPlan(
       responders.push(squad)
     }
     responders.sort((a, b) => a.index - b.index)
+    if (responders.length > 0) respondedContacts.add(contactIndex)
     for (const responder of responders) {
       const base = directions[responders.indexOf(responder) % directions.length] ?? { x: 0, y: 1 }
       const dir = mirrorOrder ? { x: -base.x, y: -base.y } : base
@@ -1462,6 +1546,23 @@ export function computeTacticalPlan(
         })
       }
     }
+  }
+
+  // 無響應的受襲隊 → 撤退重整（Prompt 10.24 D）：殺不掉又沒人來救，站樁就是
+  // 逐 tick 白給。只對**防守／蓄兵**隊適用——攻擊／騷擾隊的「打不過」已由
+  // 波次門檻與 10.8 降級鏈管轄（轉 harass／defend），不在此重複。
+  for (const squad of squads) {
+    if (!losingSquadIndexes.has(squad.index)) continue
+    if (respondedContacts.has(squad.index)) continue
+    if (squad.mission !== 'defend' && squad.mission !== 'stage') continue
+    squad.mission = 'retreat'
+    squad.target = { x: rally.x, y: rally.y }
+    squad.targetBuildingId = null
+    events.push({
+      squadIndex: squad.index,
+      outcome: 'retreat',
+      text: `小隊 #${squad.index} 受襲殺不掉且無友隊響應：撤回集結點重整`,
+    })
   }
 
   // 出廠集合格（Prompt 10.19）：主目標定案後才計算（每間生產建築一筆）。

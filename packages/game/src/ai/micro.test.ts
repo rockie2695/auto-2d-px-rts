@@ -775,3 +775,87 @@ describe('攻城收尾（Prompt 10.18）', () => {
     expect(decision?.reason ?? '').not.toContain('攻城接近格')
   })
 })
+
+describe('受火反應（Prompt 10.24 D：被打不再站樁挨打）', () => {
+  const TOWER = makeBuildingDef({
+    id: 'tower',
+    size: [2, 2],
+    defense: { dmg: 10, range: 4.0, attackSpeed: 0.5 },
+  })
+
+  /** 標記「正在被攻擊」：hp < maxHp 且交戰計時器新鮮（受火判定兩條件）。 */
+  function wounded(world: World, unitId: number): void {
+    const unit = world.units.find((candidate) => candidate.id === unitId)
+    if (unit === undefined) throw new Error('找不到單位')
+    unit.hp = 50
+    unit.lastCombatTick = world.tick
+  }
+
+  it('被打且攻擊者在追擊 margin 外、受火追擊上限內 → chase（貼身接戰）', () => {
+    const world = createTestWorld({ size: 32, units: [MELEE], buildings: [] })
+    const id = putUnit(world, 'player', 'melee', { x: 4, y: 4 })
+    putUnit(world, 'enemy', 'melee', { x: 7, y: 4 }) // 3 格：> range+margin(1.8)、≤ range+4(4.8)
+    wounded(world, id)
+    const decision = runMicroCycle(world, 'player', null).find((d) => d.unitId === id)
+    expect(decision?.action).toBe('chase')
+  })
+
+  it('攻擊者超出受火追擊上限 → disengage（背離攻擊者，不站樁）', () => {
+    const world = createTestWorld({ size: 32, units: [MELEE], buildings: [] })
+    const id = putUnit(world, 'player', 'melee', { x: 4, y: 4 })
+    putUnit(world, 'enemy', 'melee', { x: 10, y: 4 }) // 6 格 > 4.8
+    wounded(world, id)
+    const decision = runMicroCycle(world, 'player', null).find((d) => d.unitId === id)
+    expect(decision?.action).toBe('disengage')
+  })
+
+  it('滿血新兵不受火（tick 0 全員 lastCombatTick=0 不得誤判）', () => {
+    const world = createTestWorld({ size: 32, units: [MELEE], buildings: [] })
+    const id = putUnit(world, 'player', 'melee', { x: 4, y: 4 })
+    putUnit(world, 'enemy', 'melee', { x: 10, y: 4 }) // 遠但不打我
+    const decision = runMicroCycle(world, 'player', null).find((d) => d.unitId === id)
+    expect(decision?.action).not.toBe('disengage')
+    expect(decision?.action).not.toBe('chase')
+  })
+
+  it('塔火壓制（非攻城目標）→ disengage 撤出射程', () => {
+    const world = createTestWorld({ size: 32, units: [MELEE], buildings: [TOWER] })
+    addBuilding(world, 'enemy', 'tower', { x: 8, y: 4 }, { built: true, nodeId: null })
+    const id = putUnit(world, 'player', 'melee', { x: 6, y: 4 }) // 距塔外框 1.5 格 ≤ 4
+    wounded(world, id)
+    const flee = runMicroCycle(world, 'player', null).find((d) => d.unitId === id)
+    expect(flee?.action).toBe('disengage')
+    expect(flee?.reason).toContain('塔火壓制')
+  })
+
+  it('該塔就是攻城目標 → 不撤（換血是計畫內成本，照常對塔輸出）', () => {
+    const world = createTestWorld({ size: 32, units: [MELEE], buildings: [TOWER] })
+    const tower = addBuilding(world, 'enemy', 'tower', { x: 8, y: 4 }, { built: true, nodeId: null })
+    const id = putUnit(world, 'player', 'melee', { x: 7, y: 4 }) // 貼塔外框 0.5 格
+    wounded(world, id)
+    const squad: Squad = {
+      index: 0,
+      mission: 'attack',
+      memberIds: [id],
+      target: { x: 7, y: 4 },
+      targetBuildingId: tower.id,
+      power: 100,
+      centroid: { x: 7, y: 4 },
+      engaging: true,
+    }
+    const plan = planWith(world, { x: 2, y: 2 }, [squad])
+    const decision = runMicroCycle(world, 'player', plan).find((d) => d.unitId === id)
+    expect(decision?.action).not.toBe('disengage')
+    expect(decision?.attackTargetId).toBe(tower.id)
+  })
+
+  it('atRally 單位受火同樣脫離（集結點上不再被點射到死）', () => {
+    const world = createTestWorld({ size: 32, units: [MELEE], buildings: [] })
+    const id = putUnit(world, 'player', 'melee', { x: 2, y: 2 }) // 恰在 rally
+    putUnit(world, 'enemy', 'melee', { x: 8, y: 2 }) // 6 格外壓制
+    wounded(world, id)
+    const plan = planWith(world, { x: 2, y: 2 }, [])
+    const decision = runMicroCycle(world, 'player', plan).find((d) => d.unitId === id)
+    expect(decision?.action).toBe('disengage')
+  })
+})

@@ -1,7 +1,7 @@
 import { distanceSquaredToBuilding, setAttackTarget } from '../sim/combat.ts'
-import { isBlockedAt, UNITS_PER_TILE } from '../sim/types.ts'
+import { isBlockedAt, isConstructed, UNITS_PER_TILE } from '../sim/types.ts'
 import { orderMove } from '../sim/world.ts'
-import type { PlayerId, TilePos, Unit, World } from '../sim/types.ts'
+import type { Building, PlayerId, TilePos, Unit, World } from '../sim/types.ts'
 import { enemyThreatAtPoint, unitThreatMilli } from './influence.ts'
 import { mirrorSafeTileOf } from './mirrorTile.ts'
 import {
@@ -27,6 +27,10 @@ import type { Squad, TacticalPlan } from './tactics.ts'
  *    `FOCUS_RADIUS_TILES` 內 **hp% 最低**者——斬殺集火，Prompt 10.7；
  *    半徑內無敵人取離小隊重心最近者）在射程內者，否則射程內最近者。遠程若最近敵
  *    距 < `preferredRange × KITE_MARGIN` → **風箏**：往遠離敵人的方向退，邊退邊打。
+ * 2.4 **受火反應**（Prompt 10.24 D）：最近受過傷且打不到攻擊者 → 有支援就貼身
+ *    （追擊門檻放寬到 `range + UNDER_FIRE_CHASE_MARGIN`），無支援或攻擊者是塔
+ *    （非攻城目標）→ **脫離**（背離攻擊者方向）。攻城換血除外；`atRally` 單位
+ *    同樣適用（不再站樁被點射到死）。
  * 2.5 最近敵在**射程外但在追擊距離內**（≤ `range + CHASE_MARGIN`）→ **追擊**：
  *    前壓到敵人當下所在格接戰（Prompt 10.15 修訂：**不吃 AI 閘門**——量測顯示
  *    閘門系統性偏藍；接觸重評估只驅動小隊目標／夾擊，不鎖貼身追擊）。
@@ -77,6 +81,22 @@ export const SAFE_RETREAT_RADIUS_TILES = 8
  * 以上 → 正常作戰（半血但優勢時不退）。
  */
 export const CRITICAL_HP_PCT = 0.2
+
+/**
+ * 受火判定窗口（tick，Prompt 10.24 D）：`unit.hp < maxHp` 且
+ * `tick − lastCombatTick ≤ 窗` 視為「正在被攻擊」（`lastCombatTick` 在出手
+ * 或受傷時都會重置；hp 滿血的新兵不算——否則開局全員「受火」亂跑）。
+ */
+export const UNDER_FIRE_WINDOW_TICKS = 60
+
+/**
+ * 受火追擊上限（tile，Prompt 10.24 D）：受火時追擊門檻從 `range + CHASE_MARGIN`
+ * 放寬到 `range + UNDER_FIRE_CHASE_MARGIN`——被打還站著挨射是行為樹盲區；
+ * 超過此距離的攻擊者多半夠不著（塔／超遠程），脫離比貼身划算。
+ * （平衡實測：4 會放大先手紅利 → 24-seed 13/7 超門；2 → 攻勢萎縮回 10 平局；
+ *  3 為 12-seed 公平門內最均衡值——5 藍/5 紅/2 平。）
+ */
+export const UNDER_FIRE_CHASE_MARGIN = 3
 
 export type MicroAction =
   | 'retreat'
@@ -235,13 +255,29 @@ function kiteDest(
   enemy: Unit,
   rally: TilePos,
 ): TilePos {
-  const from = mirrorSafeTileOf(world.map.size, playerId === 'enemy', unit.x, unit.y)
-  const enemyTile = mirrorSafeTileOf(world.map.size, playerId === 'enemy', enemy.x, enemy.y)
-  const dx = Math.sign(from.x - enemyTile.x)
-  const dy = Math.sign(from.y - enemyTile.y)
+  return fleeDestFrom(world, playerId, unit, enemy.x, enemy.y, rally)
+}
+
+/**
+ * 脫離方向格（Prompt 10.24 D，`kiteDest` 的點來源一般化）：背離來源 px
+ * （敵單位／敵塔中心）退 2 格（對角 → 主軸）；全被擋 → 朝集結點退。
+ * 取格走鏡像安全路徑（Prompt 10.23）。
+ */
+function fleeDestFrom(
+  world: World,
+  playerId: PlayerId,
+  unit: Unit,
+  srcPxX: number,
+  srcPxY: number,
+  rally: TilePos,
+): TilePos {
+  const mirrorOrder = playerId === 'enemy'
+  const from = mirrorSafeTileOf(world.map.size, mirrorOrder, unit.x, unit.y)
+  const src = mirrorSafeTileOf(world.map.size, mirrorOrder, srcPxX, srcPxY)
+  const dx = Math.sign(from.x - src.x)
+  const dy = Math.sign(from.y - src.y)
   const step = 2
   const size = world.map.size
-  const mirrorOrder = playerId === 'enemy'
   const candidates: TilePos[] = []
   if (dx !== 0 || dy !== 0) {
     candidates.push({ x: from.x + dx * step, y: from.y + dy * step })
@@ -264,6 +300,51 @@ function kiteDest(
     if (fallback !== null) return fallback
   }
   return { x: from.x, y: from.y }
+}
+
+/** 追擊支援判定（Prompt 10.8）：目標不是風箏型遠程 → 直接可追；是遠程則需有
+ *  其他友軍在其 `CHASE_SUPPORT_RADIUS_TILES` 內（單兵追風箏 = 被射死，不追）。
+ *  Prompt 10.24 D：受火反應共用此判定。 */
+function chaseSupported(
+  world: World,
+  playerId: PlayerId,
+  enemy: Unit,
+  chaserId: number,
+): boolean {
+  if (enemy.role !== 'ranged') return true
+  const supportLimit = CHASE_SUPPORT_RADIUS_TILES * UNITS_PER_TILE
+  const supportSq = supportLimit * supportLimit
+  for (const ally of world.units) {
+    if (ally.player !== playerId || ally.id === chaserId || ally.hp <= 0) continue
+    const dx = ally.x - enemy.x
+    const dy = ally.y - enemy.y
+    if (dx * dx + dy * dy <= supportSq) return true
+  }
+  return false
+}
+
+/**
+ * 正在射我的敵方防禦建築（Prompt 10.24 D）：帶 `defense`、**已完工**、防禦射程
+ * 覆蓋我（外框量測，與 sim 同算法）。回傳覆蓋我的**最近**一座；平手取 id 小者
+ * （掃描序 id 升冪＋嚴格小於 ⟺ 同）。純函式、確定性。
+ */
+function threateningTowerOf(world: World, playerId: PlayerId, unit: Unit): Building | null {
+  let best: Building | null = null
+  let bestDist = Number.POSITIVE_INFINITY
+  for (const building of world.buildings) {
+    if (building.player === playerId || building.hp <= 0) continue
+    const def = world.defs.buildings[building.defId]
+    const defense = def?.defense
+    if (def === undefined || defense === undefined || !isConstructed(building)) continue
+    const rangeFixed = Math.round(defense.range * UNITS_PER_TILE)
+    const distSq = distanceSquaredToBuilding(unit, building)
+    if (distSq > rangeFixed * rangeFixed) continue
+    if (distSq < bestDist) {
+      best = building
+      bestDist = distSq
+    }
+  }
+  return best
 }
 
 /** 各小隊的集火目標（squadIndex → 敵單位 id；無敵方為 null）。CLI 顯示亦共用。 */
@@ -451,6 +532,75 @@ export function computeMicroPlan(
       continue
     }
 
+    // 2.4 受火反應（Prompt 10.24 D）：最近受過傷（滿血新兵不算——`lastCombatTick`
+    // 在出手或受傷時都會重置，開局 tick 0 全員不得誤判受火）且**打不到**攻擊者 →
+    // 有支援就貼身（追擊門檻放寬到 `range + UNDER_FIRE_CHASE_MARGIN`），無支援
+    // 或攻擊者是塔 → 脫離（背離攻擊者方向，`fleeDestFrom`）。
+    // 舊行為樹在「被打但打不到」時直接落到編隊分支站樁挨打致死；攻城換血除外
+    // （`squad.targetBuildingId` 非 null：正對建築輸出，塔火下的換血是攻城的
+    // 計畫內成本——撤了就永遠拆不掉主堡）。
+    const underFire =
+      unit.hp < maxHp && world.tick - unit.lastCombatTick <= UNDER_FIRE_WINDOW_TICKS
+    const sieging = squad !== undefined && squad.targetBuildingId !== null
+    if (underFire && !sieging) {
+      const tower = threateningTowerOf(world, playerId, unit)
+      if (tower !== null && squad?.targetBuildingId !== tower.id) {
+        const cover = fleeDestFrom(
+          world,
+          playerId,
+          unit,
+          (tower.x + tower.w / 2) * UNITS_PER_TILE,
+          (tower.y + tower.h / 2) * UNITS_PER_TILE,
+          rally,
+        )
+        decisions.push({
+          unitId: unit.id,
+          action: 'disengage',
+          squadIndex,
+          moveDest: shouldIssueMove(world, unit, cover) ? cover : null,
+          attackTargetId: null,
+          reason: `塔火壓制（${tower.defId} #${tower.id}，非攻城目標）：撤出射程`,
+        })
+        continue
+      }
+      const near = nearestEnemy(world, unit)
+      const chaseLimitFixed = rangeFixed + CHASE_MARGIN * UNITS_PER_TILE
+      if (near !== null && near.distSq > chaseLimitFixed * chaseLimitFixed) {
+        const underFireLimitFixed = rangeFixed + UNDER_FIRE_CHASE_MARGIN * UNITS_PER_TILE
+        if (
+          near.distSq <= underFireLimitFixed * underFireLimitFixed &&
+          chaseSupported(world, playerId, near.unit, unit.id)
+        ) {
+          const enemyTile = mirrorSafeTileOf(
+            world.map.size,
+            playerId === 'enemy',
+            near.unit.x,
+            near.unit.y,
+          )
+          decisions.push({
+            unitId: unit.id,
+            action: 'chase',
+            squadIndex,
+            moveDest: shouldIssueMove(world, unit, enemyTile) ? enemyTile : null,
+            attackTargetId: near.unit.id,
+            reason: `受火反應：攻擊者 #${near.unit.id} 壓制中（${(Math.sqrt(near.distSq) / UNITS_PER_TILE).toFixed(1)} 格）——有支援，貼身接戰`,
+          })
+          continue
+        }
+        // 更遠或無支援：脫離不硬拼（背離攻擊者方向），不再站樁挨打。
+        const cover = fleeDestFrom(world, playerId, unit, near.unit.x, near.unit.y, rally)
+        decisions.push({
+          unitId: unit.id,
+          action: 'disengage',
+          squadIndex,
+          moveDest: shouldIssueMove(world, unit, cover) ? cover : null,
+          attackTargetId: null,
+          reason: `受火反應：攻擊者 #${near.unit.id} 距 ${(Math.sqrt(near.distSq) / UNITS_PER_TILE).toFixed(1)} 格打不到——脫離不站樁挨打`,
+        })
+        continue
+      }
+    }
+
     // 2.5 追擊（Prompt 10.15 修訂）：敵在射程外但 ≤ range + CHASE_MARGIN → 前壓接戰。
     //     **不吃 AI 閘門**——量測（24 種子）顯示閘門造成系統性偏藍（16/3/5 → 14/7/3），
     //     追擊是「射程外一步內的貼身反應」，屬本地行為；接觸重評估（W1）改為
@@ -462,20 +612,7 @@ export function computeMicroPlan(
     if (near !== null) {
       const chaseLimitFixed = rangeFixed + CHASE_MARGIN * UNITS_PER_TILE
       if (near.distSq <= chaseLimitFixed * chaseLimitFixed) {
-        let supported = near.unit.role !== 'ranged'
-        if (!supported) {
-          const supportLimit = CHASE_SUPPORT_RADIUS_TILES * UNITS_PER_TILE
-          const supportSq = supportLimit * supportLimit
-          for (const ally of world.units) {
-            if (ally.player !== playerId || ally.id === unit.id || ally.hp <= 0) continue
-            const dx = ally.x - near.unit.x
-            const dy = ally.y - near.unit.y
-            if (dx * dx + dy * dy <= supportSq) {
-              supported = true
-              break
-            }
-          }
-        }
+        const supported = chaseSupported(world, playerId, near.unit, unit.id)
         if (supported) {
           const enemyTile = mirrorSafeTileOf(
             world.map.size,

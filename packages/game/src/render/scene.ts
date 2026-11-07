@@ -22,6 +22,7 @@ import {
   UNIT_RENDER_SIZE,
 } from './constants.ts'
 import { clamp01, fixedToPx, interpolateDisplay } from './interpolate.ts'
+import { firedThisTick, towerVictimOf } from './attackFx.ts'
 import {
   clampCamera,
   fitCamera,
@@ -286,7 +287,8 @@ export class GameScene {
       for (const before of prev.units) {
         const after = currById.get(before.id)
         if (after === undefined || after.hp <= 0) continue
-        if (!(before.attackAcc >= 1 && after.attackAcc < before.attackAcc)) continue
+        // 開火判據（Prompt 10.24 修，attackFx.ts）：attackAcc 只在開火 tick 下降。
+        if (!firedThisTick(before.attackAcc, after.attackAcc)) continue
         const def = this.defs.units[after.defId]
         if (def === undefined) continue
         const victim = victimOf(this.defs, after, currById, buildingsById)
@@ -301,30 +303,27 @@ export class GameScene {
           born: now,
         })
       }
-      // 塔的開火特效（Prompt 10.16）：快照 diff 偵測 `building.attackAcc` 掉落，
-      // 起點 = 建築**外框**最近受害者的點、終點 = 受害單位。
-      if (buildingsById.size > 0) {
-        const prevBuildingsById = new Map<number, WorldSnapshot['buildings'][number]>()
-        for (const building of prev.buildings) prevBuildingsById.set(building.id, building)
-        for (const before of prev.buildings) {
-          const after = buildingsById.get(before.id)
-          if (after === undefined || after.hp <= 0) continue
-          if (!(before.attackAcc >= 1 && after.attackAcc < before.attackAcc)) continue
-          const def = this.defs.buildings[after.defId]
-          if (def?.defense === undefined || after.targetId === null) continue
-          const victim = currById.get(after.targetId)
-          if (victim === undefined || victim.hp <= 0) continue
-          const edge = closestPointOnBuilding(victim, after, this.defs)
-          this.effects.push({
-            kind: 'shot',
-            fromX: fixedToPx(edge.x),
-            fromY: fixedToPx(edge.y),
-            toX: fixedToPx(victim.x),
-            toY: fixedToPx(victim.y),
-            color: after.player === 'player' ? COLOR_BUILDING_PLAYER : COLOR_BUILDING_ENEMY,
-            born: now,
-          })
-        }
+      // 塔的開火特效（Prompt 10.16，10.24 修）：快照 diff 偵測 `building.attackAcc`
+      // 掉落（同單位判據）；受害者由**渲染層現算**（`towerVictimOf`：射程內最近
+      // 敵方單位）——sim 的 `building.targetId` 恆為 null（無人設值），舊條件
+      // 讓塔的開火特效從未出現過。起點 = 建築**外框**最近受害者的點、終點 = 受害單位。
+      for (const before of prev.buildings) {
+        const after = buildingsById.get(before.id)
+        if (after === undefined || after.hp <= 0) continue
+        if (!firedThisTick(before.attackAcc, after.attackAcc)) continue
+        if (this.defs.buildings[after.defId]?.defense === undefined) continue
+        const victim = towerVictimOf(this.defs, after, curr.units)
+        if (victim === null) continue
+        const edge = closestPointOnBuilding(victim, after, this.defs)
+        this.effects.push({
+          kind: 'shot',
+          fromX: fixedToPx(edge.x),
+          fromY: fixedToPx(edge.y),
+          toX: fixedToPx(victim.x),
+          toY: fixedToPx(victim.y),
+          color: after.player === 'player' ? COLOR_BUILDING_PLAYER : COLOR_BUILDING_ENEMY,
+          born: now,
+        })
       }
     }
     this.effects = this.effects.filter((fx) => now - fx.born < ATTACK_FX_MS)
@@ -347,12 +346,13 @@ export class GameScene {
         .lineTo(fixedToPx(victim.x), fixedToPx(victim.y))
         .stroke({ width: 1, color, alpha: 0.28 })
     }
-    // 塔的持續接戰線（Prompt 10.16）：有目標的塔畫淡色細線（外框最近點 → 受害單位）。
+    // 塔的持續接戰線（Prompt 10.16，10.24 修）：受害者由 `towerVictimOf` 現算——
+    // 舊條件依賴 `building.targetId`（恆 null）→ 塔的接戰線從未畫過。
     for (const building of curr.buildings) {
-      if (building.hp <= 0 || building.targetId === null) continue
+      if (building.hp <= 0) continue
       if (this.defs.buildings[building.defId]?.defense === undefined) continue
-      const victim = engageById.get(building.targetId)
-      if (victim === undefined || victim.hp <= 0) continue
+      const victim = towerVictimOf(this.defs, building, curr.units)
+      if (victim === null) continue
       const edge = closestPointOnBuilding(victim, building, this.defs)
       const color = building.player === 'player' ? COLOR_BUILDING_PLAYER : COLOR_BUILDING_ENEMY
       this.fxG

@@ -28,9 +28,10 @@ export function inRangeSquared(
   return dx * dx + dy * dy <= rangeFixed * rangeFixed
 }
 
-/** 單位固定點座標到建築外框的平方距離（點在框內為 0）。 */
+/** 單位固定點座標到建築外框的平方距離（點在框內為 0）。
+ *  第一參數只需 `{x, y}`（Prompt 10.24 D：戰術層以小隊重心 px 查塔火覆蓋）。 */
 export function distanceSquaredToBuilding(
-  unit: Unit,
+  unit: { x: number; y: number },
   building: { x: number; y: number; w: number; h: number },
 ): number {
   // 距離以佔地格外框**邊緣**計算：把單位固定點座標 clamp 到建築矩形

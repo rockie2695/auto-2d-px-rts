@@ -1038,3 +1038,103 @@ describe('戰術層整合（真實內容、seed 42）', () => {
     expect(runReal(200).positions).toBe(runReal(200).positions)
   })
 })
+
+describe('塔火接觸與求援（Prompt 10.24 D：塔對舊版 AI 是隱形的）', () => {
+  const TOWER = makeBuildingDef({
+    id: 'tower',
+    size: [2, 2],
+    ai: { value: 400 },
+    defense: { dmg: 10, range: 4.0, attackSpeed: 0.5 },
+  })
+  /** 巨塔：dmg 5000 → 威脅 2500 戰力，6 兵（600）殺不掉。 */
+  const BIG_TOWER = makeBuildingDef({
+    id: 'tower',
+    size: [2, 2],
+    ai: { value: 400 },
+    defense: { dmg: 5000, range: 4.0, attackSpeed: 0.5 },
+  })
+
+  function towerWorld(tower: typeof TOWER): { world: World; tower: ReturnType<typeof addBuilding> } {
+    const world = createTestWorld({
+      size: 32,
+      units: [UNIT],
+      buildings: [KEEP, MINE, tower],
+    })
+    addBuilding(world, 'player', 'keep', { x: 2, y: 2 }, { built: true, nodeId: null })
+    addBuilding(world, 'enemy', 'keep', { x: 28, y: 28 }, { built: true, nodeId: null })
+    const placed = addBuilding(world, 'enemy', 'tower', { x: 8, y: 4 }, { built: true, nodeId: null })
+    // 藍 6 兵聚在塔射程邊（重心距塔外框 ~1.5 格）
+    for (const tile of [
+      { x: 5, y: 4 },
+      { x: 5, y: 5 },
+      { x: 6, y: 4 },
+      { x: 6, y: 5 },
+      { x: 6, y: 6 },
+      { x: 5, y: 6 },
+    ]) {
+      putUnit(world, 'player', 'u', tile)
+    }
+    return { world, tower: placed }
+  }
+
+  it('塔火覆蓋小隊重心 → 視為接觸；殺得掉 → 迎戰目標改塔（targetBuildingId = 塔 id）', () => {
+    const { world, tower } = towerWorld(TOWER)
+    world.tick = 200 // 越過接觸重評冷卻（60 tick），首個接觸循環才能評估
+    const plan = computeTacticalPlan(world, 'player', resolvePolicies({ aggression: 1 }))
+    const sieging = plan.squads.find((squad) => squad.targetBuildingId === tower.id)
+    expect(sieging).toBeDefined()
+    expect(sieging?.engaging).toBe(true)
+    expect(sieging?.target.x).toBeGreaterThanOrEqual(6) // 攻城接近格貼著塔（8,4）
+    expect(sieging?.target.x).toBeLessThanOrEqual(10)
+    expect((plan.events ?? []).some((event) => event.outcome === 'engage')).toBe(true)
+  })
+
+  it('塔火殺不掉且無友隊響應 → 小隊撤退重整（不再維持原命令站樁）', () => {
+    const { world } = towerWorld(BIG_TOWER)
+    // 敵 12 兵守後場 → 我方戰力劣勢 → 預設任務 defend（撤退改判只對 defend/stage 適用）
+    for (const tile of [
+      { x: 25, y: 26 }, { x: 26, y: 26 }, { x: 27, y: 26 }, { x: 28, y: 26 },
+      { x: 25, y: 27 }, { x: 26, y: 27 }, { x: 27, y: 27 }, { x: 28, y: 27 },
+      { x: 25, y: 28 }, { x: 26, y: 28 }, { x: 27, y: 28 }, { x: 28, y: 28 },
+    ]) {
+      putUnit(world, 'enemy', 'u', tile)
+    }
+    world.tick = 200
+    const plan = computeTacticalPlan(world, 'player', resolvePolicies({ aggression: 0 }))
+    expect(plan.squads.length).toBeGreaterThanOrEqual(1)
+    for (const squad of plan.squads) {
+      expect(squad.mission).toBe('retreat')
+    }
+    expect((plan.events ?? []).some((event) => event.outcome === 'keep')).toBe(true)
+  })
+
+  it('防守隊也響應夾擊呼叫（受襲點就在隔壁時不再袖手旁觀）', () => {
+    const world = createTestWorld({ size: 32, units: [UNIT], buildings: [KEEP, MINE] })
+    addBuilding(world, 'player', 'keep', { x: 2, y: 2 }, { built: true, nodeId: null })
+    addBuilding(world, 'enemy', 'keep', { x: 28, y: 28 }, { built: true, nodeId: null })
+    // 受襲小隊 A：1 兵在 (10,10)，敵 3 兵貼著（戰力 100 vs 300 → 殺不掉）
+    const aId = putUnit(world, 'player', 'u', { x: 10, y: 10 })
+    for (const tile of [{ x: 8, y: 10 }, { x: 8, y: 11 }, { x: 9, y: 10 }]) {
+      putUnit(world, 'enemy', 'u', tile)
+    }
+    // 接應小隊 B：6 兵在 (19..20,10..11)（重心距 A ~11.5 格 < 接應半徑 12、
+    // 殺得掉 300 戰力）
+    for (const tile of [
+      { x: 19, y: 10 },
+      { x: 20, y: 10 },
+      { x: 19, y: 11 },
+      { x: 20, y: 11 },
+      { x: 19, y: 10 },
+      { x: 20, y: 11 },
+    ]) {
+      putUnit(world, 'player', 'u', tile)
+    }
+    world.tick = 200
+    const plan = computeTacticalPlan(world, 'player', resolvePolicies({ aggression: 0 }))
+    expect((plan.events ?? []).some((event) => event.outcome === 'pincer')).toBe(true)
+    expect(plan.squads.some((squad) => squad.engaging === true)).toBe(true)
+    // A 已有響應 → 不誤觸「無響應撤退」
+    const lone = plan.squads.find((squad) => squad.memberIds.includes(aId))
+    expect(lone?.mission).not.toBe('retreat')
+  })
+})
