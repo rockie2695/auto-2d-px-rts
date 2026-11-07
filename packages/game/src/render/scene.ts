@@ -8,11 +8,13 @@ import {
   COLOR_BUILDING_ENEMY,
   COLOR_BUILDING_PLAYER,
   COLOR_CRYSTAL_NODE,
+  COLOR_EMERALD_NODE,
   COLOR_FLOOR,
   COLOR_HP_BG,
   COLOR_HP_HIGH,
   COLOR_HP_LOW,
   COLOR_HP_MID,
+  COLOR_RUBY_NODE,
   COLOR_ROCK,
   COLOR_SELECTED,
   COLOR_UNIT_ENEMY,
@@ -153,8 +155,15 @@ export class GameScene {
           .fill(isRockAt(world, { x, y }) ? COLOR_ROCK : COLOR_FLOOR)
       }
     }
-    // 資源點：亮藍小方塊，讓礦場在空地上有依附參照。
+    // 資源點：小方塊**按資源類型著色**（Prompt 5：藍水晶／紅寶石／綠翡翠），
+    // 讓礦場在空地上有依附參照、礦點類型一眼可辨。
     for (const node of world.resourceNodes) {
+      const color =
+        node.resourceType === 'red_ruby'
+          ? COLOR_RUBY_NODE
+          : node.resourceType === 'green_emerald'
+            ? COLOR_EMERALD_NODE
+            : COLOR_CRYSTAL_NODE
       this.tilesG
         .rect(
           node.x * TILE_SIZE + TILE_SIZE / 2 - 5,
@@ -162,7 +171,7 @@ export class GameScene {
           10,
           10,
         )
-        .fill(COLOR_CRYSTAL_NODE)
+        .fill(color)
     }
   }
 

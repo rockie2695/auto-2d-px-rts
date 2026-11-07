@@ -294,18 +294,18 @@ describe('勝負判定（純函數）', () => {
     const enemy = world.players.find((p) => p.id === 'enemy')
     if (player === undefined || enemy === undefined) throw new Error('找不到玩家')
     // 總價值多者勝（Prompt 10.23：取代 Prompt 10.10 的「一律平手」）。
-    enemy.blueCrystal += 500 // 超出對方 → 敵勝
+    enemy.resources.blue_crystal += 500 // 超出對方 → 敵勝
     expect(resolveMatchResult(world)).toBe('enemy')
-    player.blueCrystal += 800 // 反超 → 玩家勝
+    player.resources.blue_crystal += 800 // 反超 → 玩家勝
     expect(resolveMatchResult(world)).toBe('player')
-    enemy.blueCrystal -= 500
-    player.blueCrystal -= 800
+    enemy.resources.blue_crystal -= 500
+    player.resources.blue_crystal -= 800
     expect(resolveMatchResult(world)).toBe('draw') // 重新相等 → 平手
 
     // 未超時（雙 keep 俱在）→ 一律平手（手動提前結束語義，Prompt 10.10 不變）。
     world.tick = world.match.maxTicks - 1
     expect(matchEnded(world)).toBe(false)
-    enemy.blueCrystal += 5000
+    enemy.resources.blue_crystal += 5000
     expect(resolveMatchResult(world)).toBe('draw')
   })
 
@@ -563,7 +563,7 @@ describe('鏡像對稱（Prompt 10.9）', () => {
       expect(blueUnits).toBe(redUnits)
     }
     const crystalOf = (playerId: 'player' | 'enemy'): number =>
-      world.players.find((player) => player.id === playerId)?.blueCrystal ?? -1
+      world.players.find((player) => player.id === playerId)?.resources.blue_crystal ?? -1
     expect(crystalOf('player')).toBe(crystalOf('enemy'))
 
     // 建築：strict 模式逐座鏡像配對；aggregate 模式不比建築（開戰後拆遷時序不對稱），

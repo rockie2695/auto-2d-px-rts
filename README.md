@@ -422,3 +422,34 @@ JSON 結構會按最終 schema 設計，方便日後遷移到 DB。
   套用、生存項在命運帶內，平衡未漂移）、12 種子公平門通過、pnpm dev 200。
   檢查清單 grep：`armor` 正常；`armorType`／`damageType` 0 匹配；
   「護甲」僅存在於禁用說明與反測試斷言。
+
+- [x] 階段三 Prompt 5 — 三資源經濟（藍水晶／紅寶石／綠翡翠）：
+  **緣由**——SPEC §3 原只有藍水晶；三資源屬延後清單（規則 12），Prompt 5 落地。
+  1. **Schema**：`ResourceAmountSchema` 三鍵化（`red_ruby`／`green_emerald`
+     zod default 0——舊內容檔／replay／舊 fixture 不必補鍵）；資源節點帶
+     `resourceType`（缺省 blue_crystal）；`ResourceIdSchema` 匯出。
+  2. **sim**：`Player.blueCrystal` → `resources` 三鍵表（33 處引用全改）；
+     收入按礦場產出資源入帳（各資源上限獨立 9999）；排兵／蓋建築**三資源
+     逐一檢查逐一扣減**；礦場只能蓋在**類型匹配**的空閒節點上；
+     `getResource(world, playerId, type)` ＋ `getIncome(...)`（60 tick 入帳環）。
+  3. **Seed**：新增 `red_ruby`／`green_emerald` 資源檔、`ruby_mine`（0.5/s）、
+     `emerald_sanctuary`（0.25/s）兩礦（與 crystal_mine 同構 150/12s/300hp）、
+     `ballista`（大型 ranged、150hp/25dmg/3.0 格、**40 藍＋80 紅**、10s——
+     首個雙資源單位）；地圖 6→**10 節點**（每方 3 藍＋1 紅＋1 綠，逐點鏡像、
+     皆 500 蘊藏）、`mineCap` 3→**5**。
+  4. **AI（內建啟發式，resourceBias 滑桿留後續 prompt）**：礦場分型
+     （`producedResourceOf`）——放置找同型空閒節點、飽和分型計算；
+     **藍礦永遠優先**（紅綠礦在藍礦無空閒節點前效用 0）、紅礦解鎖後
+     roster 有吃紅單位 +0.4、綠礦紅礦蓋出後才解鎖且 ×0.5（零消費者、
+     純資產——計入超時價值裁定）。
+  5. **Metrics/UI**：`getBattleStats` 帶三資源庫存＋三收入率；資源面板
+     **三行三資源**（各帶 +x.x/s）＋敵方三資源彙總行；ResourceChart 第四模式
+     「三資源」＝我方藍/紅/綠三線（資源色同節點色）；replay 加
+     `rubySeries`／`emeraldSeries`（舊檔缺欄相容）；平衡指標總成本 =
+     三資源等權求和。
+  **驗證**——379/379 測試全過（新增三礦並行/getIncome 窗口/逐資源扣費/
+  節點類型匹配/per-resource 上限共 10 測、AI 啟發式 3 測、內容檔鎖值更新）、
+  tsc＋oxlint 乾淨、fullMirrorProbe 7200 前 0 mismatch、pairProbe mirrorOK、
+  saltMirrorProbe 363 采樣 0 mismatch、24-seed tally **6 藍 / 10 紅 / 8 平**
+  （12 種子公平門 3/6/3 通過）、pnpm dev 200。grep 檢查：Player 狀態層已無
+  單資源欄位（`blueCrystal` 0 匹配）。

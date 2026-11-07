@@ -12,6 +12,10 @@ import type { ChartPoint } from './collector.ts'
 export const PLAYER_LINE_COLOR = '#7ec7ff'
 export const ENEMY_LINE_COLOR = '#ff7a7a'
 
+/** 三資源曲線的資源色（Prompt 5；與資源 JSON / 地圖節點色一致）。 */
+export const RUBY_LINE_COLOR = '#ff6b6b'
+export const EMERALD_LINE_COLOR = '#3ecf8e'
+
 /** 繪圖區幾何：左側留 y 軸標籤欄，底部留 x 軸標籤列。 */
 export interface PlotGeometry {
   left: number

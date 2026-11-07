@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "building": {
+    "id": "emerald_sanctuary",
+    "faction": "test_faction",
+    "cost": {
+      "blue_crystal": 150
+    },
+    "size": [
+      1,
+      1
+    ],
+    "produces": [],
+    "requires": [],
+    "sprite": {
+      "color": "#3ecf8e",
+      "size": 12
+    },
+    "ai": {
+      "value": 300
+    },
+    "hp": 300,
+    "buildTimeSec": 12,
+    "incomePerSec": {
+      "green_emerald": 0.25
+    },
+    "requiresResourceNode": true
+  }
+}

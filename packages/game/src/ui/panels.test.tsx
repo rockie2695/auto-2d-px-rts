@@ -108,25 +108,31 @@ const textOf = (container: HTMLElement): string => container.textContent ?? ''
 
 /* ---------- 資源面板 ---------- */
 
-describe('ResourcePanel（右上）', () => {
-  it('顯示雙方水晶、收入與戰力比', () => {
+describe('ResourcePanel（右上；Prompt 5 三資源）', () => {
+  it('顯示三資源庫存、各自收入與戰力比', () => {
     const container = render(
       <ResourcePanel
-        playerCrystal={51}
-        enemyCrystal={40}
-        playerIncome={1.2}
-        enemyIncome={0.5}
+        playerResources={{ blue_crystal: 51, red_ruby: 12, green_emerald: 3 }}
+        enemyResources={{ blue_crystal: 40, red_ruby: 0, green_emerald: 0 }}
+        playerIncomes={{ blue_crystal: 1.2, red_ruby: 0.5, green_emerald: 0.2 }}
         ratio={1.1}
       />,
     )
-    expect(textOf(container)).toContain('我方水晶51（+1.2/s）')
-    expect(textOf(container)).toContain('敵方水晶40（+0.5/s）')
+    expect(textOf(container)).toContain('藍水晶51（+1.2/s）')
+    expect(textOf(container)).toContain('紅寶石12（+0.5/s）')
+    expect(textOf(container)).toContain('綠翡翠3（+0.2/s）')
+    expect(textOf(container)).toContain('敵方三資源40/0/0')
     expect(container.querySelector('[data-testid="ratio-value"]')?.textContent).toBe('1.10')
   })
 
   it('收入未知顯示 --', () => {
     const container = render(
-      <ResourcePanel playerCrystal={3} enemyCrystal={3} playerIncome={null} enemyIncome={null} ratio={1} />,
+      <ResourcePanel
+        playerResources={{ blue_crystal: 3, red_ruby: 0, green_emerald: 0 }}
+        enemyResources={{ blue_crystal: 3, red_ruby: 0, green_emerald: 0 }}
+        playerIncomes={{ blue_crystal: null as unknown as number, red_ruby: 0, green_emerald: 0 }}
+        ratio={1}
+      />,
     )
     expect(textOf(container)).toContain('--')
   })
@@ -144,10 +150,9 @@ describe('戰力比色階（0.7、1.4 邊界走黃）', () => {
     for (const item of cases) {
       const container = render(
         <ResourcePanel
-          playerCrystal={0}
-          enemyCrystal={0}
-          playerIncome={null}
-          enemyIncome={null}
+          playerResources={{ blue_crystal: 0, red_ruby: 0, green_emerald: 0 }}
+          enemyResources={{ blue_crystal: 0, red_ruby: 0, green_emerald: 0 }}
+          playerIncomes={{ blue_crystal: 0, red_ruby: 0, green_emerald: 0 }}
           ratio={item.ratio}
         />,
       )
@@ -310,7 +315,7 @@ describe('ResourceChart（左上，三指標切換）', () => {
     expect(select).not.toBeNull()
     expect(select.value).toBe('crystal')
     const options = [...select.querySelectorAll('option')].map((option) => option.value)
-    expect(options).toEqual(['crystal', 'units', 'power'])
+    expect(options).toEqual(['crystal', 'units', 'power', 'resources'])
     expect(textOf(container)).toContain('資源曲線（60 秒）')
   })
 

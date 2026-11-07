@@ -6,8 +6,10 @@ import {
   drawEndDot,
   drawSeriesLine,
   drawYAxis,
+  EMERALD_LINE_COLOR,
   ENEMY_LINE_COLOR,
   PLAYER_LINE_COLOR,
+  RUBY_LINE_COLOR,
 } from './chartDraw.ts'
 import type { PlotGeometry } from './chartDraw.ts'
 
@@ -21,18 +23,21 @@ import type { PlotGeometry } from './chartDraw.ts'
  * 繪圖工具在 `chartDraw.ts`，取樣在 `BattleDashboard`（三個 `ResourceSeries`）。
  */
 
-export type ChartMode = 'crystal' | 'units' | 'power'
+export type ChartMode = 'crystal' | 'units' | 'power' | 'resources'
 
 const MODES: ReadonlyArray<{ id: ChartMode; label: string }> = [
   { id: 'crystal', label: '資源曲線' },
   { id: 'units', label: '單位數量' },
   { id: 'power', label: '戰力' },
+  { id: 'resources', label: '三資源' },
 ]
 
 export function ResourceChart({
   crystalSamples,
   unitSamples,
   powerSamples,
+  rubySamples = [],
+  emeraldSamples = [],
 }: {
   /** 雙方水晶存量取樣（60 秒滾動窗）。 */
   crystalSamples: readonly SamplePoint[]
@@ -40,12 +45,15 @@ export function ResourceChart({
   unitSamples: readonly SamplePoint[]
   /** 雙方戰力取樣。 */
   powerSamples: readonly SamplePoint[]
+  /** 雙方紅寶石存量取樣（Prompt 5；三資源模式用 player 值）。 */
+  rubySamples?: readonly SamplePoint[]
+  /** 雙方綠翡翠存量取樣（Prompt 5）。 */
+  emeraldSamples?: readonly SamplePoint[]
 }) {
   const [mode, setMode] = useState<ChartMode>('crystal')
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
 
   const samples = mode === 'crystal' ? crystalSamples : mode === 'units' ? unitSamples : powerSamples
-  const modeLabel = MODES.find((item) => item.id === mode)?.label ?? ''
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -57,8 +65,60 @@ export function ResourceChart({
     ctx.clearRect(0, 0, width, height)
     ctx.fillStyle = '#2a2f38'
     ctx.fillRect(0, 0, width, height)
-    const domain = chartDomain(samples)
     const plot: PlotGeometry = { left: 34, right: width - 6, top: 8, bottom: height - 8 }
+
+    // 三資源模式（Prompt 5）：我方藍/紅/綠三線共用值域。
+    if (mode === 'resources') {
+      const series: ReadonlyArray<{ points: readonly SamplePoint[]; color: string; label: string }> = [
+        { points: crystalSamples, color: PLAYER_LINE_COLOR, label: '藍' },
+        { points: rubySamples, color: RUBY_LINE_COLOR, label: '紅' },
+        { points: emeraldSamples, color: EMERALD_LINE_COLOR, label: '綠' },
+      ]
+      const values = series.flatMap((entry) => entry.points.map((point) => point.player))
+      if (values.length === 0) {
+        ctx.fillStyle = '#808a96'
+        ctx.textAlign = 'left'
+        ctx.fillText('等待資料…', 8, height / 2 + 4)
+        return
+      }
+      let minValue = Number.POSITIVE_INFINITY
+      let maxValue = Number.NEGATIVE_INFINITY
+      for (const value of values) {
+        minValue = Math.min(minValue, value)
+        maxValue = Math.max(maxValue, value)
+      }
+      const span = Math.max(maxValue - minValue, 1)
+      const pad = span * 0.1
+      const domain = { min: minValue, max: maxValue, bottom: minValue - pad, top: maxValue + pad }
+      drawYAxis(ctx, domain, plot)
+      const latest = crystalSamples[crystalSamples.length - 1]
+      const spanTicks =
+        crystalSamples.length > 1
+          ? Math.max(1, (latest?.tick ?? 0) - (crystalSamples[0]?.tick ?? 0))
+          : 1
+      const startX = (latest?.tick ?? 0) - spanTicks
+      for (const entry of series) {
+        const points = entry.points.map((sample) => ({
+          x: Math.max(0, Math.min(1, (sample.tick - startX) / spanTicks)),
+          y: Math.max(0, Math.min(1, (sample.player - domain.bottom) / span)),
+        }))
+        drawSeriesLine(ctx, points, plot, entry.color, 2)
+        drawEndDot(ctx, points, plot, entry.color)
+      }
+      // 圖例（右上角）：三色塊 + 資源名。
+      ctx.font = '10px sans-serif'
+      ctx.textAlign = 'left'
+      let legendX = width - 78
+      for (const entry of series) {
+        ctx.fillStyle = entry.color
+        ctx.fillRect(legendX, 6, 6, 6)
+        ctx.fillText(entry.label, legendX + 8, 12)
+        legendX += 26
+      }
+      return
+    }
+
+    const domain = chartDomain(samples)
     if (domain === null) {
       ctx.fillStyle = '#808a96'
       ctx.textAlign = 'left'
@@ -82,12 +142,12 @@ export function ResourceChart({
     ctx.fillStyle = ENEMY_LINE_COLOR
     ctx.fillRect(width - 52, 18, 6, 6)
     ctx.fillText('敵方', width - 43, 24)
-  }, [samples])
+  }, [mode, samples, rubySamples, emeraldSamples, crystalSamples])
 
   return (
     <aside className="hud-panel panel-top-left" data-testid="resource-chart">
       <div className="hud-panel-title">
-        <span>{modeLabel}（60 秒）</span>
+        <span>{MODES.find((item) => item.id === mode)?.label ?? ''}（60 秒）</span>
         <select
           className="chart-mode-select"
           data-testid="chart-mode"

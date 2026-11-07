@@ -18,14 +18,26 @@ const IdSchema = z.string().min(1, 'id 不可為空')
 /** 十六進位顏色（`#rrggbb`），用於資源、單位與建築的 sprite。 */
 export const HexColorSchema = z.string().regex(/^#[0-9a-fA-F]{6}$/, '顏色必須是 #rrggbb 格式')
 
-/** 以資源 id 為鍵的數量表（整數，用於成本與存量）。 */
+/** 三資源 id（階段三 Prompt 5）：blue_crystal 基礎、red_ruby 軍事、green_emerald 科技。 */
+export const RESOURCE_IDS = ['blue_crystal', 'red_ruby', 'green_emerald'] as const
+export const ResourceIdSchema = z.enum(RESOURCE_IDS)
+export type ResourceId = (typeof RESOURCE_IDS)[number]
+
+/**
+ * 以資源 id 為鍵的數量表（整數，用於成本與存量；Prompt 5 三資源）。
+ * 紅寶石／綠翡翠缺省 0——舊內容檔、舊 replay 與既有測試 fixture 不必逐個補鍵。
+ */
 export const ResourceAmountSchema = z.object({
   blue_crystal: z.number().int().nonnegative(),
+  red_ruby: z.number().int().nonnegative().default(0),
+  green_emerald: z.number().int().nonnegative().default(0),
 })
 
-/** 以資源 id 為鍵的速率表（可為小數，用於每秒產出）。 */
+/** 以資源 id 為鍵的速率表（可為小數，用於每秒產出；缺省 0）。 */
 export const ResourceRateSchema = z.object({
-  blue_crystal: z.number().nonnegative(),
+  blue_crystal: z.number().nonnegative().default(0),
+  red_ruby: z.number().nonnegative().default(0),
+  green_emerald: z.number().nonnegative().default(0),
 })
 
 /** 地圖上的單一格座標，範圍是 [0, map.size)。 */
@@ -37,14 +49,16 @@ export const TileCoordSchema = z.object({
 export type TileCoord = z.infer<typeof TileCoordSchema>
 
 /**
- * 地圖上的資源節點（Prompt 5）：格座標 + 可採總量。
- * 礦場必須蓋在節點上；每入帳 1 水晶扣 1 amount，歸零後礦場保留但收入為 0。
+ * 地圖上的資源節點（Prompt 5）：格座標 + 可採總量 + 資源類型。
+ * 礦場必須蓋在**對應類型**的節點上；每入帳 1 單位扣 1 amount，歸零後礦場保留但收入為 0。
  */
 export const ResourceNodeSchema = z.object({
   x: z.number().int(),
   y: z.number().int(),
   /** 節點蘊藏總量（整數，採完即耗盡）。 */
   amount: z.number().int().positive(),
+  /** 節點產出的資源類型（缺省 blue_crystal——舊地圖檔不用改）。 */
+  resourceType: ResourceIdSchema.default('blue_crystal'),
 })
 
 export type ResourceNodeCoord = z.infer<typeof ResourceNodeSchema>
@@ -57,9 +71,14 @@ export const ResourceDefSchema = z.object({
   id: IdSchema,
   name: z.string().min(1),
   color: HexColorSchema,
+  /** 面板圖示框樣式（Prompt 5 預留；MVP 未使用）。 */
+  iconFrame: z.string().optional(),
 })
 
 export type ResourceDef = z.infer<typeof ResourceDefSchema>
+
+/** 三資源數量表（Prompt 5：cost／startResources；紅綠鍵由 zod default 補 0）。 */
+export type ResourceAmount = z.infer<typeof ResourceAmountSchema>
 
 /* ------------------------------------------------------------------ */
 /* 單位                                                                */

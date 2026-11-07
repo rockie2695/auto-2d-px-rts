@@ -1,4 +1,5 @@
-import { MAX_RESOURCE, TICK_RATE_HZ } from '@auto-2d-px-rts/shared'
+import { MAX_RESOURCE, RESOURCE_IDS, TICK_RATE_HZ } from '@auto-2d-px-rts/shared'
+import type { BuildingDef, ResourceAmount, ResourceId } from '@auto-2d-px-rts/shared'
 
 import {
   buildingEffectiveMaxHp,
@@ -7,8 +8,9 @@ import {
   isConstructed,
   tileCenter,
   UNITS_PER_TILE,
+  INCOME_WINDOW_TICKS,
 } from './types.ts'
-import type { Building, PlayerId, TilePos, Unit, World } from './types.ts'
+import type { Building, PlayerId, ResourceStock, TilePos, Unit, World } from './types.ts'
 
 /**
  * 經濟系統（SPEC §5–§7）：採礦收入、建築施工、生產佇列與放置／生成 API。
@@ -39,35 +41,87 @@ const PERIMETER_OFFSETS: ReadonlyArray<readonly [number, number]> = [
 /* 收入                                                                */
 /* ------------------------------------------------------------------ */
 
+/**
+ * 建築產出的資源（Prompt 5）：`incomePerSec` 中第一個 rate > 0 的鍵。
+ * MVP 每座礦場只產**一種**資源（crystal_mine → blue、ruby_mine → red、
+ * emerald_sanctuary → green）；多鍵同時非 0 屬未定義（schema 不禁止、sim 取首鍵）。
+ */
+export function producedResourceOf(def: BuildingDef): ResourceId | null {
+  for (const id of RESOURCE_IDS) {
+    const rate = def.incomePerSec
+    if (rate !== undefined && rate[id] > 0) return id
+  }
+  return null
+}
+
 function stepIncome(world: World): void {
+  // 收入環（Prompt 5 getIncome）：本 tick 的槽先清零（即使 0 也要清——窗口滾動）。
+  const slot = world.tick % INCOME_WINDOW_TICKS
+  for (const player of world.players) {
+    for (const id of RESOURCE_IDS) {
+      const ring = player.incomeRing[id]
+      if (ring !== undefined) ring[slot] = 0
+    }
+  }
+
   // 逐礦結算（Prompt 5）：每座有 incomePerSec 的建築各自累積，
-  // 取出的水晶同時受「庫存上限 MAX_RESOURCE」與「節點剩餘量」夾制。
+  // 取出的資源同時受「庫存上限 MAX_RESOURCE」與「節點剩餘量」夾制。
   for (const building of world.buildings) {
     if (building.hp <= 0) continue
     const def = world.defs.buildings[building.defId]
     const rate = def?.incomePerSec
-    if (rate === undefined) continue
+    if (def === undefined || rate === undefined) continue
+    const resourceType = producedResourceOf(def)
+    if (resourceType === null) continue
 
-    building.incomeAccMilli += Math.round(rate.blue_crystal * 1000)
+    building.incomeAccMilli += Math.round(rate[resourceType] * 1000)
     let gain = Math.floor(building.incomeAccMilli / INCOME_DIVISOR)
     if (gain <= 0) continue
     building.incomeAccMilli -= gain * INCOME_DIVISOR
 
     const player = getPlayer(world, building.player)
-    gain = Math.min(gain, MAX_RESOURCE - player.blueCrystal) // 庫存滿 → 不入帳
+    const stock = player.resources[resourceType]
+    gain = Math.min(gain, MAX_RESOURCE - stock) // 庫存滿 → 不入帳
     if (building.nodeId !== null) {
       const node = world.resourceNodes[building.nodeId]
       if (node === undefined) continue
       gain = Math.min(gain, node.amountRemaining) // 節點耗盡 → 收入為 0
       node.amountRemaining -= gain
     }
-    if (gain > 0) player.blueCrystal += gain
+    if (gain > 0) {
+      player.resources[resourceType] += gain
+      const ring = player.incomeRing[resourceType]
+      if (ring !== undefined) ring[slot] = (ring[slot] ?? 0) + gain
+    }
   }
 }
 
-/** 玩家目前的藍水晶庫存（Prompt 5 指定 API）。 */
-export function getResource(world: World, playerId: PlayerId): number {
-  return getPlayer(world, playerId).blueCrystal
+/** 玩家指定資源的庫存（Prompt 5 指定 API）。 */
+export function getResource(world: World, playerId: PlayerId, type: ResourceId): number {
+  return getPlayer(world, playerId).resources[type]
+}
+
+/** 玩家指定資源最近 60 tick（3 秒）的總入帳（Prompt 5 指定 API）。 */
+export function getIncome(world: World, playerId: PlayerId, type: ResourceId): number {
+  const ring = getPlayer(world, playerId).incomeRing[type]
+  return ring === undefined ? 0 : ring.reduce((total, value) => total + value, 0)
+}
+
+/* ------------------------------------------------------------------ */
+/* 多資源支付（Prompt 5）                                               */
+/* ------------------------------------------------------------------ */
+
+/** 是否付得起（三資源逐一檢查）。 */
+export function canAfford(stock: ResourceStock, cost: ResourceAmount): boolean {
+  return RESOURCE_IDS.every((id) => stock[id] >= (cost[id] ?? 0))
+}
+
+/** 逐資源扣款（呼叫前必先 canAfford——本函式不做餘額檢查）。 */
+function payCost(stock: ResourceStock, cost: ResourceAmount): void {
+  for (const id of RESOURCE_IDS) {
+    const amount = cost[id] ?? 0
+    if (amount > 0) stock[id] -= amount
+  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -213,9 +267,9 @@ export function queueTrain(world: World, buildingId: number, defId: string): boo
     .filter((candidate) => candidate.player === player.id)
     .reduce((total, candidate) => total + candidate.queue.length, 0)
   if (player.unitCount + queuedCount >= world.match.unitCap) return false
-  if (player.blueCrystal < def.cost.blue_crystal) return false
+  if (!canAfford(player.resources, def.cost)) return false
 
-  player.blueCrystal -= def.cost.blue_crystal
+  payCost(player.resources, def.cost)
   building.queue.push({ defId, remainingTicks: Math.round(def.trainTimeSec * TICK_RATE_HZ) })
   return true
 }
@@ -311,7 +365,7 @@ export function placeBuilding(
   if (!world.faction.buildings.includes(defId)) return null
 
   const player = getPlayer(world, playerId)
-  if (player.blueCrystal < def.cost.blue_crystal) return null
+  if (!canAfford(player.resources, def.cost)) return null
 
   const [w, h] = def.size
   if (tile.x < 0 || tile.y < 0 || tile.x + w > world.map.size || tile.y + h > world.map.size) {
@@ -324,20 +378,23 @@ export function placeBuilding(
     }
   }
 
-  // 資源點規則。
+  // 資源點規則（Prompt 5）：礦場必須蓋在**對應資源類型**的節點上。
   const center = tileCenter(tile)
   const coveredNode = nodeIndexAt(world, center.x, center.y)
   if (def.requiresResourceNode === true) {
     if (coveredNode === null) return null
     const node = world.resourceNodes[coveredNode]
     if (node === undefined || node.buildingId !== null) return null
+    // 類型匹配：建築產什麼資源、就只能蓋在該類型節點上。
+    const wantedType = producedResourceOf(def)
+    if (wantedType !== null && node.resourceType !== wantedType) return null
     if (player.mineCount >= world.match.mineCap) return null
   } else {
     if (coveredNode !== null) return null // 一般建築不得蓋在資源點上
     if (def.produces.length > 0 && player.barracksCount >= world.match.barracksCap) return null
   }
 
-  player.blueCrystal -= def.cost.blue_crystal
+  payCost(player.resources, def.cost)
   return addBuilding(world, playerId, defId, tile, { built: false, nodeId: coveredNode })
 }
 

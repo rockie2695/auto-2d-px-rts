@@ -4,7 +4,7 @@
     "tickRateHz": 20,
     "maxTicks": 12000,
     "unitCap": 40,
-    "mineCap": 3,
+    "mineCap": 5,
     "barracksCap": 3
   }
 }

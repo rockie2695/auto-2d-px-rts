@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "building": {
+    "id": "ruby_mine",
+    "faction": "test_faction",
+    "cost": {
+      "blue_crystal": 150
+    },
+    "size": [
+      1,
+      1
+    ],
+    "produces": [],
+    "requires": [],
+    "sprite": {
+      "color": "#ff6b6b",
+      "size": 12
+    },
+    "ai": {
+      "value": 300
+    },
+    "hp": 300,
+    "buildTimeSec": 12,
+    "incomePerSec": {
+      "red_ruby": 0.5
+    },
+    "requiresResourceNode": true
+  }
+}

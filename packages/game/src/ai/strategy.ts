@@ -3,8 +3,8 @@ import { buildEconWeight, buildMilitaryWeight } from './policy.ts'
 import { pickMostUrgentThreat } from './influence.ts'
 import type { DecisionTopFactor, ExplainState } from './explain.ts'
 import { explainBuild, explainTrain } from './explain.ts'
-import type { Role } from '@auto-2d-px-rts/shared'
-import { placeBuilding, queueTrain } from '../sim/economy.ts'
+import type { ResourceId, Role } from '@auto-2d-px-rts/shared'
+import { canAfford, placeBuilding, producedResourceOf, queueTrain } from '../sim/economy.ts'
 import { findNearestPlacement, tryFindNearestFreeNode } from '../sim/world.ts'
 import { getPlayer } from '../sim/types.ts'
 import type { PlayerId, TilePos, World } from '../sim/types.ts'
@@ -130,12 +130,30 @@ function anchorOf(world: World, playerId: PlayerId): TilePos {
 /** 塔類建築的每方上限（Prompt 10.16）：2 座即飽和，AI 不再蓋。 */
 export const TOWER_CAP = 2
 
+/** 某玩家擁有的**指定資源類型**礦場數（Prompt 5：按礦場產出資源分型計數）。 */
+function mineCountOfType(world: World, playerId: PlayerId, type: ResourceId): number {
+  return world.buildings.filter((building) => {
+    if (building.player !== playerId || building.hp <= 0 || building.nodeId === null) return false
+    const def = world.defs.buildings[building.defId]
+    return def !== undefined && producedResourceOf(def) === type
+  }).length
+}
+
+/** 本地圖對應類型節點總數（飽和分母；放置本身由空閒節點與 mineCap 夾制）。 */
+function nodesOfType(world: World, type: ResourceId): number {
+  return world.map.resourceNodes.filter((node) => node.resourceType === type).length
+}
+
 function saturationOf(world: World, playerId: PlayerId, defId: string): number {
   const player = getPlayer(world, playerId)
   const def = world.defs.buildings[defId]
   if (def === undefined) return 1
   if (def.requiresResourceNode === true) {
-    return player.mineCount / world.match.mineCap
+    // 礦場按**資源類型**分型飽和（Prompt 5）：分母 = 該類型節點總數——
+    // 實際放置由「空閒節點」與 mineCap 夾制，飽和分只影響效用排序。
+    const type = producedResourceOf(def)
+    if (type === null) return 0
+    return mineCountOfType(world, playerId, type) / Math.max(1, nodesOfType(world, type))
   }
   if (def.produces.length > 0) {
     return player.barracksCount / world.match.barracksCap
@@ -189,11 +207,12 @@ function evaluateBuildings(world: World, playerId: PlayerId, policies: PolicyVal
       }
     }
 
-    // 可行性：放置點必須找得到。
+    // 可行性：放置點必須找得到（Prompt 5：礦場找**對應資源類型**的空閒節點）。
     const [w, h] = def.size
+    const mineType = def.requiresResourceNode === true ? producedResourceOf(def) : null
     let tile: TilePos | null
     if (def.requiresResourceNode === true) {
-      tile = tryFindNearestFreeNode(world, buildAnchor, mirrorOrder)?.tile ?? null
+      tile = tryFindNearestFreeNode(world, buildAnchor, mirrorOrder, mineType)?.tile ?? null
     } else {
       tile = findNearestPlacement(world, buildAnchor, w, h, mirrorOrder)
     }
@@ -202,15 +221,43 @@ function evaluateBuildings(world: World, playerId: PlayerId, policies: PolicyVal
     // 效用（Prompt 6 權重映射 × 飽和度）。
     const weight = def.requiresResourceNode === true ? econ : military
     let score = weight * (1 - saturationOf(world, playerId, defId))
-    // SPEC §8.1：一礦都沒有時強制高優先（含 econMilitary=0 也要有基本收入）。
-    if (def.requiresResourceNode === true && player.mineCount === 0) {
-      score = Math.max(score, 3.0)
+
+    if (def.requiresResourceNode === true && mineType !== null) {
+      // SPEC §8.1 擴展（Prompt 5）：**每種資源**的第一座礦強制高優先——
+      // 但紅／綠礦受「藍礦先行」gate（見下），實際上強制項只在藍礦生效。
+      if (mineType === 'blue_crystal' && player.mineCount === 0) {
+        score = Math.max(score, 3.0)
+      }
+      // 資源分配啟發式（Prompt 5 #6，AI 內建；resourceBias 滑杆留待後續 prompt）：
+      // - 藍礦永遠優先（基礎資源）——紅／綠礦在「藍礦再無空閒節點可蓋」前不評分；
+      // - 紅礦（軍事）：藍礦節點耗盡後立即入列；roster 有吃紅寶石的單位加固定分；
+      // - 綠礦（科技）：零消費者（MVP 無科技系統）→ 紅礦蓋出後才解鎖且分數打 5 折。
+      if (mineType !== 'blue_crystal') {
+        const blueExhausted =
+          tryFindNearestFreeNode(world, buildAnchor, mirrorOrder, 'blue_crystal') === null
+        if (mineType === 'red_ruby') {
+          const rosterNeedsRuby = world.faction.roster.some((unitId) => {
+            const unitDef = world.defs.units[unitId]
+            return unitDef !== undefined && (unitDef.cost.red_ruby ?? 0) > 0
+          })
+          score = blueExhausted
+            ? weight * (1 - saturationOf(world, playerId, defId)) + (rosterNeedsRuby ? 0.4 : 0)
+            : 0
+        } else {
+          const rubyCount = mineCountOfType(world, playerId, 'red_ruby')
+          score =
+            blueExhausted && rubyCount >= 1
+              ? weight * (1 - saturationOf(world, playerId, defId)) * 0.5
+              : 0
+        }
+      }
     }
 
     // 買得起與否改為**標記**（Prompt 10.24 A）：買不起的候選不從列表剔除——
     // 它仍是建築軌的目標（建築軌執行時 placeBuilding 自然拒絕、落到次高），
     // 且生產軌要為它**攢預備金**，否則單位生產每循環吞光結餘、建築永遠饿死。
-    const affordable = player.blueCrystal >= def.cost.blue_crystal
+    // （Prompt 5：可負擔性 = 三資源逐一檢查。）
+    const affordable = canAfford(player.resources, def.cost)
 
     candidates.push({ defId, score, tile, affordable })
   }
@@ -326,7 +373,7 @@ function evaluateUnits(world: World, playerId: PlayerId, policies: PolicyValues)
         world.defs.buildings[building.defId]?.produces.includes(defId) === true,
     )
     if (!hasProducer) continue
-    if (player.blueCrystal < def.cost.blue_crystal) continue
+    if (!canAfford(player.resources, def.cost)) continue
 
     const score =
       counterScoreOf(world, def.role, share) +
@@ -444,9 +491,10 @@ export function runStrategicCycle(
   const SPRINT_THRESHOLD = 0.5
   const reserve = (() => {
     if (nextBuilding === undefined) return 0
+    // 預備金只鎖藍水晶（建築成本全藍，Prompt 5 維持）。
     const cost = world.defs.buildings[nextBuilding.defId]?.cost.blue_crystal ?? 0
     if (cost === 0) return 0
-    return player.blueCrystal >= cost * SPRINT_THRESHOLD ? cost : 0
+    return player.resources.blue_crystal >= cost * SPRINT_THRESHOLD ? cost : 0
   })()
 
   // 生產軌：最高分優先，queueTrain 拒絕則嘗試次高。
@@ -468,7 +516,13 @@ export function runStrategicCycle(
   for (const candidate of ordered) {
     const unitDef = world.defs.units[candidate.defId]
     // 預備金保護（Prompt 10.24 A）：扣掉預備金後買不起 → 不排隊（攢錢蓋建築）。
-    if (unitDef !== undefined && player.blueCrystal - reserve < unitDef.cost.blue_crystal) {
+    // （Prompt 5：三資源逐一檢查——預備金只從藍水晶扣；紅寶石／綠翡翠足額即可。）
+    if (
+      unitDef !== undefined &&
+      (player.resources.blue_crystal - reserve < unitDef.cost.blue_crystal ||
+        player.resources.red_ruby < (unitDef.cost.red_ruby ?? 0) ||
+        player.resources.green_emerald < (unitDef.cost.green_emerald ?? 0))
+    ) {
       continue
     }
     const producerId = chooseProducer(world, playerId, candidate.defId)

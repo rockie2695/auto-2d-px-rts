@@ -39,14 +39,19 @@ const CARDINAL_DIRECTIONS: ReadonlyArray<readonly [number, number]> = [
 const EXPECTED_FILES: readonly string[] = [
   'buildings/barracks.json',
   'buildings/crystal_mine.json',
+  'buildings/emerald_sanctuary.json',
   'buildings/keep.json',
+  'buildings/ruby_mine.json',
   'buildings/tower.json',
   'factions/test_faction.json',
   'maps/test_map.json',
   'match.json',
   'policies.json',
   'resources/blue_crystal.json',
+  'resources/green_emerald.json',
+  'resources/red_ruby.json',
   'units/archer.json',
+  'units/ballista.json',
   'units/legionnaire.json',
   'units/shield_guard.json',
 ]
@@ -106,7 +111,14 @@ describe('MVP 內容 JSON（Prompt 3）', () => {
     expect(listJsonFiles(DATA_DIR)).toEqual([...EXPECTED_FILES].sort())
   })
 
-  it('資源：1 個（blue_crystal）', () => {
+  it('資源：3 個（blue_crystal / red_ruby / green_emerald），且都通過 Zod 驗證', () => {
+    const dir = join(DATA_DIR, 'resources')
+    const files = readdirSync(dir).filter((file) => file.endsWith('.json')).sort()
+    expect(files).toEqual(['blue_crystal.json', 'green_emerald.json', 'red_ruby.json'])
+    for (const file of files) {
+      const parsed = ResourceFileSchema.parse(readJson(`resources/${file}`)).resource
+      expect(parsed.id).toBe(file.replace('.json', ''))
+    }
     expect(loadResource()).toEqual({
       id: 'blue_crystal',
       name: '藍水晶',
@@ -114,26 +126,44 @@ describe('MVP 內容 JSON（Prompt 3）', () => {
     })
   })
 
-  it('單位：3 個（legionnaire / archer / shield_guard），且都通過 Zod 驗證', () => {
+  it('單位：4 個（legionnaire / archer / shield_guard / ballista），且都通過 Zod 驗證', () => {
     const units = loadUnits()
-    expect(units.map((unit) => unit.id).sort()).toEqual(['archer', 'legionnaire', 'shield_guard'])
-    expect(units).toHaveLength(3)
-    // 裝甲（Prompt 3.1）：legionnaire 0.2、archer 0、shield_guard 0.5。
+    expect(units.map((unit) => unit.id).sort()).toEqual([
+      'archer',
+      'ballista',
+      'legionnaire',
+      'shield_guard',
+    ])
+    expect(units).toHaveLength(4)
+    // 裝甲（Prompt 3.1）：legionnaire 0.2、archer 0、shield_guard 0.5、ballista 0。
     const armorById = new Map(units.map((unit) => [unit.id, unit.stats.armor]))
     expect(armorById.get('legionnaire')).toBe(0.2)
     expect(armorById.get('archer')).toBe(0)
     expect(armorById.get('shield_guard')).toBe(0.5)
+    expect(armorById.get('ballista')).toBe(0)
   })
 
-  it('建築：4 個（keep / barracks / crystal_mine / tower），且都通過 Zod 驗證', () => {
+  it('資源：3 個（blue_crystal / red_ruby / green_emerald），且都通過 Zod 驗證', () => {
+    const dir = join(DATA_DIR, 'resources')
+    const files = readdirSync(dir).filter((file) => file.endsWith('.json')).sort()
+    expect(files).toEqual(['blue_crystal.json', 'green_emerald.json', 'red_ruby.json'])
+    for (const file of files) {
+      const parsed = ResourceFileSchema.parse(readJson(`resources/${file}`)).resource
+      expect(parsed.id).toBe(file.replace('.json', ''))
+    }
+  })
+
+  it('建築：6 個（keep / barracks / crystal_mine / tower / ruby_mine / emerald_sanctuary），且都通過 Zod 驗證', () => {
     const buildings = loadBuildings()
     expect(buildings.map((building) => building.id).sort()).toEqual([
       'barracks',
       'crystal_mine',
+      'emerald_sanctuary',
       'keep',
+      'ruby_mine',
       'tower',
     ])
-    expect(buildings).toHaveLength(4)
+    expect(buildings).toHaveLength(6)
   })
 
   it('地圖：1 張（32x32 test_map），且通過 superRefine', () => {
@@ -143,10 +173,18 @@ describe('MVP 內容 JSON（Prompt 3）', () => {
     expect(map.tiles).toHaveLength(MAP_SIZE * MAP_SIZE)
     // superRefine 已驗證座標界內與恰好 2 個出生點；這裡再確認內容數量
     expect(map.spawnPoints).toHaveLength(2)
-    expect(map.resourceNodes).toHaveLength(6)
-    // Prompt 5：每個節點的蘊藏量鎖定 500（SPEC §5，對稱同值）。
+    // Prompt 5：每方 3 藍 + 1 紅 + 1 綠 = 10 節點，紅藍逐點鏡像。
+    expect(map.resourceNodes).toHaveLength(10)
+    const byType = { blue_crystal: 0, red_ruby: 0, green_emerald: 0 }
     for (const node of map.resourceNodes) {
       expect(node.amount).toBe(500)
+      byType[node.resourceType] += 1
+    }
+    expect(byType).toEqual({ blue_crystal: 6, red_ruby: 2, green_emerald: 2 })
+    // 鏡像：每個節點的 (31−x, 31−y) 也在節點清單且同類型。
+    const keys = new Set(map.resourceNodes.map((node) => `${node.x},${node.y},${node.resourceType}`))
+    for (const node of map.resourceNodes) {
+      expect(keys.has(`${31 - node.x},${31 - node.y},${node.resourceType}`)).toBe(true)
     }
   })
 
@@ -165,11 +203,17 @@ describe('MVP 內容 JSON（Prompt 3）', () => {
   it('陣營：1 個（test_faction），開局為 SPEC §7 對稱標準局', () => {
     const faction = loadFaction()
     expect(faction.id).toBe('test_faction')
-    expect(faction.startResources).toEqual({ blue_crystal: 600 })
+    expect(faction.startResources).toEqual({ blue_crystal: 600, red_ruby: 0, green_emerald: 0 })
     expect(faction.startUnits).toEqual({ legionnaire: 3 })
     expect(faction.startBuildings.sort()).toEqual(['barracks', 'crystal_mine', 'keep'])
-    expect(faction.roster).toEqual(['legionnaire', 'archer', 'shield_guard'])
-    expect(faction.buildings).toEqual(['barracks', 'crystal_mine', 'tower'])
+    expect(faction.roster).toEqual(['legionnaire', 'archer', 'shield_guard', 'ballista'])
+    expect(faction.buildings).toEqual([
+      'barracks',
+      'crystal_mine',
+      'ruby_mine',
+      'emerald_sanctuary',
+      'tower',
+    ])
   })
 
   it('對局設定：tick 頻率與時限等於 shared 常數', () => {
@@ -177,7 +221,8 @@ describe('MVP 內容 JSON（Prompt 3）', () => {
     expect(match.tickRateHz).toBe(TICK_RATE_HZ)
     expect(match.maxTicks).toBe(12000)
     expect(match.unitCap).toBe(40)
-    expect(match.mineCap).toBe(3)
+    // Prompt 5：每方 5 個節點（3 藍 + 1 紅 + 1 綠）→ 礦場上限 5。
+    expect(match.mineCap).toBe(5)
     expect(match.barracksCap).toBe(3)
   })
 })
@@ -325,16 +370,38 @@ describe('內容數值與 SPEC 一致（防止資料悄悄漂移）', () => {
     })
     expect(loadUnits().find((unit) => unit.id === 'shield_guard')?.cost).toEqual({
       blue_crystal: 80,
+      red_ruby: 0,
+      green_emerald: 0,
     })
     expect(loadUnits().find((unit) => unit.id === 'shield_guard')?.requires).toEqual(['barracks'])
     expect(loadUnits().find((unit) => unit.id === 'legionnaire')?.trainTimeSec).toBe(5)
     expect(loadUnits().find((unit) => unit.id === 'archer')?.trainTimeSec).toBe(7)
     expect(loadUnits().find((unit) => unit.id === 'legionnaire')?.cost).toEqual({
       blue_crystal: 50,
+      red_ruby: 0,
+      green_emerald: 0,
     })
     expect(loadUnits().find((unit) => unit.id === 'archer')?.cost).toEqual({
       blue_crystal: 75,
+      red_ruby: 0,
+      green_emerald: 0,
     })
+    // 新單位（Prompt 5 #5）：大型攻城——唯一吃紅寶石的單位。
+    expect(loadUnits().find((unit) => unit.id === 'ballista')?.stats).toEqual({
+      hp: 150,
+      dmg: 25,
+      range: 3.0,
+      attackSpeed: 0.5,
+      moveSpeed: 1.0,
+      armor: 0,
+    })
+    expect(loadUnits().find((unit) => unit.id === 'ballista')?.cost).toEqual({
+      blue_crystal: 40,
+      red_ruby: 80,
+      green_emerald: 0,
+    })
+    expect(loadUnits().find((unit) => unit.id === 'ballista')?.tier).toBe('large')
+    expect(loadUnits().find((unit) => unit.id === 'ballista')?.trainTimeSec).toBe(10)
   })
 
   it('建築數值 = SPEC §5 / §6', () => {
@@ -343,23 +410,47 @@ describe('內容數值與 SPEC 一致（防止資料悄悄漂移）', () => {
     expect(buildings.find((building) => building.id === 'barracks')?.hp).toBe(600)
     expect(buildings.find((building) => building.id === 'barracks')?.cost).toEqual({
       blue_crystal: 200,
+      red_ruby: 0,
+      green_emerald: 0,
     })
     expect(buildings.find((building) => building.id === 'barracks')?.buildTimeSec).toBe(15)
     expect(buildings.find((building) => building.id === 'crystal_mine')?.hp).toBe(300)
     expect(buildings.find((building) => building.id === 'crystal_mine')?.cost).toEqual({
       blue_crystal: 150,
+      red_ruby: 0,
+      green_emerald: 0,
     })
     expect(buildings.find((building) => building.id === 'crystal_mine')?.buildTimeSec).toBe(12)
     expect(buildings.find((building) => building.id === 'crystal_mine')?.incomePerSec).toEqual({
       blue_crystal: 1.0,
+      red_ruby: 0,
+      green_emerald: 0,
     })
     expect(buildings.find((building) => building.id === 'crystal_mine')?.requiresResourceNode).toBe(
       true,
     )
+    // 新礦場（Prompt 5 #4）：紅寶石 0.5/s、綠翡翠 0.25/s，其餘與 crystal_mine 同構。
+    const rubyMine = buildings.find((building) => building.id === 'ruby_mine')
+    expect(rubyMine?.cost).toEqual({ blue_crystal: 150, red_ruby: 0, green_emerald: 0 })
+    expect(rubyMine?.incomePerSec).toEqual({
+      blue_crystal: 0,
+      red_ruby: 0.5,
+      green_emerald: 0,
+    })
+    expect(rubyMine?.requiresResourceNode).toBe(true)
+    expect(rubyMine?.hp).toBe(300)
+    const sanctuary = buildings.find((building) => building.id === 'emerald_sanctuary')
+    expect(sanctuary?.cost).toEqual({ blue_crystal: 150, red_ruby: 0, green_emerald: 0 })
+    expect(sanctuary?.incomePerSec).toEqual({
+      blue_crystal: 0,
+      red_ruby: 0,
+      green_emerald: 0.25,
+    })
+    expect(sanctuary?.requiresResourceNode).toBe(true)
     // 塔（Prompt 10.16）：唯一帶 defense 的建築——數值鎖定，只打單位。
     const tower = buildings.find((building) => building.id === 'tower')
     expect(tower?.hp).toBe(700)
-    expect(tower?.cost).toEqual({ blue_crystal: 150 })
+    expect(tower?.cost).toEqual({ blue_crystal: 150, red_ruby: 0, green_emerald: 0 })
     expect(tower?.buildTimeSec).toBe(20)
     expect(tower?.defense).toEqual({ dmg: 10, range: 4.0, attackSpeed: 0.5 })
     expect(buildings.find((building) => building.id === 'keep')?.defense).toBeUndefined()

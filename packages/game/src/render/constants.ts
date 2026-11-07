@@ -18,6 +18,10 @@ export const COLOR_FLOOR = 0x2c3440
 export const COLOR_ROCK = 0x16181d
 /** 資源點（水晶脈）。 */
 export const COLOR_CRYSTAL_NODE = 0x59c9ff
+/** 資源點（紅寶石脈，Prompt 5）。 */
+export const COLOR_RUBY_NODE = 0xff6b6b
+/** 資源點（綠翡翠脈，Prompt 5）。 */
+export const COLOR_EMERALD_NODE = 0x3ecf8e
 
 /** 單位：我方青、敵方紅。 */
 export const COLOR_UNIT_PLAYER = 0x53d9d1

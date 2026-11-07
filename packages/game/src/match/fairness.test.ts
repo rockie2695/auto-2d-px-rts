@@ -37,7 +37,7 @@ interface MatchSummary {
   redUnits: number
   blueHp: number
   redHp: number
-  blueCrystal: number
+  crystal: number
   redCrystal: number
   blueBuildings: number
   redBuildings: number
@@ -87,7 +87,7 @@ function runMatch(seed: number): MatchSummary {
   const result = resolveMatchResult(world)
   const unitsOf = (id: 'player' | 'enemy') => world.units.filter((unit) => unit.player === id)
   const crystalsOf = (id: 'player' | 'enemy') =>
-    world.players.find((player) => player.id === id)?.blueCrystal ?? -1
+    world.players.find((player) => player.id === id)?.resources.blue_crystal ?? -1
   return {
     seed,
     result,
@@ -96,7 +96,7 @@ function runMatch(seed: number): MatchSummary {
     redUnits: unitsOf('enemy').length,
     blueHp: unitsOf('player').reduce((total, unit) => total + unit.hp, 0),
     redHp: unitsOf('enemy').reduce((total, unit) => total + unit.hp, 0),
-    blueCrystal: crystalsOf('player'),
+    crystal: crystalsOf('player'),
     redCrystal: crystalsOf('enemy'),
     blueBuildings: world.buildings.filter((building) => building.player === 'player').length,
     redBuildings: world.buildings.filter((building) => building.player === 'enemy').length,

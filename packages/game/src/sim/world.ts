@@ -1,5 +1,7 @@
 import { MAX_RESOURCE } from '@auto-2d-px-rts/shared'
-import type { ContentPack } from '@auto-2d-px-rts/shared'
+import type { ContentPack, ResourceId } from '@auto-2d-px-rts/shared'
+
+import { INCOME_WINDOW_TICKS } from './types.ts'
 
 import { stepCombat } from './combat.ts'
 import { addBuilding, spawnUnit, stepEconomy } from './economy.ts'
@@ -125,11 +127,14 @@ export function tryFindNearestFreeNode(
   world: World,
   anchor: TilePos,
   mirrorOrder = false,
+  resourceType: ResourceId | null = null,
 ): { tile: TilePos; nodeIndex: number } | null {
   let best: { tile: TilePos; nodeIndex: number } | null = null
   let bestDistance = Number.POSITIVE_INFINITY
   world.resourceNodes.forEach((node, index) => {
     if (node.buildingId !== null) return
+    // 類型過濾（Prompt 5）：指定類型時只找對應節點（紅礦場不搶藍節點）。
+    if (resourceType !== null && node.resourceType !== resourceType) return
     const distance = manhattan(anchor, { x: node.x, y: node.y })
     if (distance > bestDistance) return
     if (distance < bestDistance) {
@@ -171,6 +176,7 @@ export function createWorld(content: ContentPack, seed: number): World {
       x: node.x,
       y: node.y,
       amountRemaining: node.amount,
+      resourceType: node.resourceType,
       buildingId: null,
     })),
     players: [],
@@ -193,7 +199,16 @@ export function createWorld(content: ContentPack, seed: number): World {
     world.players.push({
       id: playerId,
       factionId: content.faction.id,
-      blueCrystal: Math.min(MAX_RESOURCE, content.faction.startResources.blue_crystal),
+      resources: {
+        blue_crystal: Math.min(MAX_RESOURCE, content.faction.startResources.blue_crystal),
+        red_ruby: Math.min(MAX_RESOURCE, content.faction.startResources.red_ruby),
+        green_emerald: Math.min(MAX_RESOURCE, content.faction.startResources.green_emerald),
+      },
+      incomeRing: {
+        blue_crystal: new Array<number>(INCOME_WINDOW_TICKS).fill(0),
+        red_ruby: new Array<number>(INCOME_WINDOW_TICKS).fill(0),
+        green_emerald: new Array<number>(INCOME_WINDOW_TICKS).fill(0),
+      },
       spawn: { x: spawn.x, y: spawn.y },
       unitCount: 0,
       mineCount: 0,
@@ -469,7 +484,7 @@ export interface WorldSnapshot {
   nextBuildingId: number
   players: Array<{
     id: PlayerId
-    blueCrystal: number
+    resources: { blue_crystal: number; red_ruby: number; green_emerald: number }
     unitCount: number
     mineCount: number
     barracksCount: number
@@ -508,6 +523,7 @@ export interface WorldSnapshot {
     x: number
     y: number
     amountRemaining: number
+    resourceType: string
     buildingId: number | null
   }>
 }
@@ -521,7 +537,7 @@ export function snapshotWorld(world: World): WorldSnapshot {
     nextBuildingId: world.nextBuildingId,
     players: world.players.map((player) => ({
       id: player.id,
-      blueCrystal: player.blueCrystal,
+      resources: { ...player.resources },
       unitCount: player.unitCount,
       mineCount: player.mineCount,
       barracksCount: player.barracksCount,
@@ -561,11 +577,9 @@ export function snapshotWorld(world: World): WorldSnapshot {
 /** 供 CLI 顯示的簡報字串。 */
 export function describePlayer(world: World, playerId: PlayerId): string {
   const player = getPlayer(world, playerId)
-  const totalHp = world.units
-    .filter((unit) => unit.player === playerId)
-    .reduce((total, unit) => total + unit.hp, 0)
   return (
-    `${playerId}: blueCrystal=${player.blueCrystal} units=${player.unitCount} ` +
-    `unitHp=${totalHp} mines=${player.mineCount} barracks=${player.barracksCount}`
+    `${playerId}: blue=${player.resources.blue_crystal} ` +
+    `ruby=${player.resources.red_ruby} emerald=${player.resources.green_emerald} ` +
+    `units=${player.unitCount} mines=${player.mineCount} barracks=${player.barracksCount}`
   )
 }

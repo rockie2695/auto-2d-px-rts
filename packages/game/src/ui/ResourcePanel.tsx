@@ -9,38 +9,44 @@ function toneColor(tone: RatioTone): string {
 }
 
 /**
- * 右上：雙方資源＋戰力比（Prompt 9.5）。
+ * 右上：雙方三資源＋戰力比（Prompt 9.5 ＋ Prompt 5 三資源）。
  * 戰力比 < 0.7 紅、0.7–1.4 黃、> 1.4 綠（門檻在 `ratioTone`）。
  */
 export function ResourcePanel({
-  playerCrystal,
-  enemyCrystal,
-  playerIncome,
-  enemyIncome,
+  playerResources,
+  enemyResources,
+  playerIncomes,
   ratio,
 }: {
-  playerCrystal: number
-  enemyCrystal: number
-  playerIncome: number | null
-  enemyIncome: number | null
+  playerResources: { blue_crystal: number; red_ruby: number; green_emerald: number }
+  enemyResources: { blue_crystal: number; red_ruby: number; green_emerald: number }
+  playerIncomes: { blue_crystal: number; red_ruby: number; green_emerald: number }
+  enemyIncomes?: { blue_crystal: number; red_ruby: number; green_emerald: number }
   ratio: number
 }) {
   const tone = ratioTone(ratio)
   const incomeLabel = (income: number | null): string =>
     income === null ? '--' : `+${income.toFixed(1)}/s`
+  const rows: ReadonlyArray<{ label: string; key: 'blue_crystal' | 'red_ruby' | 'green_emerald' }> = [
+    { label: '藍水晶', key: 'blue_crystal' },
+    { label: '紅寶石', key: 'red_ruby' },
+    { label: '綠翡翠', key: 'green_emerald' },
+  ]
   return (
     <aside className="hud-panel" data-testid="resource-panel">
       <div className="hud-panel-title">資源</div>
+      {rows.map((row) => (
+        <div className="resource-row" key={row.key} data-testid={`resource-${row.key}`}>
+          <span>{row.label}</span>
+          <span>
+            {playerResources[row.key]}（{incomeLabel(playerIncomes[row.key])}）
+          </span>
+        </div>
+      ))}
       <div className="resource-row">
-        <span>我方水晶</span>
+        <span>敵方三資源</span>
         <span>
-          {playerCrystal}（{incomeLabel(playerIncome)}）
-        </span>
-      </div>
-      <div className="resource-row">
-        <span>敵方水晶</span>
-        <span>
-          {enemyCrystal}（{incomeLabel(enemyIncome)}）
+          {enemyResources.blue_crystal}/{enemyResources.red_ruby}/{enemyResources.green_emerald}
         </span>
       </div>
       <div className="resource-row">

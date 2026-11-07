@@ -32,14 +32,19 @@ export interface ReplayRecord {
   /** 對局總時長（tick，20Hz）。 */
   readonly durationTicks: number
   readonly finalCrystal: { readonly player: number; readonly enemy: number }
-  /** 完整資源曲線（全程，非 60 秒滾動窗）。 */
+  /** 完整資源曲線（全程，非 60 秒滾動窗；藍水晶）。 */
   readonly resourceSeries: readonly ReplaySample[]
   /** 雙方存活單位數曲線。 */
   readonly unitCountSeries: readonly ReplaySample[]
-  /** 雙方戰力曲線（Σ hp × dmg × attackSpeed，SPEC §12.1）。 */
+  /** 雙方戰力曲線（Σ hp/(1−armor) × dmg × attackSpeed，Prompt 3.1 起有效當量）。 */
   readonly powerSeries: readonly ReplaySample[]
   /** 玩家每次改滑桿的時間點。 */
   readonly policyEvents: readonly ReplayPolicyEvent[]
+  /** 紅寶石曲線（Prompt 5；舊 replay 檔缺欄 = undefined，UI 顯示 --）。 */
+  readonly rubySeries?: readonly ReplaySample[]
+  readonly emeraldSeries?: readonly ReplaySample[]
+  readonly finalRuby?: { readonly player: number; readonly enemy: number }
+  readonly finalEmerald?: { readonly player: number; readonly enemy: number }
 }
 
 /** 取樣間隔：20 tick（1 秒）。 */
@@ -54,8 +59,10 @@ export class ReplayRecorder {
   private readonly unitCounts: ReplaySample[] = []
   private readonly powers: ReplaySample[] = []
   private readonly policies: ReplayPolicyEvent[] = []
+  private readonly ruby: ReplaySample[] = []
+  private readonly emerald: ReplaySample[] = []
 
-  /** 對局中取一個雙陣營樣本（水晶、存活單位數、戰力，同一時刻成對）。 */
+  /** 對局中取一個雙陣營樣本（三資源、存活單位數、戰力，同一時刻成對）。 */
   sample(
     tick: number,
     playerCrystal: number,
@@ -64,11 +71,17 @@ export class ReplayRecorder {
     enemyUnits: number,
     playerPower: number,
     enemyPower: number,
+    playerRuby = 0,
+    enemyRuby = 0,
+    playerEmerald = 0,
+    enemyEmerald = 0,
   ): void {
     if (this.resource.length >= MAX_SAMPLES) return
     this.resource.push({ tick, player: playerCrystal, enemy: enemyCrystal })
     this.unitCounts.push({ tick, player: playerUnits, enemy: enemyUnits })
     this.powers.push({ tick, player: playerPower, enemy: enemyPower })
+    this.ruby.push({ tick, player: playerRuby, enemy: enemyRuby })
+    this.emerald.push({ tick, player: playerEmerald, enemy: enemyEmerald })
   }
 
   /** 記錄一次政策變更（每個實際變更的滑桿一筆）。 */
@@ -82,6 +95,8 @@ export class ReplayRecorder {
     result: MatchResult,
     finalCrystal: { player: number; enemy: number },
     durationTicks: number,
+    finalRuby: { player: number; enemy: number } = { player: 0, enemy: 0 },
+    finalEmerald: { player: number; enemy: number } = { player: 0, enemy: 0 },
   ): ReplayRecord {
     return {
       seed,
@@ -92,6 +107,10 @@ export class ReplayRecorder {
       unitCountSeries: [...this.unitCounts],
       powerSeries: [...this.powers],
       policyEvents: [...this.policies],
+      rubySeries: [...this.ruby],
+      emeraldSeries: [...this.emerald],
+      finalRuby: { player: finalRuby.player, enemy: finalRuby.enemy },
+      finalEmerald: { player: finalEmerald.player, enemy: finalEmerald.enemy },
     }
   }
 }
@@ -166,5 +185,12 @@ export function parseReplay(json: unknown): ReplayRecord {
     unitCountSeries: requireSamples(raw.unitCountSeries, 'unitCountSeries'),
     powerSeries: requireSamples(raw.powerSeries, 'powerSeries'),
     policyEvents,
+    // Prompt 5：紅寶石／綠翡翠曲線可缺（舊 replay 檔）。
+    rubySeries:
+      raw.rubySeries === undefined ? undefined : requireSamples(raw.rubySeries, 'rubySeries'),
+    emeraldSeries:
+      raw.emeraldSeries === undefined
+        ? undefined
+        : requireSamples(raw.emeraldSeries, 'emeraldSeries'),
   }
 }

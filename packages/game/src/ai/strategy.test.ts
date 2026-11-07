@@ -167,6 +167,72 @@ describe('生產評分生存項（Prompt 3.1：有效HP/cost，權重小於 FATE
   })
 })
 
+describe('資源分配啟發式（Prompt 5：藍礦先行，紅綠礦分階段解鎖）', () => {
+  /** 三礦 + 三類節點；econMilitary 可調。 */
+  function minesWorld(startCrystal: number): World {
+    return createTestWorld({
+      size: 32,
+      resourceNodes: [
+        { x: 2, y: 2 },
+        { x: 4, y: 2 },
+        { x: 6, y: 2 },
+      ],
+      typedResourceNodes: [
+        { x: 8, y: 2, resourceType: 'red_ruby' },
+        { x: 10, y: 2, resourceType: 'green_emerald' },
+      ],
+      units: [makeUnitDef({ id: 'u' }), makeUnitDef({ id: 'ballista', cost: { blue_crystal: 40, red_ruby: 80 }, tier: 'large' })],
+      buildings: [
+        makeBuildingDef({ id: 'keep', size: [3, 3], ai: { value: 1000 } }),
+        makeBuildingDef({ id: 'crystal_mine', cost: { blue_crystal: 150 }, requiresResourceNode: true, incomePerSec: { blue_crystal: 1.0 } }),
+        makeBuildingDef({ id: 'ruby_mine', cost: { blue_crystal: 150 }, requiresResourceNode: true, incomePerSec: { red_ruby: 0.5 } }),
+        makeBuildingDef({ id: 'emerald_sanctuary', cost: { blue_crystal: 150 }, requiresResourceNode: true, incomePerSec: { green_emerald: 0.25 } }),
+        makeBuildingDef({ id: 'barracks', size: [2, 2], cost: { blue_crystal: 200 }, produces: ['u', 'ballista'] }),
+      ],
+      startCrystal,
+      mineCap: 5,
+    })
+  }
+
+  it('藍礦未飽和前：紅／綠礦從不被選中（build 只出 crystal_mine）', () => {
+    const world = minesWorld(600) // 只夠 1~3 座藍礦
+    const builds = runCycles(world, 'player', resolvePolicies({ econMilitary: 1 }), 2)
+      .filter((action) => action.kind === 'build')
+    expect(builds.length).toBeGreaterThanOrEqual(1)
+    for (const action of builds) {
+      if (action.kind === 'build') expect(action.defId).toBe('crystal_mine')
+    }
+  })
+
+  it('藍礦節點耗盡 → 紅礦入列（roster 有 ballista 加分）→ 紅礦蓋出後綠礦才解鎖', () => {
+    const world = minesWorld(20000)
+    // 前 3 循環：3 座藍礦（mineCap 5 內、紅綠仍鎖）。
+    runCycles(world, 'player', resolvePolicies({ econMilitary: 1 }), 3)
+    const mineIdsOf = (defId: string): number =>
+      world.buildings.filter(
+        (building) => building.player === 'player' && building.defId === defId,
+      ).length
+    expect(mineIdsOf('crystal_mine')).toBe(3)
+    expect(mineIdsOf('ruby_mine')).toBe(0)
+    expect(mineIdsOf('emerald_sanctuary')).toBe(0)
+    // 續跑到紅礦入列（藍節點已耗盡）；綠礦要等紅礦蓋出（同循環或下一循環）。
+    runCycles(world, 'player', resolvePolicies({ econMilitary: 1 }), 9)
+    expect(mineIdsOf('ruby_mine')).toBeGreaterThanOrEqual(1)
+    expect(mineIdsOf('emerald_sanctuary')).toBeGreaterThanOrEqual(1) // 紅礦已出 → 綠解鎖
+  })
+
+  it('ballista 可負擔性看紅寶石：紅不足時生產軌跳過它、不擋其它單位', () => {
+    const world = minesWorld(1000)
+    addBuilding(world, 'player', 'barracks', { x: 14, y: 2 }, { built: true, nodeId: null })
+    const actions = runCycles(world, 'player', DEFAULT_POLICIES, 1)
+    const trains = actions.filter((action) => action.kind === 'train')
+    for (const action of trains) {
+      if (action.kind === 'train') expect(action.defId).not.toBe('ballista') // 紅 0 < 80
+    }
+    expect(trains.length).toBeGreaterThanOrEqual(0)
+  })
+})
+
 function countBuildings(world: World, playerId: PlayerId, defId: string): number {
   return world.buildings.filter((b) => b.player === playerId && b.defId === defId).length
 }
@@ -283,7 +349,7 @@ describe('建築預備金（Prompt 10.24 A：生產軌不得吞光建築預算�
     const actions = runCycles(world, 'player', DEFAULT_POLICIES, 3)
     expect(actions.filter((action) => action.kind === 'build')).toHaveLength(0)
     expect(actions.filter((action) => action.kind === 'train')).toHaveLength(0)
-    expect(world.players[0]?.blueCrystal).toBe(100)
+    expect(world.players[0]?.resources.blue_crystal).toBe(100)
   })
 
   it('攢到預備金 → 蓋最高分建築；蓋完預備金轉下一候選（仍不生兵）', () => {

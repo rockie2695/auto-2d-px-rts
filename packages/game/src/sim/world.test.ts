@@ -317,12 +317,12 @@ describe('單一資源經濟（Prompt 5）', () => {
     })
     const mine = placeBuilding(world, 'player', 'fast_mine', { x: 4, y: 4 })
     expect(mine).not.toBeNull()
-    const before = getResource(world, 'player')
+    const before = getResource(world, 'player', 'blue_crystal')
 
     for (let tick = 0; tick < 10; tick++) stepWorld(world)
 
     // 2.0/秒 × 10 tick ÷ 20Hz = 1000 milli×tick × 10 = 10000；10000 / 20000 = 0.5 → 第 10 tick 恰滿 1。
-    expect(getResource(world, 'player')).toBe(before + 1)
+    expect(getResource(world, 'player', 'blue_crystal')).toBe(before + 1)
   })
 
   it('getResource 回傳玩家庫存；花費生兵後正確扣減', () => {
@@ -331,17 +331,17 @@ describe('單一資源經濟（Prompt 5）', () => {
       units: [makeUnitDef({ id: 'u', cost: { blue_crystal: 50 }, trainTimeSec: 1 })],
       buildings: [makeBuildingDef({ id: 'rax', size: [2, 2], cost: { blue_crystal: 200 }, produces: ['u'] })],
     })
-    expect(getResource(world, 'player')).toBe(1000)
+    expect(getResource(world, 'player', 'blue_crystal')).toBe(1000)
 
     const rax = placeBuilding(world, 'player', 'rax', { x: 4, y: 4 }) // −200
-    expect(getResource(world, 'player')).toBe(800)
+    expect(getResource(world, 'player', 'blue_crystal')).toBe(800)
 
     expect(queueTrain(world, rax?.id ?? -1, 'u')).toBe(true) // −50
-    expect(getResource(world, 'player')).toBe(750)
+    expect(getResource(world, 'player', 'blue_crystal')).toBe(750)
 
     for (let tick = 0; tick < 20; tick++) stepWorld(world) // 出生不退費
     expect(getPlayer(world, 'player').unitCount).toBe(1)
-    expect(getResource(world, 'player')).toBe(750)
+    expect(getResource(world, 'player', 'blue_crystal')).toBe(750)
   })
 
   it('節點 amount 被消耗；耗盡後礦場保留但收入歸零', () => {
@@ -352,12 +352,12 @@ describe('單一資源經濟（Prompt 5）', () => {
       nodeAmount: 3,
     })
     addBuilding(world, 'player', 'fast_mine', { x: 4, y: 4 }, { built: true, nodeId: 0 })
-    const before = getResource(world, 'player')
+    const before = getResource(world, 'player', 'blue_crystal')
 
     for (let tick = 0; tick < 200; tick++) stepWorld(world)
 
     // 節點只有 3：入帳 3 後耗盡，再多跑也不會增加。
-    expect(getResource(world, 'player')).toBe(before + 3)
+    expect(getResource(world, 'player', 'blue_crystal')).toBe(before + 3)
     expect(world.resourceNodes[0]?.amountRemaining).toBe(0)
     // 建築仍在、仍佔著節點。
     expect(world.buildings.some((building) => building.defId === 'fast_mine')).toBe(true)
@@ -375,10 +375,10 @@ describe('單一資源經濟（Prompt 5）', () => {
 
     for (let tick = 0; tick < 100; tick++) stepWorld(world)
 
-    expect(getResource(world, 'player')).toBe(MAX_RESOURCE)
+    expect(getResource(world, 'player', 'blue_crystal')).toBe(MAX_RESOURCE)
     // 庫存滿時入帳被丟棄，但礦場不會崩潰（下一輪照常結算）。
     for (let tick = 0; tick < 20; tick++) stepWorld(world)
-    expect(getResource(world, 'player')).toBe(MAX_RESOURCE)
+    expect(getResource(world, 'player', 'blue_crystal')).toBe(MAX_RESOURCE)
   })
 })
 
@@ -436,7 +436,7 @@ describe('placeBuilding 規則（SPEC §7）', () => {
 
     // 費用不足。
     const poorWorld = worldWithPalette()
-    getPlayer(poorWorld, 'player').blueCrystal = 10
+    getPlayer(poorWorld, 'player').resources.blue_crystal = 10
     expect(placeBuilding(poorWorld, 'player', 'rax', { x: 5, y: 5 })).toBeNull()
 
     // mineCap = 1（每玩家）：玩家的第二座礦場被拒（敵方不受影響）。
@@ -655,7 +655,7 @@ describe('確定性與真實內容（規則 8）', () => {
       expect(units.every((unit) => !isBlockedAt(world, tileOf(unit.x, unit.y)))).toBe(true)
 
       const player = getPlayer(world, playerId)
-      expect(player.blueCrystal).toBe(600)
+      expect(player.resources.blue_crystal).toBe(600)
       expect(player.mineCount).toBe(1)
       expect(player.barracksCount).toBe(1)
     }

@@ -4,6 +4,7 @@ import type {
   FactionDef,
   MapDef,
   MatchDef,
+  ResourceId,
   Role,
   UnitDef,
 } from '@auto-2d-px-rts/shared'
@@ -101,21 +102,45 @@ export interface Building {
   targetId: number | null
 }
 
-/** 單一資源的礦點。 */
+/** 單一資源的礦點（Prompt 5：節點帶資源類型）。 */
 export interface ResourceNode {
   x: number
   y: number
-  /** 剩餘蘊藏量（Prompt 5）：每入帳 1 水晶扣 1；歸零後所在礦場收入為 0。 */
+  /** 剩餘蘊藏量（Prompt 5）：每入帳 1 單位扣 1；歸零後所在礦場收入為 0。 */
   amountRemaining: number
+  /** 節點產出的資源類型；礦場必須蓋在對應類型的節點上。 */
+  resourceType: ResourceId
   /** 採用中的礦場 building id；null = 空閒。 */
   buildingId: number | null
+}
+
+/** 三資源庫存表（整數；上限 shared 的 MAX_RESOURCE 各自獨立）。 */
+export interface ResourceStock {
+  blue_crystal: number
+  red_ruby: number
+  green_emerald: number
+}
+
+/** getIncome 的統計窗長（Prompt 5：最近 60 tick = 3 秒增量）。 */
+export const INCOME_WINDOW_TICKS = 60
+
+/** 收入統計環（每資源一條長度 INCOME_WINDOW_TICKS 的每 tick 入帳環）。 */
+export interface IncomeRing {
+  blue_crystal: number[]
+  red_ruby: number[]
+  green_emerald: number[]
 }
 
 export interface Player {
   id: PlayerId
   factionId: string
-  /** 藍水晶整數庫存（上限 shared 的 MAX_RESOURCE）。 */
-  blueCrystal: number
+  /** 三資源整數庫存（各上限 shared 的 MAX_RESOURCE）。 */
+  resources: ResourceStock
+  /**
+   * 收入統計環（Prompt 5 getIncome）：每資源長度 `INCOME_WINDOW_TICKS` 的
+   * 每 tick 入帳環（index = tick % 窗長；寫入前清該槽）——getIncome 回窗口總和。
+   */
+  incomeRing: IncomeRing
   spawn: TilePos
   unitCount: number
   mineCount: number

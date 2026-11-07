@@ -19,27 +19,35 @@ import { effectiveHp } from '../sim/combat.ts'
 
 export interface UnitBalanceStats {
   defId: string
-  /** 統一資源成本（MVP 僅 blue_crystal）。 */
+  /** 總成本（Prompt 5：三資源等權求和 = blue + red + green）。 */
   cost: number
+  /** 三資源成本明細。 */
+  costBreakdown: { blue_crystal: number; red_ruby: number; green_emerald: number }
   /** 裝甲：減傷百分比（0~0.8）。 */
   armor: number
   /** 有效 HP = hp / (1 − armor)。 */
   effectiveHpValue: number
-  /** 生存性價比 = 有效 HP / cost（值越大越耐打換算划算）。 */
+  /** 生存性價比 = 有效 HP / 總成本（值越大越耐打換算划算）。 */
   effectiveHpPerCost: number
   /** DPS = dmg × attackSpeed。 */
   dps: number
-  /** 攻擊性價比 = DPS / cost。 */
+  /** 攻擊性價比 = DPS / 總成本。 */
   dpsPerCost: number
 }
 
 export function unitBalanceStats(def: UnitDef): UnitBalanceStats {
-  const totalCost = def.cost.blue_crystal
+  const totalCost =
+    def.cost.blue_crystal + (def.cost.red_ruby ?? 0) + (def.cost.green_emerald ?? 0)
   const hp = effectiveHp(def)
   const dps = def.stats.dmg * def.stats.attackSpeed
   return {
     defId: def.id,
     cost: totalCost,
+    costBreakdown: {
+      blue_crystal: def.cost.blue_crystal,
+      red_ruby: def.cost.red_ruby ?? 0,
+      green_emerald: def.cost.green_emerald ?? 0,
+    },
     armor: def.stats.armor,
     effectiveHpValue: hp,
     effectiveHpPerCost: totalCost === 0 ? 0 : hp / totalCost,
@@ -55,7 +63,7 @@ export function unitBalanceStats(def: UnitDef): UnitBalanceStats {
  */
 export function survivalScoreOf(def: UnitDef, roster: readonly UnitDef[]): number {
   const efficiency = (unit: UnitDef): number => {
-    const cost = unit.cost.blue_crystal
+    const cost = unit.cost.blue_crystal + (unit.cost.red_ruby ?? 0) + (unit.cost.green_emerald ?? 0)
     return cost === 0 ? effectiveHp(unit) : effectiveHp(unit) / cost
   }
   let min = Number.POSITIVE_INFINITY

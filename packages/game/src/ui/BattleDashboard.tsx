@@ -35,14 +35,18 @@ export function BattleDashboard({ children }: { children?: ReactNode }) {
     crystal: ResourceSeries
     units: ResourceSeries
     power: ResourceSeries
+    ruby: ResourceSeries
+    emerald: ResourceSeries
   } | null>(null)
   const [curve, setCurve] = useState<{
     crystal: readonly SamplePoint[]
     units: readonly SamplePoint[]
     power: readonly SamplePoint[]
+    ruby: readonly SamplePoint[]
+    emerald: readonly SamplePoint[]
     playerIncome: number | null
     enemyIncome: number | null
-  }>({ crystal: [], units: [], power: [], playerIncome: null, enemyIncome: null })
+  }>({ crystal: [], units: [], power: [], ruby: [], emerald: [], playerIncome: null, enemyIncome: null })
 
   useEffect(() => {
     if (seriesRef.current === null) {
@@ -50,9 +54,11 @@ export function BattleDashboard({ children }: { children?: ReactNode }) {
         crystal: new ResourceSeries(),
         units: new ResourceSeries(),
         power: new ResourceSeries(),
+        ruby: new ResourceSeries(),
+        emerald: new ResourceSeries(),
       }
     }
-    const { crystal, units, power } = seriesRef.current
+    const { crystal, units, power, ruby, emerald } = seriesRef.current
     const refresh = (): void => {
       const active = getActiveSession()
       if (active === null) return
@@ -62,10 +68,14 @@ export function BattleDashboard({ children }: { children?: ReactNode }) {
       crystal.push(next.tick, next.playerCrystal, next.enemyCrystal)
       units.push(next.tick, next.playerUnits, next.enemyUnits)
       power.push(next.tick, next.playerPower, next.enemyPower)
+      ruby.push(next.tick, next.playerResources.red_ruby, next.enemyResources.red_ruby)
+      emerald.push(next.tick, next.playerResources.green_emerald, next.enemyResources.green_emerald)
       setCurve({
         crystal: crystal.chart(),
         units: units.chart(),
         power: power.chart(),
+        ruby: ruby.chart(),
+        emerald: emerald.chart(),
         playerIncome: crystal.playerIncome(),
         enemyIncome: crystal.enemyIncome(),
       })
@@ -105,13 +115,23 @@ export function BattleDashboard({ children }: { children?: ReactNode }) {
         crystalSamples={curve.crystal}
         unitSamples={curve.units}
         powerSamples={curve.power}
+        rubySamples={curve.ruby}
+        emeraldSamples={curve.emerald}
       />
       <div className="hud-top-right">
         <ResourcePanel
-          playerCrystal={stats?.playerCrystal ?? 0}
-          enemyCrystal={stats?.enemyCrystal ?? 0}
-          playerIncome={curve.playerIncome}
-          enemyIncome={curve.enemyIncome}
+          playerResources={
+            stats?.playerResources ?? { blue_crystal: 0, red_ruby: 0, green_emerald: 0 }
+          }
+          enemyResources={
+            stats?.enemyResources ?? { blue_crystal: 0, red_ruby: 0, green_emerald: 0 }
+          }
+          playerIncomes={
+            stats?.playerIncomes ?? { blue_crystal: 0, red_ruby: 0, green_emerald: 0 }
+          }
+          enemyIncomes={
+            stats?.enemyIncomes ?? { blue_crystal: 0, red_ruby: 0, green_emerald: 0 }
+          }
           ratio={ratio}
         />
         {children}

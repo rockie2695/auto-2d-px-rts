@@ -1033,32 +1033,62 @@
       {
         "x": 7,
         "y": 24,
-        "amount": 500
+        "amount": 500,
+        "resourceType": "blue_crystal"
       },
       {
         "x": 4,
         "y": 27,
-        "amount": 500
+        "amount": 500,
+        "resourceType": "blue_crystal"
       },
       {
         "x": 10,
         "y": 27,
-        "amount": 500
+        "amount": 500,
+        "resourceType": "blue_crystal"
       },
       {
         "x": 24,
         "y": 7,
-        "amount": 500
+        "amount": 500,
+        "resourceType": "blue_crystal"
       },
       {
         "x": 27,
         "y": 4,
-        "amount": 500
+        "amount": 500,
+        "resourceType": "blue_crystal"
       },
       {
         "x": 21,
         "y": 4,
-        "amount": 500
+        "amount": 500,
+        "resourceType": "blue_crystal"
+      },
+      {
+        "x": 7,
+        "y": 20,
+        "amount": 500,
+        "resourceType": "red_ruby"
+      },
+      {
+        "x": 24,
+        "y": 11,
+        "amount": 500,
+        "resourceType": "red_ruby"
+      },
+      {
+        "x": 3,
+        "y": 23,
+        "amount": 500,
+        "resourceType": "green_emerald"
+      },
+      {
+        "x": 28,
+        "y": 8,
+        "amount": 500,
+        "resourceType": "green_emerald"
       }
     ],
     "spawnPoints": [

@@ -3,14 +3,41 @@
   "faction": {
     "id": "test_faction",
     "name": "Test Faction",
-    "startUnits": { "legionnaire": 3 },
-    "startBuildings": ["keep", "barracks", "crystal_mine"],
-    "roster": ["legionnaire", "archer", "shield_guard"],
-    "buildings": ["barracks", "crystal_mine", "tower"],
-    "startResources": { "blue_crystal": 600 },
+    "startUnits": {
+      "legionnaire": 3
+    },
+    "startBuildings": [
+      "keep",
+      "barracks",
+      "crystal_mine"
+    ],
+    "roster": [
+      "legionnaire",
+      "archer",
+      "shield_guard",
+      "ballista"
+    ],
+    "buildings": [
+      "barracks",
+      "crystal_mine",
+      "ruby_mine",
+      "emerald_sanctuary",
+      "tower"
+    ],
+    "startResources": {
+      "blue_crystal": 600,
+      "red_ruby": 0,
+      "green_emerald": 0
+    },
     "counterMatrix": {
-      "melee": { "melee": 1.0, "ranged": 1.0 },
-      "ranged": { "melee": 1.0, "ranged": 1.0 }
+      "melee": {
+        "melee": 1,
+        "ranged": 1
+      },
+      "ranged": {
+        "melee": 1,
+        "ranged": 1
+      }
     }
   }
 }

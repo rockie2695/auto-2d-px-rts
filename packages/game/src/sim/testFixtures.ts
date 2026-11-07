@@ -4,6 +4,7 @@ import type {
   FactionDef,
   MapDef,
   MatchDef,
+  ResourceId,
   Role,
   UnitDef,
 } from '@auto-2d-px-rts/shared'
@@ -11,7 +12,7 @@ import type {
 import { rebuildSpatialHash } from './spatialHash.ts'
 import { createRng } from './rng.ts'
 import { spawnUnit } from './economy.ts'
-import { getPlayer, UNITS_PER_TILE } from './types.ts'
+import { getPlayer, INCOME_WINDOW_TICKS, UNITS_PER_TILE } from './types.ts'
 import type { PlayerId, TilePos, World } from './types.ts'
 
 /**
@@ -22,18 +23,43 @@ import type { PlayerId, TilePos, World } from './types.ts'
  */
 
 /**
+ * 測試輸入的資源量表（Prompt 5）：三鍵皆可省略（預設 0）——
+ * 成本通常只寫藍水晶、礦場產出只寫自己的資源，不必逐個補鍵。
+ */
+export type ResourceAmountTest = {
+  blue_crystal?: number
+  red_ruby?: number
+  green_emerald?: number
+}
+
+/** 補齊三鍵（缺省 0）。 */
+export function normalizeResourceAmount(partial: ResourceAmountTest): {
+  blue_crystal: number
+  red_ruby: number
+  green_emerald: number
+} {
+  return {
+    blue_crystal: partial.blue_crystal ?? 0,
+    red_ruby: partial.red_ruby ?? 0,
+    green_emerald: partial.green_emerald ?? 0,
+  }
+}
+
+/**
  * 測試單位輸入（Prompt 3.1）：`stats.armor` 可省略（預設 0）——
  * 絕大多數舊測試不關心裝甲，不必逐個補欄位。
  */
-export type UnitDefTest = Omit<UnitDef, 'id' | 'stats'> & {
+export type UnitDefTest = Omit<UnitDef, 'id' | 'stats' | 'cost'> & {
   id: string
   stats?: Omit<UnitDef['stats'], 'armor'> & { armor?: number }
+  cost?: ResourceAmountTest
 }
 
-/** 測試單位輸入 → 完整 UnitDef（armor 缺省補 0）。 */
+/** 測試單位輸入 → 完整 UnitDef（armor／cost 缺省補 0）。 */
 export function normalizeUnitDef(partial: UnitDefTest): UnitDef {
   return {
     ...partial,
+    cost: normalizeResourceAmount(partial.cost ?? { blue_crystal: 50 }),
     stats: { hp: 100, dmg: 10, range: 0.8, attackSpeed: 1.0, moveSpeed: 1.0, ...partial.stats, armor: partial.stats?.armor ?? 0 },
   }
 }
@@ -54,9 +80,28 @@ export function makeUnitDef(overrides: Partial<UnitDefTest> & { id: string }): U
   })
 }
 
-/** 合成建築定義。 */
-export function makeBuildingDef(overrides: Partial<BuildingDef> & { id: string }): BuildingDef {
+/** 合成建築定義（cost/incomePerSec 的紅綠鍵可省略，預設 0）。 */
+export type BuildingDefTest = Omit<BuildingDef, 'id' | 'cost' | 'incomePerSec'> & {
+  id: string
+  cost?: ResourceAmountTest
+  incomePerSec?: ResourceAmountTest
+}
+
+/** 測試建築輸入 → 完整 BuildingDef。 */
+export function normalizeBuildingDef(partial: BuildingDefTest): BuildingDef {
   return {
+    ...partial,
+    cost: normalizeResourceAmount(partial.cost ?? { blue_crystal: 0 }),
+    incomePerSec:
+      partial.incomePerSec === undefined
+        ? undefined
+        : normalizeResourceAmount(partial.incomePerSec),
+  }
+}
+
+/** 合成建築定義。 */
+export function makeBuildingDef(overrides: Partial<BuildingDefTest> & { id: string }): BuildingDef {
+  return normalizeBuildingDef({
     faction: 'test_faction',
     cost: { blue_crystal: 0 },
     size: [1, 1],
@@ -67,7 +112,7 @@ export function makeBuildingDef(overrides: Partial<BuildingDef> & { id: string }
     hp: 500,
     buildTimeSec: 0,
     ...overrides,
-  }
+  })
 }
 
 export interface TestWorldOptions {
@@ -75,16 +120,23 @@ export interface TestWorldOptions {
   size?: number
   /** 岩石格。 */
   rocks?: readonly TilePos[]
-  /** 資源點格。 */
+  /** 資源點格（預設全部 blue_crystal；Prompt 5 類型節點用 `typedResourceNodes`）。 */
   resourceNodes?: readonly TilePos[]
   /** 每個資源點的蘊藏量（預設 500，與 test_map.json 一致）。 */
   nodeAmount?: number
+  /**
+   * 帶類型的資源節點（Prompt 5）：與 `resourceNodes` 擇一（同給時合併），
+   * `resourceType` 缺省 blue_crystal。
+   */
+  typedResourceNodes?: ReadonlyArray<TilePos & { resourceType?: ResourceId }>
   /** 單位定義（armor 可省略，預設 0）。 */
   units?: readonly UnitDefTest[]
-  /** 建築定義。 */
-  buildings?: readonly BuildingDef[]
+  /** 建築定義（cost／incomePerSec 的紅綠鍵可省略）。 */
+  buildings?: readonly (BuildingDef | BuildingDefTest)[]
   /** 玩家起始藍水晶（預設 1000）。 */
   startCrystal?: number
+  /** 礦場上限（預設 3；Prompt 5 三資源世界傳 5）。 */
+  mineCap?: number
   /** counterMatrix 覆寫（預設全 1.0；克制測試用）。 */
   counterMatrix?: FactionDef['counterMatrix']
   seed?: number
@@ -95,7 +147,7 @@ const TEST_FACTION_ID = 'test_faction'
 function makeMap(
   size: number,
   rocks: readonly TilePos[],
-  nodes: readonly TilePos[],
+  nodes: ReadonlyArray<TilePos & { resourceType?: ResourceId }>,
   nodeAmount: number,
 ): MapDef {
   const tiles = new Array<number>(size * size).fill(0)
@@ -104,7 +156,11 @@ function makeMap(
     id: 'test_map',
     size,
     tiles,
-    resourceNodes: nodes.map((node) => ({ ...node, amount: nodeAmount })),
+    resourceNodes: nodes.map((node) => ({
+      ...node,
+      amount: nodeAmount,
+      resourceType: node.resourceType ?? 'blue_crystal',
+    })),
     // 開局配置不跑，出生點只給型別檢查用。
     spawnPoints: [
       { x: 0, y: 0 },
@@ -113,8 +169,8 @@ function makeMap(
   }
 }
 
-function makeMatch(): MatchDef {
-  return { tickRateHz: TICK_RATE_HZ, maxTicks: 12000, unitCap: 40, mineCap: 3, barracksCap: 3 }
+function makeMatch(mineCap: number): MatchDef {
+  return { tickRateHz: TICK_RATE_HZ, maxTicks: 12000, unitCap: 40, mineCap, barracksCap: 3 }
 }
 
 function makeFaction(
@@ -131,7 +187,11 @@ function makeFaction(
     roster: units.map((unit) => unit.id),
     // palette 含全部合成建築（keep 測試自行用 makeBuildingDef 排除）。
     buildings: buildings.map((building) => building.id),
-    startResources: { blue_crystal: startCrystal },
+    startResources: {
+      blue_crystal: startCrystal,
+      red_ruby: 0,
+      green_emerald: 0,
+    },
     counterMatrix,
   }
 }
@@ -140,14 +200,23 @@ function makeFaction(
 export function createTestWorld(options: TestWorldOptions = {}): World {
   const size = options.size ?? 12
   const units = (options.units ?? [makeUnitDef({ id: 'u' })]).map(normalizeUnitDef)
-  const buildings = options.buildings ?? [makeBuildingDef({ id: 'b' })]
-  const map = makeMap(size, options.rocks ?? [], options.resourceNodes ?? [], options.nodeAmount ?? 500)
+  const buildings = (options.buildings ?? [makeBuildingDef({ id: 'b' })]).map((def) =>
+    normalizeBuildingDef(def as BuildingDefTest),
+  )
+  const plainNodes = (options.resourceNodes ?? []).map((node) => ({ ...node }))
+  const typedNodes = (options.typedResourceNodes ?? []).map((node) => ({ ...node }))
+  const map = makeMap(
+    size,
+    options.rocks ?? [],
+    [...plainNodes, ...typedNodes],
+    options.nodeAmount ?? 500,
+  )
 
   const world: World = {
     tick: 0,
     seed: options.seed ?? 1,
     map,
-    match: makeMatch(),
+    match: makeMatch(options.mineCap ?? 3),
     faction: makeFaction(
       units,
       buildings,
@@ -167,12 +236,22 @@ export function createTestWorld(options: TestWorldOptions = {}): World {
       x: node.x,
       y: node.y,
       amountRemaining: node.amount,
+      resourceType: node.resourceType,
       buildingId: null,
     })),
     players: ['player', 'enemy'].map((id) => ({
       id: id as PlayerId,
       factionId: TEST_FACTION_ID,
-      blueCrystal: options.startCrystal ?? 1000,
+      resources: {
+        blue_crystal: options.startCrystal ?? 1000,
+        red_ruby: 0,
+        green_emerald: 0,
+      },
+      incomeRing: {
+        blue_crystal: new Array<number>(INCOME_WINDOW_TICKS).fill(0),
+        red_ruby: new Array<number>(INCOME_WINDOW_TICKS).fill(0),
+        green_emerald: new Array<number>(INCOME_WINDOW_TICKS).fill(0),
+      },
       spawn: id === 'player' ? { x: 0, y: 0 } : { x: size - 1, y: size - 1 },
       unitCount: 0,
       mineCount: 0,
@@ -208,7 +287,7 @@ export function centerOf(tile: TilePos): { x: number; y: number } {
   }
 }
 
-/** 玩家起始藍水晶的便捷讀取。 */
+/** 玩家起始藍水晶的便捷讀取（Prompt 5：讀三資源表中的 blue_crystal）。 */
 export function crystalOf(world: World, playerId: PlayerId): number {
-  return getPlayer(world, playerId).blueCrystal
+  return getPlayer(world, playerId).resources.blue_crystal
 }

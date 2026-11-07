@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "unit": {
+    "id": "ballista",
+    "faction": "test_faction",
+    "tier": "large",
+    "role": "ranged",
+    "cost": {
+      "blue_crystal": 40,
+      "red_ruby": 80,
+      "green_emerald": 0
+    },
+    "stats": {
+      "hp": 150,
+      "dmg": 25,
+      "range": 3,
+      "attackSpeed": 0.5,
+      "moveSpeed": 1,
+      "armor": 0
+    },
+    "requires": [
+      "barracks"
+    ],
+    "sprite": {
+      "color": "#b08d57",
+      "size": 12
+    },
+    "ai": {
+      "value": 200,
+      "preferredRange": 3,
+      "retreatHpPct": 0.5
+    },
+    "trainTimeSec": 10
+  }
+}

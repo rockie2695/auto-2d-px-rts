@@ -1,4 +1,5 @@
 import type { Application, Ticker } from 'pixi.js'
+import type { ResourceAmount, ResourceId } from '@auto-2d-px-rts/shared'
 
 import { MICRO_INTERVAL_TICKS, runMicroCycle } from './ai/micro.ts'
 import type { MicroDecision } from './ai/micro.ts'
@@ -18,12 +19,13 @@ import { loadContentPackFromFetch } from './data/loadFromFetch.ts'
 import { ReplayRecorder, REPLAY_SAMPLE_INTERVAL_TICKS } from './replay.ts'
 import type { MatchResult, ReplayRecord } from './replay.ts'
 import type { GameScene, MapMarker } from './render/scene.ts'
-import type { PlayerId, World } from './sim/types.ts'
+import type { PlayerId, ResourceStock, World } from './sim/types.ts'
 import { buildingEffectiveMaxHp, tileOf } from './sim/types.ts'
 import { GameLoop } from './sim/gameLoop.ts'
 import { createWorld, snapshotWorld } from './sim/world.ts'
 import type { WorldSnapshot } from './sim/world.ts'
 import { effectiveHp } from './sim/combat.ts'
+import { getIncome } from './sim/economy.ts'
 
 /** 對局預設種子（CLI 對照用；瀏覽器對局每場隨機取種，見 `matchSeed`）。 */
 export const SEED = 42
@@ -66,10 +68,16 @@ export interface BattleStats {
   readonly maxTicks: number
   readonly playerCrystal: number
   readonly enemyCrystal: number
+  /** 三資源庫存（Prompt 5：藍水晶＋紅寶石＋綠翡翠）。 */
+  readonly playerResources: ResourceStock
+  readonly enemyResources: ResourceStock
+  /** 三資源收入率（每秒；Prompt 5 getIncome 60 tick 窗 ÷ 3s）。 */
+  readonly playerIncomes: Record<ResourceId, number>
+  readonly enemyIncomes: Record<ResourceId, number>
   /** 雙方存活單位數（圖表「單位數量」模式取樣用）。 */
   readonly playerUnits: number
   readonly enemyUnits: number
-  /** Σ hp × dmg × attackSpeed（SPEC §12.1）；雙方存活單位合計。 */
+  /** Σ hp/(1−armor) × dmg × attackSpeed（Prompt 3.1 有效當量）；雙方存活單位合計。 */
   readonly playerPower: number
   readonly enemyPower: number
   readonly log: readonly DecisionLogEntry[]
@@ -202,25 +210,38 @@ export function resolveMatchResult(world: World): MatchResult {
   return 'draw'
 }
 
+/** 三資源總和（Prompt 5：超時值裁定的庫存項）。 */
+function totalResourcesOf(stock: ResourceStock): number {
+  return stock.blue_crystal + stock.red_ruby + stock.green_emerald
+}
+
+/** 單位／建築總成本（三資源等權求和）。 */
+function totalCostOf(cost: ResourceAmount): number {
+  return cost.blue_crystal + (cost.red_ruby ?? 0) + (cost.green_emerald ?? 0)
+}
+
 /**
- * 陣營**總價值**（Prompt 10.23 超時值裁定）：水晶 + 單位殘值 + 建築殘值。
+ * 陣營**總價值**（Prompt 10.23 超時值裁定）：三資源庫存 + 單位殘值 + 建築殘值
+ * （Prompt 5：庫存項 = 藍水晶＋紅寶石＋綠翡翠總和——紅綠即時無消費者也是資產；
+ * 殘值成本 = 三資源總成本）。
  * 殘值 = `cost ×（現 hp ÷ 有效最大 hp）` 四捨五入——興建中建築的有效最大 hp
  * 已按完成比例折算（SPEC §5）→ 殘值自動含完成度。全整數運算、跨平台一致。
  */
 export function matchSideValue(world: World, playerId: PlayerId): number {
-  let value = world.players.find((player) => player.id === playerId)?.blueCrystal ?? 0
+  const player = world.players.find((candidate) => candidate.id === playerId)
+  let value = player === undefined ? 0 : totalResourcesOf(player.resources)
   for (const unit of world.units) {
     if (unit.player !== playerId || unit.hp <= 0) continue
     const def = world.defs.units[unit.defId]
     if (def === undefined) continue
-    value += Math.round((def.cost.blue_crystal * unit.hp) / Math.max(1, def.stats.hp))
+    value += Math.round((totalCostOf(def.cost) * unit.hp) / Math.max(1, def.stats.hp))
   }
   for (const building of world.buildings) {
     if (building.player !== playerId || building.hp <= 0) continue
     const def = world.defs.buildings[building.defId]
     if (def === undefined) continue
     value += Math.round(
-      (def.cost.blue_crystal * building.hp) / buildingEffectiveMaxHp(def, building),
+      (totalCostOf(def.cost) * building.hp) / buildingEffectiveMaxHp(def, building),
     )
   }
   return value
@@ -341,8 +362,13 @@ export async function startGameSession(app: Application, scene: GameScene): Prom
 
   // 復盤紀錄（Prompt 10.5）：tick 0 起每 20 tick 取雙陣營樣本；政策變更即時記錄。
   const recorder = new ReplayRecorder()
-  const crystalOf = (playerId: PlayerId): number =>
-    world.players.find((player) => player.id === playerId)?.blueCrystal ?? 0
+  const resourcesOf = (playerId: PlayerId): ResourceStock =>
+    world.players.find((player) => player.id === playerId)?.resources ?? {
+      blue_crystal: 0,
+      red_ruby: 0,
+      green_emerald: 0,
+    }
+  const crystalOf = (playerId: PlayerId): number => resourcesOf(playerId).blue_crystal
   const aliveUnitCount = (playerId: PlayerId): number =>
     world.units.filter((unit) => unit.player === playerId && unit.hp > 0).length
   const powerOf = (playerId: PlayerId): number =>
@@ -362,6 +388,10 @@ export async function startGameSession(app: Application, scene: GameScene): Prom
     aliveUnitCount('enemy'),
     powerOf('player'),
     powerOf('enemy'),
+    resourcesOf('player').red_ruby,
+    resourcesOf('enemy').red_ruby,
+    resourcesOf('player').green_emerald,
+    resourcesOf('enemy').green_emerald,
   )
 
   // 對局結果（Prompt 10.5）：結束時填入；之前為 null。
@@ -370,13 +400,17 @@ export async function startGameSession(app: Application, scene: GameScene): Prom
   const finalize = (): void => {
     if (outcome !== null) return
     const result = resolveMatchResult(world)
+    const playerResources = resourcesOf('player')
+    const enemyResources = resourcesOf('enemy')
     outcome = {
       result,
       replay: recorder.finish(
         seed,
         result,
-        { player: crystalOf('player'), enemy: crystalOf('enemy') },
+        { player: playerResources.blue_crystal, enemy: enemyResources.blue_crystal },
         world.tick,
+        { player: playerResources.red_ruby, enemy: enemyResources.red_ruby },
+        { player: playerResources.green_emerald, enemy: enemyResources.green_emerald },
       ),
     }
     app.ticker.remove(onFrame) // 對局結束：不再推進（復盤頁不依賴即時 sim）
@@ -588,7 +622,20 @@ export async function startGameSession(app: Application, scene: GameScene): Prom
       }
     },
     getBattleStats: (): BattleStats => {
-      const crystal = (id: PlayerId): number => world.players.find((p) => p.id === id)?.blueCrystal ?? 0
+      const resourcesOf = (id: PlayerId): ResourceStock =>
+        world.players.find((player) => player.id === id)?.resources ?? {
+          blue_crystal: 0,
+          red_ruby: 0,
+          green_emerald: 0,
+        }
+      const playerResources = resourcesOf('player')
+      const enemyResources = resourcesOf('enemy')
+      const incomesOf = (id: PlayerId): Record<ResourceId, number> => ({
+        // getIncome = 60 tick 總入帳 → 每秒 = ÷3（INCOME_WINDOW_TICKS / TICK_RATE_HZ）。
+        blue_crystal: getIncome(world, id, 'blue_crystal') / 3,
+        red_ruby: getIncome(world, id, 'red_ruby') / 3,
+        green_emerald: getIncome(world, id, 'green_emerald') / 3,
+      })
       const power = powerOf
       const squads: SquadInfo[] = []
       for (const player of world.players) {
@@ -627,8 +674,12 @@ export async function startGameSession(app: Application, scene: GameScene): Prom
       return {
         tick: world.tick,
         maxTicks: world.match.maxTicks,
-        playerCrystal: crystal('player'),
-        enemyCrystal: crystal('enemy'),
+        playerCrystal: playerResources.blue_crystal,
+        enemyCrystal: enemyResources.blue_crystal,
+        playerResources,
+        enemyResources,
+        playerIncomes: incomesOf('player'),
+        enemyIncomes: incomesOf('enemy'),
         playerUnits: world.units.filter((unit) => unit.player === 'player' && unit.hp > 0).length,
         enemyUnits: world.units.filter((unit) => unit.player === 'enemy' && unit.hp > 0).length,
         playerPower: power('player'),
