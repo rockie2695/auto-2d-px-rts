@@ -23,6 +23,7 @@ import { buildingEffectiveMaxHp, tileOf } from './sim/types.ts'
 import { GameLoop } from './sim/gameLoop.ts'
 import { createWorld, snapshotWorld } from './sim/world.ts'
 import type { WorldSnapshot } from './sim/world.ts'
+import { effectiveHp } from './sim/combat.ts'
 
 /** 對局預設種子（CLI 對照用；瀏覽器對局每場隨機取種，見 `matchSeed`）。 */
 export const SEED = 42
@@ -100,6 +101,12 @@ export interface UnitInfo {
   readonly rangeTiles: number
   /** 移動速度（格/秒，Prompt 10.13 單位資訊）。 */
   readonly moveSpeedTilesPerSec: number
+  /** 裝甲（減傷百分比 0~0.8，Prompt 3.1；顯示「裝甲」不用「護甲」）。 */
+  readonly armor: number
+  /** 有效 HP = maxHp / (1 − armor)（Prompt 3.1）。 */
+  readonly effHp: number
+  /** DPS = dmg × attackSpeed（Prompt 3.1）。 */
+  readonly dps: number
 }
 
 /** 建築資訊（ui 面板顯示用，Prompt 9.1 驗收：點建築看到資訊）。 */
@@ -343,7 +350,9 @@ export async function startGameSession(app: Application, scene: GameScene): Prom
       if (unit.player !== playerId || unit.hp <= 0) return total
       const def = world.defs.units[unit.defId]
       if (def === undefined) return total
-      return total + unit.hp * def.stats.dmg * def.stats.attackSpeed
+      // 戰力（Prompt 3.1）：現值 HP 換算**有效當量** hp/(1−armor)——保留
+      // 「隨損血下降」的語義，同時反映裝甲的攤薄（滿血當量更大）。
+      return total + (unit.hp / (1 - def.stats.armor)) * def.stats.dmg * def.stats.attackSpeed
     }, 0)
   recorder.sample(
     0,
@@ -524,6 +533,9 @@ export async function startGameSession(app: Application, scene: GameScene): Prom
         squadMission,
         rangeTiles: def.stats.range,
         moveSpeedTilesPerSec: def.stats.moveSpeed,
+        armor: def.stats.armor,
+        effHp: effectiveHp(def),
+        dps: def.stats.dmg * def.stats.attackSpeed,
       }
     },
     getBuildingInfo: (buildingId: number): BuildingInfo | null => {

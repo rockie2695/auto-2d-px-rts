@@ -392,3 +392,33 @@ JSON 結構會按最終 schema 設計，方便日後遷移到 DB。
   位置與鏡像、受火 chase／脫離／攻城豁免、塔火接觸／夾擊／撤退共 23 測）、
   tsc＋oxlint 乾淨、fullMirrorProbe 7200 前 0 mismatch、pairProbe mirrorOK、
   saltMirrorProbe 363 采樣 0 mismatch、pnpm dev 200。
+
+- [x] 階段三 Prompt 3.1 — 裝甲屬性（MVP 驗證通過後的第一個延後清單項目落地）：
+  **緣由**——SPEC 規則 12 把「裝甲」列為延後；MVP 驗證通過（10.24 收口）後按
+  原規劃補回。`UnitDef.stats` 從 5 值擴為 6 值：`armor`＝**減傷百分比**
+  （0~0.8、預設 0；中文標籤固定「裝甲」，不用「護甲」／「防禦」）。
+  1. **傷害公式**（sim/combat.ts）：單位受害者 `hp -= max(1, round(dmg × (1−armor)))`
+     （最少 1 點地板）；**建築受害者不套甲**；`effectiveHp = hp / (1−armor)`
+     純函式供 AI／平衡／UI 共用。
+  2. **AI 生產評分**（strategy.ts）：加生存項 `survivalScoreOf × 0.15`（roster 內
+     正規化有效HP/cost）——權重**刻意 < FATE_BAND 0.2**，只影響命運抽籤機率、
+     不把弱甲單位擠出抽籤帶（Prompt 10.11 多樣性保留）。
+  3. **平衡指標模組**（新 `balance/unitStats.ts`，原規劃 server 包——本 workspace
+     無 server 落地為 game 內建）：armor／有效HP／有效HP:cost／DPS／DPS:cost
+     純函式表；**靈敏度掃描**（`balance/sensitivity.test.ts`）＝等兵對撞
+     armor 0→0.8 每 0.1 掃描：0 甲＝鏡像全平、勝場隨裝甲單調不減、滿甲全勝
+     （健康屬性、無病態反轉）。
+  4. **UI**：單位資訊面板加「裝甲 %／有效 HP／DPS」三行；戰力（面板＋復盤
+     曲線）改**現值 HP 有效當量** `Σ hp/(1−armor) × dmg × attackSpeed`
+     （保留隨損血下降語義）。
+  5. **Seed**：legionnaire armor 0.2、archer 0；新增 **shield_guard**
+     （small/melee、hp 120、dmg 6、armor **0.5**、成本 80、生產 6 s、
+     有效 HP 240——小型高裝甲示範），roster 三單位。
+  **驗證**——365/365 測試全過（新增 schema armor 驗證、傷害減半／取整／地板、
+  effectiveHp、balance 指標、生存項分數差、shield_guard 內容鎖定、InfoPanel
+  裝甲行、靈敏度掃描共 23 測）、tsc＋oxlint 乾淨、fullMirrorProbe 7200 前
+  0 mismatch、pairProbe mirrorOK、saltMirrorProbe 363 采樣 0 mismatch、
+  24-seed tally **8 藍 / 9 紅 / 7 平**（與 10.24 基線完全一致——裝甲雙方同式
+  套用、生存項在命運帶內，平衡未漂移）、12 種子公平門通過、pnpm dev 200。
+  檢查清單 grep：`armor` 正常；`armorType`／`damageType` 0 匹配；
+  「護甲」僅存在於禁用說明與反測試斷言。

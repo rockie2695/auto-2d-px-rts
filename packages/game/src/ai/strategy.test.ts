@@ -5,7 +5,12 @@ import { describe, expect, it } from 'vitest'
 import type { UnitDef } from '@auto-2d-px-rts/shared'
 
 import { DEFAULT_POLICIES, resolvePolicies } from './policy.ts'
-import { runStrategicCycle, STRATEGIC_INTERVAL_TICKS, THREAT_DEFENSE_BONUS } from './strategy.ts'
+import {
+  runStrategicCycle,
+  STRATEGIC_INTERVAL_TICKS,
+  SURVIVAL_SCORE_WEIGHT,
+  THREAT_DEFENSE_BONUS,
+} from './strategy.ts'
 import type { DecisionRecord, StrategicAction } from './strategy.ts'
 import { loadContentPackFromDir } from '../data/loadFromDir.ts'
 import {
@@ -117,6 +122,48 @@ describe('主動防禦：壓境防守加權（保護建築與水晶，Prompt 10.
     const base = trainScore(false)
     expect(base).toBeDefined()
     expect(trainScore(true)).toBeCloseTo((base ?? 0) + THREAT_DEFENSE_BONUS, 6)
+  })
+})
+
+describe('生產評分生存項（Prompt 3.1：有效HP/cost，權重小於 FATE_BAND）', () => {
+  /** 兩個候選**只差裝甲**：tank 0.5、plain 0——生存項是唯一分數差。 */
+  function armorWorld(): World {
+    const world = createTestWorld({
+      size: 32,
+      units: [
+        makeUnitDef({ id: 'tank', stats: { hp: 120, dmg: 10, range: 0.8, attackSpeed: 1.0, moveSpeed: 1.0, armor: 0.5 } }),
+        makeUnitDef({ id: 'plain', stats: { hp: 120, dmg: 10, range: 0.8, attackSpeed: 1.0, moveSpeed: 1.0, armor: 0 } }),
+      ],
+      buildings: [
+        makeBuildingDef({ id: 'keep', size: [3, 3], ai: { value: 1000 } }),
+        makeBuildingDef({ id: 'barracks', produces: ['tank', 'plain'] }),
+      ],
+    })
+    addBuilding(world, 'player', 'keep', { x: 2, y: 2 }, { built: true, nodeId: null })
+    addBuilding(world, 'player', 'barracks', { x: 6, y: 2 }, { built: true, nodeId: null })
+    return world
+  }
+
+  it('權重 < FATE_BAND：生存項只影響抽籤機率、不把弱甲單位擠出命運帶', () => {
+    // FATE_BAND 是生產軌內部常數 0.2；此約定鎖死在生產測試（命運抽籤多樣性）。
+    expect(SURVIVAL_SCORE_WEIGHT).toBeLessThan(0.2)
+    expect(SURVIVAL_SCORE_WEIGHT).toBeGreaterThan(0)
+  })
+
+  it('只差裝甲時，高有效HP/cost 候選分數恰高 0.15', () => {
+    const records = runCycleRecords(armorWorld(), 'player', resolvePolicies({ econMilitary: 1 }), 1)
+    const train = records.find((record) => record.action === 'train')
+    expect(train).toBeDefined()
+    if (train === undefined) return
+    const scores = new Map(
+      train.reason.candidates.map((candidate) => [candidate.defId, candidate.score]),
+    )
+    const tank = scores.get('tank')
+    const plain = scores.get('plain')
+    if (tank === undefined || plain === undefined) {
+      throw new Error(`候選分數缺 tank／plain：${JSON.stringify([...scores])}`)
+    }
+    expect(tank - plain).toBeCloseTo(SURVIVAL_SCORE_WEIGHT, 6)
   })
 })
 

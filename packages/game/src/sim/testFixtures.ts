@@ -21,9 +21,26 @@ import type { PlayerId, TilePos, World } from './types.ts'
  * 讓「弱者先死」「10 tick 走 10 格」這類斷言可以整數化。
  */
 
-/** 合成單位定義；未指定的欄位用平衡預設值。 */
-export function makeUnitDef(overrides: Partial<UnitDef> & { id: string }): UnitDef {
+/**
+ * 測試單位輸入（Prompt 3.1）：`stats.armor` 可省略（預設 0）——
+ * 絕大多數舊測試不關心裝甲，不必逐個補欄位。
+ */
+export type UnitDefTest = Omit<UnitDef, 'id' | 'stats'> & {
+  id: string
+  stats?: Omit<UnitDef['stats'], 'armor'> & { armor?: number }
+}
+
+/** 測試單位輸入 → 完整 UnitDef（armor 缺省補 0）。 */
+export function normalizeUnitDef(partial: UnitDefTest): UnitDef {
   return {
+    ...partial,
+    stats: { hp: 100, dmg: 10, range: 0.8, attackSpeed: 1.0, moveSpeed: 1.0, ...partial.stats, armor: partial.stats?.armor ?? 0 },
+  }
+}
+
+/** 合成單位定義；未指定的欄位用平衡預設值。 */
+export function makeUnitDef(overrides: Partial<UnitDefTest> & { id: string }): UnitDef {
+  return normalizeUnitDef({
     faction: 'test_faction',
     tier: 'small',
     role: 'melee' as Role,
@@ -34,7 +51,7 @@ export function makeUnitDef(overrides: Partial<UnitDef> & { id: string }): UnitD
     ai: { value: 100, preferredRange: 0.8, retreatHpPct: 0.2 },
     trainTimeSec: 1,
     ...overrides,
-  }
+  })
 }
 
 /** 合成建築定義。 */
@@ -62,7 +79,9 @@ export interface TestWorldOptions {
   resourceNodes?: readonly TilePos[]
   /** 每個資源點的蘊藏量（預設 500，與 test_map.json 一致）。 */
   nodeAmount?: number
-  units?: readonly UnitDef[]
+  /** 單位定義（armor 可省略，預設 0）。 */
+  units?: readonly UnitDefTest[]
+  /** 建築定義。 */
   buildings?: readonly BuildingDef[]
   /** 玩家起始藍水晶（預設 1000）。 */
   startCrystal?: number
@@ -120,7 +139,7 @@ function makeFaction(
 /** 建立一個可直接推進的合成世界（不含開局配置，由測試自行擺放）。 */
 export function createTestWorld(options: TestWorldOptions = {}): World {
   const size = options.size ?? 12
-  const units = options.units ?? [makeUnitDef({ id: 'u' })]
+  const units = (options.units ?? [makeUnitDef({ id: 'u' })]).map(normalizeUnitDef)
   const buildings = options.buildings ?? [makeBuildingDef({ id: 'b' })]
   const map = makeMap(size, options.rocks ?? [], options.resourceNodes ?? [], options.nodeAmount ?? 500)
 

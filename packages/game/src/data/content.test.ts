@@ -48,6 +48,7 @@ const EXPECTED_FILES: readonly string[] = [
   'resources/blue_crystal.json',
   'units/archer.json',
   'units/legionnaire.json',
+  'units/shield_guard.json',
 ]
 
 function listJsonFiles(dir: string, prefix = ''): string[] {
@@ -113,10 +114,15 @@ describe('MVP 內容 JSON（Prompt 3）', () => {
     })
   })
 
-  it('單位：2 個（legionnaire / archer），且都通過 Zod 驗證', () => {
+  it('單位：3 個（legionnaire / archer / shield_guard），且都通過 Zod 驗證', () => {
     const units = loadUnits()
-    expect(units.map((unit) => unit.id).sort()).toEqual(['archer', 'legionnaire'])
-    expect(units).toHaveLength(2)
+    expect(units.map((unit) => unit.id).sort()).toEqual(['archer', 'legionnaire', 'shield_guard'])
+    expect(units).toHaveLength(3)
+    // 裝甲（Prompt 3.1）：legionnaire 0.2、archer 0、shield_guard 0.5。
+    const armorById = new Map(units.map((unit) => [unit.id, unit.stats.armor]))
+    expect(armorById.get('legionnaire')).toBe(0.2)
+    expect(armorById.get('archer')).toBe(0)
+    expect(armorById.get('shield_guard')).toBe(0.5)
   })
 
   it('建築：4 個（keep / barracks / crystal_mine / tower），且都通過 Zod 驗證', () => {
@@ -162,7 +168,7 @@ describe('MVP 內容 JSON（Prompt 3）', () => {
     expect(faction.startResources).toEqual({ blue_crystal: 600 })
     expect(faction.startUnits).toEqual({ legionnaire: 3 })
     expect(faction.startBuildings.sort()).toEqual(['barracks', 'crystal_mine', 'keep'])
-    expect(faction.roster).toEqual(['legionnaire', 'archer'])
+    expect(faction.roster).toEqual(['legionnaire', 'archer', 'shield_guard'])
     expect(faction.buildings).toEqual(['barracks', 'crystal_mine', 'tower'])
   })
 
@@ -291,13 +297,14 @@ describe('地圖資料（tiles = 可通行性：0 可走 / 1 岩石）', () => {
 })
 
 describe('內容數值與 SPEC 一致（防止資料悄悄漂移）', () => {
-  it('單位數值 = SPEC §4', () => {
+  it('單位數值 = SPEC §4（Prompt 3.1 加 armor）', () => {
     expect(loadUnits().find((unit) => unit.id === 'legionnaire')?.stats).toEqual({
       hp: 100,
       dmg: 12,
       range: 0.8,
       attackSpeed: 1.2,
       moveSpeed: 2.1,
+      armor: 0.2,
     })
     expect(loadUnits().find((unit) => unit.id === 'archer')?.stats).toEqual({
       hp: 60,
@@ -305,7 +312,21 @@ describe('內容數值與 SPEC 一致（防止資料悄悄漂移）', () => {
       range: 3.0,
       attackSpeed: 1.0,
       moveSpeed: 2.5,
+      armor: 0,
     })
+    // 新單位（Prompt 3.1 #6）：小型高裝甲示範——有效 HP = 120 / (1 − 0.5) = 240。
+    expect(loadUnits().find((unit) => unit.id === 'shield_guard')?.stats).toEqual({
+      hp: 120,
+      dmg: 6,
+      range: 0.8,
+      attackSpeed: 1.0,
+      moveSpeed: 2.0,
+      armor: 0.5,
+    })
+    expect(loadUnits().find((unit) => unit.id === 'shield_guard')?.cost).toEqual({
+      blue_crystal: 80,
+    })
+    expect(loadUnits().find((unit) => unit.id === 'shield_guard')?.requires).toEqual(['barracks'])
     expect(loadUnits().find((unit) => unit.id === 'legionnaire')?.trainTimeSec).toBe(5)
     expect(loadUnits().find((unit) => unit.id === 'archer')?.trainTimeSec).toBe(7)
     expect(loadUnits().find((unit) => unit.id === 'legionnaire')?.cost).toEqual({

@@ -6,7 +6,8 @@ import { z } from 'zod'
  * `packages/game/public/data/` 的每一份 JSON 都會以這裡的 schema 驗證；
  * 欄位結構按最終 schema 設計，日後把 JSON 遷移到 DB 時不需改動。
  *
- * 注意：MVP **沒有 armor 欄位** —— 裝甲屬延後的 Prompt 3.1。
+ * 注意：MVP 沒有 armor 欄位——**階段三 Prompt 3.1 起加入 `stats.armor`**
+ * （裝甲＝減傷百分比 0~0.8；中文標籤固定用「裝甲」，不用「護甲」或「防禦」）。
  */
 
 /** 每份內容檔共有的版本標記（SPEC §13）。 */
@@ -85,6 +86,13 @@ export const UnitDefSchema = z.object({
     attackSpeed: z.number().positive(),
     /** 每秒移動格數（SPEC §4）。 */
     moveSpeed: z.number().positive(),
+    /**
+     * 裝甲（Prompt 3.1）：減傷**百分比**（0~0.8），不是分類標籤——
+     * 每 0.1 = 10% 傷害削減；傷害公式見 SPEC §10（最少 1 點地板）。
+     * 預設 0（無裝甲）；與 HP 的差別：armor 降低**每次受擊**的傷害量、
+     * hp 是傷害**總量**預算。
+     */
+    armor: z.number().min(0).max(0.8).default(0),
   }),
   /** 產出此單位所需的建築 id。 */
   requires: z.array(IdSchema),

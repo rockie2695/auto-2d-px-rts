@@ -11,7 +11,8 @@
       "dmg": 8,
       "range": 3.0,
       "attackSpeed": 1.0,
-      "moveSpeed": 2.5
+      "moveSpeed": 2.5,
+      "armor": 0
     },
     "requires": ["barracks"],
     "sprite": { "color": "#5b8def", "size": 12 },

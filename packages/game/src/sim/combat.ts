@@ -1,4 +1,5 @@
 import { TICK_RATE_HZ } from '@auto-2d-px-rts/shared'
+import type { UnitDef } from '@auto-2d-px-rts/shared'
 
 import { queryNear } from './spatialHash.ts'
 import { buildingEffectiveMaxHp, isConstructed, UNITS_PER_TILE } from './types.ts'
@@ -13,7 +14,19 @@ import type { Building, CombatTarget, Unit, World } from './types.ts'
  * - 目標選擇：顯式 `targetId` 優先；否則「射程內最近的敵人單位，
  *   平手取 id 較小者；射程內無單位時才打最近的敵方建築」。
  * - 未完工建築可被打，承受傷害照算（SPEC §5）。
+ * - 裝甲（階段三 Prompt 3.1）：單位受害者傷害 ×（1 − armor）、最少 1 點
+ *   （地板保證任何攻勢都能磨死高防目標）；**建築受害者不套**（建築無 armor）。
  */
+
+/** 單位定義的有效 HP（Prompt 3.1）：`hp / (1 − armor)`——裝甲把傷害攤薄的等價總量。 */
+export function effectiveHp(def: Pick<UnitDef, 'stats'>): number {
+  return def.stats.hp / (1 - def.stats.armor)
+}
+
+/** 套用防禦者裝甲的實際傷害：`max(1, round(dmg × (1 − armor)))`（最少 1 點地板）。 */
+export function applyArmor(defender: Pick<UnitDef, 'stats'>, baseDamage: number): number {
+  return Math.max(1, Math.round(baseDamage * (1 - defender.stats.armor)))
+}
 
 /** 平方距離是否在射程內（含等於）。 */
 export function inRangeSquared(
@@ -262,7 +275,10 @@ export function stepCombat(world: World): void {
     if (attack.targetUnitId !== null) {
       const victim = world.units.find((candidate) => candidate.id === attack.targetUnitId)
       if (victim === undefined) continue
-      victim.hp = Math.max(0, victim.hp - attack.dmg)
+      // 裝甲（Prompt 3.1）：單位受害者套防禦方裝甲；建築受害者不套。
+      const victimDef = world.defs.units[victim.defId]
+      if (victimDef === undefined) throw new Error(`未知單位定義：${victim.defId}`)
+      victim.hp = Math.max(0, victim.hp - applyArmor(victimDef, attack.dmg))
       // 受傷也是交戰（被打的單位同樣不回血）。
       victim.lastCombatTick = world.tick
     } else if (attack.targetBuildingId !== null) {

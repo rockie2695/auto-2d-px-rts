@@ -9,6 +9,7 @@ import { findNearestPlacement, tryFindNearestFreeNode } from '../sim/world.ts'
 import { getPlayer } from '../sim/types.ts'
 import type { PlayerId, TilePos, World } from '../sim/types.ts'
 import { hashFate } from '../sim/rng.ts'
+import { survivalScoreOf } from '../balance/unitStats.ts'
 
 /**
  * AI 戰略層（SPEC §8，Prompt 6 / 6.5）：每 40 tick（= 2 秒）決定「蓋什麼、生什麼」。
@@ -16,7 +17,9 @@ import { hashFate } from '../sim/rng.ts'
  * 兩條獨立軌道，各取最高分且可負擔者執行一次：
  * - 建築軌：`U = weight × (1 − 飽和度)`；一礦都沒有時礦場強制 3.0
  *   （SPEC §8.1「除非一礦都沒有」，避免重經濟滑桿餓死）。
- * - 生產軌：`score = counterScore + tierScore + rangeScore − 稀缺性懲罰`。
+ * - 生產軌：`score = counterScore + tierScore + rangeScore − 稀缺性懲罰
+ *   ＋ 生存項（Prompt 3.1：roster 內正規化有效HP/cost × 0.15 < FATE_BAND，
+ *   只影響抽籤機率不消滅候選）`。
  * - **建築預備金（Prompt 10.24 A）**：建築軌未飽和時，生產軌不得把水晶花到
  *   「下一個建築目標的造價」以下——否則單位生產吞光結餘、建築永遠饿死
  *   （實測：水晶 9~49 震盪、塔只蓋得出開局一座）。全飽和 → 預備金 0。
@@ -41,6 +44,15 @@ const SCARCITY_PENALTY = 0.05
  * 也會持續產兵回防，而不是眼看礦場被拆。
  */
 export const THREAT_DEFENSE_BONUS = 1.0
+
+/**
+ * 生存項權重（階段三 Prompt 3.1）：`survivalScoreOf`（roster 內正規化
+ * 有效HP/cost 到 0..1）乘此權重併入生產分數。刻意取**小於 FATE_BAND（0.2）**——
+ * 生存項單獨的滿差不得把弱甲單位整個擠出命運抽籤帶（Prompt 10.11 的多樣性
+ * 必須保留；裝甲只影響抽籤機率權重，不消滅候選）。生產分數的主導結構仍是
+ * counter + tier + range（balance 是刀-edge，由 fairness gate 實測守門）。
+ */
+export const SURVIVAL_SCORE_WEIGHT = 0.15
 
 /** tier 由小到大的序數（unitSize 滑桿目標：0 → large、1 → small）。 */
 const TIER_ORDER: Record<string, number> = { small: 0, medium: 1, large: 2 }
@@ -292,12 +304,16 @@ function fateOf(world: World, tick: number): number {
   return hashFate(world.seed, tick)
 }
 
-/** 評估生產候選：克制 + tier + range − 稀缺性 ＋ 壓境防守加權；不可負擔或無產能者剔除。 */
+/** 評估生產候選：克制 + tier + range − 稀缺性 ＋ 生存項 ＋ 壓境防守加權；不可負擔或無產能者剔除。 */
 function evaluateUnits(world: World, playerId: PlayerId, policies: PolicyValues): UnitCandidate[] {
   const player = getPlayer(world, playerId)
   const share = enemyRoleShare(world, playerId)
   // 主動防禦（Prompt 10.6）：我方建築受威脅 → 防守生產加權（保護建築與水晶）。
   const threatened = pickMostUrgentThreat(world, playerId) !== null
+  // 生存項（Prompt 3.1）的 roster 快照（rosterDefs 正規化基準）。
+  const rosterDefs = world.faction.roster
+    .map((rosterId) => world.defs.units[rosterId])
+    .filter((def) => def !== undefined)
 
   const candidates: UnitCandidate[] = []
   for (const defId of world.faction.roster) {
@@ -317,7 +333,9 @@ function evaluateUnits(world: World, playerId: PlayerId, policies: PolicyValues)
       tierScoreOf(world, defId, policies) +
       rangeScoreOf(world, defId, policies) -
       ownedCountOf(world, playerId, defId) * SCARCITY_PENALTY +
-      (threatened ? THREAT_DEFENSE_BONUS : 0)
+      (threatened ? THREAT_DEFENSE_BONUS : 0) +
+      // 生存項（Prompt 3.1）：有效HP/cost 高者（如 shield_guard）加分。
+      survivalScoreOf(def, rosterDefs) * SURVIVAL_SCORE_WEIGHT
     candidates.push({ defId, score })
   }
 

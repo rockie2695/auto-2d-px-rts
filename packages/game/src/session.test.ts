@@ -104,6 +104,23 @@ describe('組合根 getUnitInfo / getBattleStats（Prompt 9.5）', () => {
       expect(info.moveSpeedTilesPerSec).toBeGreaterThan(0)
     }
 
+    // 裝甲（Prompt 3.1）：單位資訊帶 armor／有效HP／DPS，且與 def 一致
+    // （legionnaire：armor 0.2、maxHp 100 → 有效 HP 125；DPS = 12 × 1.2 = 14.4）。
+    let sawLegionnaire = false
+    for (let id = 1; id <= 64; id++) {
+      const unit = session.getUnitInfo(id)
+      if (unit === null || unit.defId !== 'legionnaire') continue
+      sawLegionnaire = true
+      expect(unit.armor).toBe(0.2)
+      expect(unit.effHp).toBeCloseTo(125, 6)
+      expect(unit.dps).toBeCloseTo(14.4, 6)
+      break
+    }
+    expect(sawLegionnaire).toBe(true)
+    // 戰力取樣含裝甲換算（Prompt 3.1）：開局 3 legionnaire 滿血 →
+    // playerPower ≥ 3 × 125 × 12 × 1.2（受傷只會降低，不會低於 0）。
+    expect(stats.playerPower).toBeGreaterThan(0)
+
       session.stop()
     expect(app.ticker.remove).toHaveBeenCalledOnce()
   })

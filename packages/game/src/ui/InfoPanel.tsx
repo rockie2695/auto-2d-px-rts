@@ -104,6 +104,21 @@ export function InfoPanel() {
             </dd>
           </div>
           <div>
+            <dt>裝甲</dt>
+            <dd>
+              {Math.round(unitInfo.armor * 1000) / 10}%（受到傷害 −
+              {Math.round(unitInfo.armor * 1000) / 10}%）
+            </dd>
+          </div>
+          <div>
+            <dt>有效 HP</dt>
+            <dd>{Math.round(unitInfo.effHp * 10) / 10}</dd>
+          </div>
+          <div>
+            <dt>DPS</dt>
+            <dd>{Math.round(unitInfo.dps * 10) / 10}</dd>
+          </div>
+          <div>
             <dt>座標</dt>
             <dd>
               ({unitInfo.tileX}, {unitInfo.tileY})

@@ -5,7 +5,7 @@
     "name": "Test Faction",
     "startUnits": { "legionnaire": 3 },
     "startBuildings": ["keep", "barracks", "crystal_mine"],
-    "roster": ["legionnaire", "archer"],
+    "roster": ["legionnaire", "archer", "shield_guard"],
     "buildings": ["barracks", "crystal_mine", "tower"],
     "startResources": { "blue_crystal": 600 },
     "counterMatrix": {
