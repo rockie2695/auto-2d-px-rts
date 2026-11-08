@@ -453,3 +453,33 @@ JSON 結構會按最終 schema 設計，方便日後遷移到 DB。
   saltMirrorProbe 363 采樣 0 mismatch、24-seed tally **6 藍 / 10 紅 / 8 平**
   （12 種子公平門 3/6/3 通過）、pnpm dev 200。grep 檢查：Player 狀態層已無
   單資源欄位（`blueCrystal` 0 匹配）。
+
+- [x] 階段三 Prompt 6 — 12+1 滑桿戰略層（9 數值＋3 資源偏重＋節奏預設）：
+  **緣由**——規則 10 原「玩家只調 5 滑桿」；Prompt 6 擴展為完整 Policy 系統。
+  1. **Schema**：`POLICY_IDS` 5→9（+expansion/techRush/reserve/retreatThreshold）、
+     `TempoPresetSchema`（rush/early_pressure/standard/late_game/turtle）；
+     `policies.json` 9 條（全 default 0.5）。
+  2. **節奏預設**（新 `ai/tempo.ts`）：時間窗覆蓋表——每次戰略/戰術決策先以
+     `effectivePolicies(用戶值, tick)` 合成生效政策（`standard` 恒等；
+     rush 前 2 分鐘 econMilitary 0.1/aggression 1.0 等）；敵方固定 standard。
+  3. **單位效用乘法重構**（提示詞 #5）：`counter × tier項 × range項 × 技術項 ×
+     稀缺項 × 生存項 × (壓境 ? ×2 : 1)`——各項相對倍率、1.0 中性；生存項收窄
+     ±10%（乘法分差過大擠出命運帶）；**命運抽籤帶改相對值** `score ≥ best×0.85`。
+  4. **建築效用**（提示詞 #4）：礦場 = `econ × resourceBias[資源] × (1−分型飽和)`
+     （bias max 歸一、預設全 ×1）＋科技建築 techBias 項；expansion/techRush
+     控制紅/綠礦 gate（**上半段生效**曲線——全線版 0.5 預設提前蓋紅礦，
+     消融實測平局 8→16）。
+  5. **reserve 語義**（消融定稿）：攻擊份額乘數 `×2×(1−reserve)`——0.5 中性、
+     0 全軍出擊、1 全軍留守、敵滅全軍出擊（10.18）豁免；「戰力比例事後翻隊」
+     版在無狀態重編下把攻擊隊永久壓回家（消融實測 24 全平）。
+  6. **retreatThreshold**（parity 乘法映射）：單位 `JSON 值 × lerp(0.4,1.6,t)`、
+     小隊 `0.7 × (0.5+t)`——0.5 雙雙零偏移；TacticalPlan 帶
+     `retreatHpFactor`/`squadRetreatRatio`，micro 從 plan 讀（簽名不變）。
+  7. **UI**：面板 12 滑桿（兩列網格）＋節奏下拉；**節奏預設免冷卻**
+     （滑桿仍 30s 冷卻）；`applyPolicies` 深合併（resourceBias 部分子鍵）。
+  **驗證**——397/397 測試全過（+18：tempo 時段/合成/深合併 8、reserve 乘數 5、
+  retreat parity 3、expansion/techRush/bias gates 4、UI 12 滑桿、session 免冷卻＋
+  深合併）；tsc＋oxlint 乾淨；fullMirrorProbe 0 mismatch、pairProbe mirrorOK、
+  saltMirrorProbe 363 采樣 0；24-seed tally **7 藍 / 9 紅 / 8 平**（消融兩輪：
+  reserve 比例版→24 全平、expansion 全線→16 平，定稿後回到 Prompt 5 基線）、
+  12 種子公平門通過、pnpm dev 200。

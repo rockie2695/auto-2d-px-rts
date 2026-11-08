@@ -306,17 +306,31 @@ export type MatchDef = z.infer<typeof MatchDefSchema>
 /* Policy 滑桿                                                         */
 /* ------------------------------------------------------------------ */
 
-/** MVP 的 5 個滑桿 id（SPEC §8）。 */
+/** 階段三 Prompt 6：9 個數值滑桿（＋resourceBias 三鍵＋tempoPreset 列舉＝12+1 維度）。 */
 export const POLICY_IDS = [
   'econMilitary',
   'unitSize',
   'unitRange',
-  'aggression',
   'clusterSpread',
+  'aggression',
+  'expansion',
+  'techRush',
+  'reserve',
+  'retreatThreshold',
 ] as const
 
 export const PolicyIdSchema = z.enum(POLICY_IDS)
 export type PolicyId = z.infer<typeof PolicyIdSchema>
+
+/** 節奏預設（Prompt 6）：standard = 無時段覆蓋；其餘按時間窗覆蓋部分滑桿。 */
+export const TempoPresetSchema = z.enum([
+  'rush',
+  'early_pressure',
+  'standard',
+  'late_game',
+  'turtle',
+])
+export type TempoPreset = z.infer<typeof TempoPresetSchema>
 
 export const PolicyDefSchema = z
   .object({

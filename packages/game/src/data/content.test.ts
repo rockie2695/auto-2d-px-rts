@@ -188,15 +188,19 @@ describe('MVP 內容 JSON（Prompt 3）', () => {
     }
   })
 
-  it('Policy 滑桿：5 個，數值與 SPEC §8 一致', () => {
+  it('Policy 滑桿：9 個（Prompt 6 擴展），數值與 SPEC §8 一致', () => {
     const policies = loadPolicies()
-    expect(policies).toHaveLength(5)
+    expect(policies).toHaveLength(9)
     expect(policies).toEqual([
       { id: 'econMilitary', min: 0, max: 1, default: 0.5, step: 0.01 },
       { id: 'unitSize', min: 0, max: 1, default: 0.5, step: 0.01 },
       { id: 'unitRange', min: 0, max: 1, default: 0.5, step: 0.01 },
-      { id: 'aggression', min: 0, max: 1, default: 0.5, step: 0.01 },
       { id: 'clusterSpread', min: 0, max: 1, default: 0.5, step: 0.01 },
+      { id: 'aggression', min: 0, max: 1, default: 0.5, step: 0.01 },
+      { id: 'expansion', min: 0, max: 1, default: 0.5, step: 0.01 },
+      { id: 'techRush', min: 0, max: 1, default: 0.5, step: 0.01 },
+      { id: 'reserve', min: 0, max: 1, default: 0.5, step: 0.01 },
+      { id: 'retreatThreshold', min: 0, max: 1, default: 0.5, step: 0.01 },
     ])
   })
 

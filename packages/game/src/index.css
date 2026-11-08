@@ -344,6 +344,26 @@ body,
   gap: 6px;
 }
 
+/* Prompt 6：12+1 維度——9+3 滑杆兩列網格，面板加寬不無限拉高。 */
+.policy-panel-grid {
+  max-height: 70vh;
+  overflow-y: auto;
+}
+
+.policy-sliders-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(190px, 1fr));
+  gap: 2px 14px;
+}
+
+.policy-tempo select {
+  flex: 1;
+  background: #232936;
+  color: #d5dbe2;
+  border: 1px solid #4a5568;
+  font-size: 12px;
+}
+
 .policy-slider-label {
   width: 74px;
   flex: none;

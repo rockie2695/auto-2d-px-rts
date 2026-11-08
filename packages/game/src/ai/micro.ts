@@ -432,10 +432,12 @@ export function computeMicroPlan(
       // 分級（Prompt 10.13）：
       // 1) 殘血 < 20%：一律回家（不被一刀撿頭）。
       const critical = hpFraction < CRITICAL_HP_PCT
-      // 2) 10% ≤ hp < retreatHpPct（JSON 0.5）：附近敵威脅 > 自身戰力 × 0.9 才退
-      //    （還打得贏就繼續；保留「附近無敵不撤退」的安全距離）。
+      // 2) 10% ≤ hp < retreatHpPct（JSON × retreatHpFactor，Prompt 6 #8）：
+      //    附近敵威脅 > 自身戰力 × 0.9 才退（還打得贏就繼續；保留「附近無敵
+      //    不撤退」的安全距離）。plan 為 null（戰術層未跑）→ factor 中性 1.0。
+      const retreatFactor = plan?.retreatHpFactor ?? 1
       const outmatched =
-        hpFraction < def.ai.retreatHpPct &&
+        hpFraction < def.ai.retreatHpPct * retreatFactor &&
         enemyThreatAtPoint(world, playerId, unit.x, unit.y) >
           unitThreatMilli(world, unit) * ENGAGE_POWER_RATIO
       if (critical || (outmatched && threatened)) {

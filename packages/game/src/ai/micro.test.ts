@@ -13,7 +13,7 @@ import {
   MICRO_REPATH_TICKS,
   runMicroCycle,
 } from './micro.ts'
-import { DEFAULT_POLICIES } from './policy.ts'
+import { resolvePolicies } from './policy.ts'
 import type { PolicyValues } from './policy.ts'
 import { computeTacticalPlan, TACTICAL_INTERVAL_TICKS } from './tactics.ts'
 import type { Squad, TacticalPlan } from './tactics.ts'
@@ -80,6 +80,8 @@ function planWith(world: World, rallies: TilePos, squads: Squad[]): TacticalPlan
     squads,
     disengaged: [],
     influence: computeInfluenceMap(world, 'player'),
+    retreatHpFactor: 1, // 中性因子：測試仍用單位 JSON 的 retreatHpPct
+    squadRetreatRatio: 0.7,
   }
 }
 
@@ -667,8 +669,10 @@ function runReal(ticks: number): RealRun {
   const content = loadContentPackFromDir(dataDir)
   const world = createWorld(content, 42)
   const policies: Record<PlayerId, PolicyValues> = {
-    player: DEFAULT_POLICIES,
-    enemy: DEFAULT_POLICIES,
+    // reserve 0：本測試驗證**微操層**（推進／風箏／撤退），與 Prompt 6 的
+    // 戰力留守無關——留守會把半數攻擊隊壓回家，令 1000 tick 內無接戰。
+    player: resolvePolicies({ reserve: 0 }),
+    enemy: resolvePolicies({ reserve: 0 }),
   }
   const spawnY = world.players.find((player) => player.id === 'player')?.spawn.y ?? 0
   const plans: Record<PlayerId, TacticalPlan | null> = { player: null, enemy: null }

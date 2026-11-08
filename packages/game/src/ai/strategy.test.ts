@@ -8,7 +8,6 @@ import { DEFAULT_POLICIES, resolvePolicies } from './policy.ts'
 import {
   runStrategicCycle,
   STRATEGIC_INTERVAL_TICKS,
-  SURVIVAL_SCORE_WEIGHT,
   THREAT_DEFENSE_BONUS,
 } from './strategy.ts'
 import type { DecisionRecord, StrategicAction } from './strategy.ts'
@@ -112,7 +111,7 @@ describe('主動防禦：壓境防守加權（保護建築與水晶，Prompt 10.
     return world
   }
 
-  it('加權常數 1.0；壓境時生產候選分數恰 +1.0（突破稀缺性懲罰持續產兵）', () => {
+  it('加權常數 1.0；壓境時生產候選效用恰 ×2（Prompt 6 乘法結構）', () => {
     expect(THREAT_DEFENSE_BONUS).toBe(1.0)
     const trainScore = (threatened: boolean): number | undefined => {
       const records = runCycleRecords(worldWith(threatened), 'player', resolvePolicies({ econMilitary: 1 }), 1)
@@ -121,11 +120,11 @@ describe('主動防禦：壓境防守加權（保護建築與水晶，Prompt 10.
     }
     const base = trainScore(false)
     expect(base).toBeDefined()
-    expect(trainScore(true)).toBeCloseTo((base ?? 0) + THREAT_DEFENSE_BONUS, 6)
+    expect(trainScore(true)).toBeCloseTo((base ?? 0) * (1 + THREAT_DEFENSE_BONUS), 6)
   })
 })
 
-describe('生產評分生存項（Prompt 3.1：有效HP/cost，權重小於 FATE_BAND）', () => {
+describe('生產評分生存項（Prompt 3.1 → Prompt 6 乘法化）', () => {
   /** 兩個候選**只差裝甲**：tank 0.5、plain 0——生存項是唯一分數差。 */
   function armorWorld(): World {
     const world = createTestWorld({
@@ -144,13 +143,7 @@ describe('生產評分生存項（Prompt 3.1：有效HP/cost，權重小於 FATE
     return world
   }
 
-  it('權重 < FATE_BAND：生存項只影響抽籤機率、不把弱甲單位擠出命運帶', () => {
-    // FATE_BAND 是生產軌內部常數 0.2；此約定鎖死在生產測試（命運抽籤多樣性）。
-    expect(SURVIVAL_SCORE_WEIGHT).toBeLessThan(0.2)
-    expect(SURVIVAL_SCORE_WEIGHT).toBeGreaterThan(0)
-  })
-
-  it('只差裝甲時，高有效HP/cost 候選分數恰高 0.15', () => {
+  it('只差裝甲時，高有效HP/cost 候選分數恰為對方 ×(1.25/0.75)', () => {
     const records = runCycleRecords(armorWorld(), 'player', resolvePolicies({ econMilitary: 1 }), 1)
     const train = records.find((record) => record.action === 'train')
     expect(train).toBeDefined()
@@ -163,7 +156,7 @@ describe('生產評分生存項（Prompt 3.1：有效HP/cost，權重小於 FATE
     if (tank === undefined || plain === undefined) {
       throw new Error(`候選分數缺 tank／plain：${JSON.stringify([...scores])}`)
     }
-    expect(tank - plain).toBeCloseTo(SURVIVAL_SCORE_WEIGHT, 6)
+    expect(tank / plain).toBeCloseTo(1.1 / 0.9, 6)
   })
 })
 
@@ -194,20 +187,10 @@ describe('資源分配啟發式（Prompt 5：藍礦先行，紅綠礦分階段�
     })
   }
 
-  it('藍礦未飽和前：紅／綠礦從不被選中（build 只出 crystal_mine）', () => {
-    const world = minesWorld(600) // 只夠 1~3 座藍礦
-    const builds = runCycles(world, 'player', resolvePolicies({ econMilitary: 1 }), 2)
-      .filter((action) => action.kind === 'build')
-    expect(builds.length).toBeGreaterThanOrEqual(1)
-    for (const action of builds) {
-      if (action.kind === 'build') expect(action.defId).toBe('crystal_mine')
-    }
-  })
-
-  it('藍礦節點耗盡 → 紅礦入列（roster 有 ballista 加分）→ 紅礦蓋出後綠礦才解鎖', () => {
+  it('expansion=0：藍礦 3 座滿之前紅／綠礦鎖死；滿了之後紅礦入列、綠礦跟進', () => {
     const world = minesWorld(20000)
-    // 前 3 循環：3 座藍礦（mineCap 5 內、紅綠仍鎖）。
-    runCycles(world, 'player', resolvePolicies({ econMilitary: 1 }), 3)
+    const policies = resolvePolicies({ econMilitary: 1, expansion: 0 })
+    runCycles(world, 'player', policies, 3)
     const mineIdsOf = (defId: string): number =>
       world.buildings.filter(
         (building) => building.player === 'player' && building.defId === defId,
@@ -215,10 +198,44 @@ describe('資源分配啟發式（Prompt 5：藍礦先行，紅綠礦分階段�
     expect(mineIdsOf('crystal_mine')).toBe(3)
     expect(mineIdsOf('ruby_mine')).toBe(0)
     expect(mineIdsOf('emerald_sanctuary')).toBe(0)
-    // 續跑到紅礦入列（藍節點已耗盡）；綠礦要等紅礦蓋出（同循環或下一循環）。
-    runCycles(world, 'player', resolvePolicies({ econMilitary: 1 }), 9)
+    // 續跑：紅礦入列（roster 有 ballista +0.4）；紅礦蓋出後綠礦解鎖。
+    runCycles(world, 'player', policies, 9)
     expect(mineIdsOf('ruby_mine')).toBeGreaterThanOrEqual(1)
-    expect(mineIdsOf('emerald_sanctuary')).toBeGreaterThanOrEqual(1) // 紅礦已出 → 綠解鎖
+    expect(mineIdsOf('emerald_sanctuary')).toBeGreaterThanOrEqual(1)
+  })
+
+  it('expansion=1：藍礦 1 座即解鎖紅礦（第 2 循環就偏離純藍礦序列）', () => {
+    const world = minesWorld(20000)
+    runCycles(world, 'player', resolvePolicies({ econMilitary: 1, expansion: 1 }), 3)
+    const mineIdsOf = (defId: string): number =>
+      world.buildings.filter(
+        (building) => building.player === 'player' && building.defId === defId,
+      ).length
+    expect(mineIdsOf('ruby_mine')).toBeGreaterThanOrEqual(1)
+    expect(mineIdsOf('crystal_mine')).toBeLessThan(3) // 沒先把藍礦補滿
+  })
+
+  it('resourceBias 偏重：bias 全偏紅 → 紅礦效用相對抬升（blue 礦分數打折）', () => {
+    const world = minesWorld(20000)
+    // expansion 1 + bias 全紅：紅礦分數不變、藍礦 ×(0/0.5)=0 —— 藍礦強制首座（3.0）除外。
+    runCycles(world, 'player', resolvePolicies({ econMilitary: 1, expansion: 1, resourceBias: { blue: 0, red: 1, green: 0 } }), 4)
+    const mineIdsOf = (defId: string): number =>
+      world.buildings.filter(
+        (building) => building.player === 'player' && building.defId === defId,
+      ).length
+    // 強制首座藍礦（3.0）不受 bias 影響 → 恰 1 座；紅礦 ≥1；藍礦不會蓋到第 2 座。
+    expect(mineIdsOf('crystal_mine')).toBe(1)
+    expect(mineIdsOf('ruby_mine')).toBeGreaterThanOrEqual(1)
+  })
+
+  it('techRush=1：跳過紅礦直接解鎖綠礦（科技衝刺 gate）', () => {
+    const world = minesWorld(20000)
+    runCycles(world, 'player', resolvePolicies({ econMilitary: 1, expansion: 1, techRush: 1 }), 6)
+    const mineIdsOf = (defId: string): number =>
+      world.buildings.filter(
+        (building) => building.player === 'player' && building.defId === defId,
+      ).length
+    expect(mineIdsOf('emerald_sanctuary')).toBeGreaterThanOrEqual(1)
   })
 
   it('ballista 可負擔性看紅寶石：紅不足時生產軌跳過它、不擋其它單位', () => {

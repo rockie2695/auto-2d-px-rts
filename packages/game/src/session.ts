@@ -4,6 +4,7 @@ import type { ResourceAmount, ResourceId } from '@auto-2d-px-rts/shared'
 import { MICRO_INTERVAL_TICKS, runMicroCycle } from './ai/micro.ts'
 import type { MicroDecision } from './ai/micro.ts'
 import { DEFAULT_POLICIES, resolvePolicies } from './ai/policy.ts'
+import { POLICY_IDS } from '@auto-2d-px-rts/shared'
 import type { PolicyValues } from './ai/policy.ts'
 import { runStrategicCycle, STRATEGIC_INTERVAL_TICKS } from './ai/strategy.ts'
 import type { DecisionRecord } from './ai/strategy.ts'
@@ -286,7 +287,12 @@ export interface GameSession {
    * 冷卻中（上次變更後 600 tick 內）回傳 false；無實際變更不消耗冷卻。
    * 生效時機：即時換掉政策物件，下一個戰略／戰術週期讀到新值。
    */
-  applyPolicies(playerId: PlayerId, values: Partial<PolicyValues>): boolean
+  applyPolicies(
+    playerId: PlayerId,
+    values: Partial<Omit<PolicyValues, 'resourceBias'>> & {
+      resourceBias?: Partial<PolicyValues['resourceBias']>
+    },
+  ): boolean
   /** 復盤（Prompt 10.5）：對局是否已結束；結束時帶完整 replay 紀錄。 */
   getOutcome(): { ended: boolean; replay: ReplayRecord | null }
   /** 復盤（Prompt 10.5）：手動提前結束（以當下狀態判勝負、停迴圈、產出 replay）。
@@ -707,25 +713,69 @@ export async function startGameSession(app: Application, scene: GameScene): Prom
         summary,
       }
     },
-    applyPolicies: (playerId: PlayerId, values: Partial<PolicyValues>): boolean => {
-      if (world.tick - lastPolicyChange[playerId] < POLICY_COOLDOWN_TICKS) return false
-      const current = policies[playerId]
-      const next = resolvePolicies({ ...current, ...values })
-      const changed = (Object.keys(next) as Array<keyof PolicyValues>).filter(
-        (key) => next[key] !== current[key],
+    applyPolicies: (
+      playerId: PlayerId,
+      values: Partial<Omit<PolicyValues, 'resourceBias'>> & {
+        resourceBias?: Partial<PolicyValues['resourceBias']>
+      },
+    ): boolean => {
+      // 節奏預設（Prompt 6）不受冷卻約束——它是戰略模板不是即時干預；
+      // 只改 tempo 時不走冷卻、不開冷卻。
+      const touchesSliders = (Object.keys(values) as Array<keyof PolicyValues>).some(
+        (key) => key !== 'tempoPreset' && values[key] !== undefined,
       )
-      if (changed.length === 0) return true // 無實際變更：不消耗冷卻、不記日誌
+      const cooling =
+        world.tick - lastPolicyChange[playerId] < POLICY_COOLDOWN_TICKS
+      if (touchesSliders && cooling) return false
+      const current = policies[playerId]
+      const next = resolvePolicies({
+        ...current,
+        ...values,
+        resourceBias: { ...current.resourceBias, ...values.resourceBias },
+      })
+      // 變更偵測（Prompt 6 深合併）：數值滑桿逐鍵、bias 逐子鍵；tempo 單獨記日誌。
+      const changes: Array<{ key: string; from: number; to: number }> = []
+      for (const key of POLICY_IDS) {
+        if (next[key] !== current[key]) {
+          changes.push({ key, from: current[key], to: next[key] })
+        }
+      }
+      for (const sub of ['blue', 'red', 'green'] as const) {
+        if (next.resourceBias[sub] !== current.resourceBias[sub]) {
+          changes.push({
+            key: `resourceBias.${sub}`,
+            from: current.resourceBias[sub],
+            to: next.resourceBias[sub],
+          })
+        }
+      }
+      if (next.tempoPreset !== current.tempoPreset) {
+        pushLog({
+          tick: world.tick,
+          layer: 'policy',
+          actor: playerId,
+          text: `節奏預設 → ${next.tempoPreset}（時段覆蓋生效，見戰略決策）`,
+        })
+      }
+      if (changes.length === 0 && next.tempoPreset === current.tempoPreset) {
+        return true // 無實際變更：不消耗冷卻、不記日誌
+      }
       policies[playerId] = next
-      lastPolicyChange[playerId] = world.tick
-      for (const key of changed) {
-        recorder.recordPolicy({ tick: world.tick, key, from: current[key], to: next[key] })
+      if (touchesSliders) lastPolicyChange[playerId] = world.tick // 只有滑桿才開冷卻
+      for (const change of changes) {
+        recorder.recordPolicy({
+          tick: world.tick,
+          key: change.key,
+          from: change.from,
+          to: change.to,
+        })
       }
       pushLog({
         tick: world.tick,
         layer: 'policy',
         actor: playerId,
-        text: `政策變更：${changed
-          .map((key) => `${key} ${current[key].toFixed(2)}→${next[key].toFixed(2)}`)
+        text: `政策變更：${changes
+          .map((change) => `${change.key} ${change.from.toFixed(2)}→${change.to.toFixed(2)}`)
           .join('、')}（此後決策受影響）`,
       })
       return true

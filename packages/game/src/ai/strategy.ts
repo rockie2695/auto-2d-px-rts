@@ -1,9 +1,10 @@
 import type { PolicyValues } from './policy.ts'
-import { buildEconWeight, buildMilitaryWeight } from './policy.ts'
+import { buildEconWeight, buildExpandBias, buildMilitaryWeight, buildTechBias } from './policy.ts'
+import { effectivePolicies } from './tempo.ts'
 import { pickMostUrgentThreat } from './influence.ts'
 import type { DecisionTopFactor, ExplainState } from './explain.ts'
 import { explainBuild, explainTrain } from './explain.ts'
-import type { ResourceId, Role } from '@auto-2d-px-rts/shared'
+import type { ResourceId, Role, UnitDef } from '@auto-2d-px-rts/shared'
 import { canAfford, placeBuilding, producedResourceOf, queueTrain } from '../sim/economy.ts'
 import { findNearestPlacement, tryFindNearestFreeNode } from '../sim/world.ts'
 import { getPlayer } from '../sim/types.ts'
@@ -34,25 +35,19 @@ import { survivalScoreOf } from '../balance/unitStats.ts'
 /** 戰略決策間隔（SPEC §8.1：每 40 tick = 2 秒）。 */
 export const STRATEGIC_INTERVAL_TICKS = 40
 
-/** 同種單位每多 1 個的稀缺性懲罰（防止鎖死單一種，同分時自然均攤）。 */
-const SCARCITY_PENALTY = 0.05
+/**
+ * 稀缺乘法衰減（Prompt 6 #5）：同種單位每多 1 個，效用 ×(1 − 0.12)——
+ * 防止鎖死單一種；地板 0.1（見 evaluateUnits）。
+ */
+const SCARCITY_DECAY = 0.12
 
 /**
  * 敵軍壓境時的防守生產加權（Prompt 10.6，保護建築與水晶）：
  * 我方建築守備半徑內有敵軍（`pickMostUrgentThreat` 非 null）時，
- * 每個單位候選分數 +1.0——即使重經濟（econMilitary=1）或稀缺性懲罰偏高，
- * 也會持續產兵回防，而不是眼看礦場被拆。
+ * 每個單位候選效用 **×(1 + 1.0) = ×2**（Prompt 6 乘法結構）——
+ * 即使重經濟或稀缺懲罰偏高，也會持續產兵回防，而不是眼看礦場被拆。
  */
 export const THREAT_DEFENSE_BONUS = 1.0
-
-/**
- * 生存項權重（階段三 Prompt 3.1）：`survivalScoreOf`（roster 內正規化
- * 有效HP/cost 到 0..1）乘此權重併入生產分數。刻意取**小於 FATE_BAND（0.2）**——
- * 生存項單獨的滿差不得把弱甲單位整個擠出命運抽籤帶（Prompt 10.11 的多樣性
- * 必須保留；裝甲只影響抽籤機率權重，不消滅候選）。生產分數的主導結構仍是
- * counter + tier + range（balance 是刀-edge，由 fairness gate 實測守門）。
- */
-export const SURVIVAL_SCORE_WEIGHT = 0.15
 
 /** tier 由小到大的序數（unitSize 滑桿目標：0 → large、1 → small）。 */
 const TIER_ORDER: Record<string, number> = { small: 0, medium: 1, large: 2 }
@@ -218,37 +213,61 @@ function evaluateBuildings(world: World, playerId: PlayerId, policies: PolicyVal
     }
     if (tile === null) continue
 
-    // 效用（Prompt 6 權重映射 × 飽和度）。
+    // 效用（Prompt 6 #4）：礦場 = econ × resourceBias[資源] × (1−飽和)；
+    // 軍事建築 = military × (1−飽和)；科技建築（綠礦）另加 techBias 項。
     const weight = def.requiresResourceNode === true ? econ : military
     let score = weight * (1 - saturationOf(world, playerId, defId))
 
     if (def.requiresResourceNode === true && mineType !== null) {
+      const maxBias = Math.max(
+        policies.resourceBias.blue,
+        policies.resourceBias.red,
+        policies.resourceBias.green,
+        0.001,
+      )
+      const bias =
+        mineType === 'blue_crystal'
+          ? policies.resourceBias.blue
+          : mineType === 'red_ruby'
+            ? policies.resourceBias.red
+            : policies.resourceBias.green
+      const biasMult = bias / maxBias
+      // 基礎分（含 bias；Prompt 6 #4 resourceBias[產出資源]）。
+      score = weight * biasMult * (1 - saturationOf(world, playerId, defId))
+
       // SPEC §8.1 擴展（Prompt 5）：**每種資源**的第一座礦強制高優先——
-      // 但紅／綠礦受「藍礦先行」gate（見下），實際上強制項只在藍礦生效。
+      // 在 bias 之後套用（強制項不受 resourceBias 壓制）。
       if (mineType === 'blue_crystal' && player.mineCount === 0) {
         score = Math.max(score, 3.0)
       }
-      // 資源分配啟發式（Prompt 5 #6，AI 內建；resourceBias 滑杆留待後續 prompt）：
-      // - 藍礦永遠優先（基礎資源）——紅／綠礦在「藍礦再無空閒節點可蓋」前不評分；
-      // - 紅礦（軍事）：藍礦節點耗盡後立即入列；roster 有吃紅寶石的單位加固定分；
-      // - 綠礦（科技）：零消費者（MVP 無科技系統）→ 紅礦蓋出後才解鎖且分數打 5 折。
+      // 資源 gate（Prompt 6 #6 expansion / techRush）：
+      // - 紅礦 gate：藍礦數 ≥ ceil(藍礦每方上限 × (1 − max(0, expansion−0.5)×1.4))
+      //   ——**上半段生效**曲線：0.5 → 藍滿才解鎖（3 座，零偏移）、0.75 → 2 座、
+      //   1 → 1 座即解鎖。（全線版在 0.5 預設就把紅礦提前到 2 藍礦，實測平局
+      //   8→16——150 藍的早期投資拖慢全盤節奏。）
+      // - 綠礦 gate：紅礦已蓋 **或** techRush ≥ 0.75（科技衝刺可跳過紅礦）。
       if (mineType !== 'blue_crystal') {
-        const blueExhausted =
-          tryFindNearestFreeNode(world, buildAnchor, mirrorOrder, 'blue_crystal') === null
-        if (mineType === 'red_ruby') {
+        const blueSideCap = Math.max(1, world.match.mineCap - 2)
+        const blueCount = mineCountOfType(world, playerId, 'blue_crystal')
+        // 【消融②】expansion 效用暫關（gate 恆要求藍礦全滿）。
+        const blueUnlocked =
+          blueCount >=
+          Math.ceil(blueSideCap * (1 - Math.max(0, buildExpandBias(policies) - 0.5) * 1.4))
+        const rubyCount = mineCountOfType(world, playerId, 'red_ruby')
+        // 綠礦仍鎖 = 紅礦未蓋且 techRush 未達衝刺檔（0.75 可跳過紅礦直上科技）。
+        const greenLocked =
+          mineType === 'green_emerald' && rubyCount < 1 && buildTechBias(policies) < 0.75
+        if (!blueUnlocked || greenLocked) {
+          score = 0
+        } else if (mineType === 'red_ruby') {
           const rosterNeedsRuby = world.faction.roster.some((unitId) => {
             const unitDef = world.defs.units[unitId]
             return unitDef !== undefined && (unitDef.cost.red_ruby ?? 0) > 0
           })
-          score = blueExhausted
-            ? weight * (1 - saturationOf(world, playerId, defId)) + (rosterNeedsRuby ? 0.4 : 0)
-            : 0
+          score += rosterNeedsRuby ? 0.4 : 0
         } else {
-          const rubyCount = mineCountOfType(world, playerId, 'red_ruby')
-          score =
-            blueExhausted && rubyCount >= 1
-              ? weight * (1 - saturationOf(world, playerId, defId)) * 0.5
-              : 0
+          // 綠礦（科技建築）：techBias 項（Prompt 6 #4 isTechBuilding）。
+          score = score * 0.5 + buildTechBias(policies) * 0.5
         }
       }
     }
@@ -302,13 +321,21 @@ function counterScoreOf(world: World, myRole: Role, share: Record<Role, number> 
   return share.melee * matrix.melee + share.ranged * matrix.ranged
 }
 
-/** tier 分：與 unitSize 目標 tier 的接近度（1 → small、0 → large）。 */
+/** tier 貼合度（0..1）：與 unitSize 目標 tier 的序數距離（1 → 完全貼合）。 */
 function tierScoreOf(world: World, defId: string, policies: PolicyValues): number {
   const def = world.defs.units[defId]
   if (def === undefined) return 0
   const myIndex = TIER_ORDER[def.tier] ?? 1
   const target = Math.round((1 - Math.min(1, Math.max(0, policies.unitSize))) * 2)
   return 1 - Math.abs(myIndex - target) / 2
+}
+
+/**
+ * tier 乘法項（Prompt 6 #5）：`1 + 3×(tierFit − 0.5)`——完全貼合 ×2.5、
+ * 中性 ×1、完全錯配 clamp 到 0.05（不為 0，可行性已由 hasProducer 過濾）。
+ */
+function tierTermOf(world: World, defId: string, policies: PolicyValues): number {
+  return Math.min(2.5, Math.max(0.05, 1 + 3 * (tierScoreOf(world, defId, policies) - 0.5)))
 }
 
 /** range 分：單位射程在 roster 內正規化後與 unitRange 的接近度（等價 §8.3 配額）。 */
@@ -326,6 +353,21 @@ function rangeScoreOf(world: World, defId: string, policies: PolicyValues): numb
   const normalized = max === min ? 0.5 : (def.stats.range - min) / (max - min)
   const slider = Math.min(1, Math.max(0, policies.unitRange))
   return 1 - Math.abs(normalized - slider)
+}
+
+/** range 乘法項（Prompt 6 #5）：`1 + 2×(rangeFit − 0.5)`——完全貼合 ×2、錯配 clamp 0.05。 */
+function rangeTermOf(world: World, defId: string, policies: PolicyValues): number {
+  return Math.min(2, Math.max(0.05, 1 + 2 * (rangeScoreOf(world, defId, policies) - 0.5)))
+}
+
+/**
+ * 生存乘法項（Prompt 3.1 → Prompt 6 乘法化）：`0.9 + 0.2 × survivalScore`——
+ * roster 內最差 ×0.9、最好 ×1.1、roster 中位（0.5）恰 ×1.0（中性零偏移）。
+ * 刻意收窄到 ±10%：乘法分差過大會把弱甲單位擠出命運抽籤相對帶
+ * （Prompt 10.11 多樣性必須保留——多樣性測試守門）。
+ */
+function survivalTermOf(def: UnitDef, roster: readonly UnitDef[]): number {
+  return 0.9 + 0.2 * survivalScoreOf(def, roster)
 }
 
 /** 玩家已擁有（活著 + 排程中）的某單位數量。 */
@@ -351,22 +393,32 @@ function fateOf(world: World, tick: number): number {
   return hashFate(world.seed, tick)
 }
 
-/** 評估生產候選：克制 + tier + range − 稀缺性 ＋ 生存項 ＋ 壓境防守加權；不可負擔或無產能者剔除。 */
+/** 評估生產候選（Prompt 6 #5 乘法結構）：克制 × tier × range × tech × 稀缺 × 生存 × 壓境；無產能或買不起者剔除。 */
 function evaluateUnits(world: World, playerId: PlayerId, policies: PolicyValues): UnitCandidate[] {
   const player = getPlayer(world, playerId)
   const share = enemyRoleShare(world, playerId)
-  // 主動防禦（Prompt 10.6）：我方建築受威脅 → 防守生產加權（保護建築與水晶）。
+  // 主動防禦（Prompt 10.6）：我方建築受威脅 → 防守生產加權（乘法項）。
   const threatened = pickMostUrgentThreat(world, playerId) !== null
   // 生存項（Prompt 3.1）的 roster 快照（rosterDefs 正規化基準）。
   const rosterDefs = world.faction.roster
     .map((rosterId) => world.defs.units[rosterId])
     .filter((def) => def !== undefined)
+  // 技術項（Prompt 6）：techLevel = min(1, 翡翠聖所數)——因果鏈：
+  // techRush → 蓋綠礦 → techLevel 上升 → 單位效用 ×(1 + techRush × level × 0.4)。
+  const techLevel = Math.min(
+    1,
+    world.buildings.filter((building) => {
+      if (building.player !== playerId || building.hp <= 0) return false
+      const buildingDef = world.defs.buildings[building.defId]
+      return buildingDef !== undefined && producedResourceOf(buildingDef) === 'green_emerald'
+    }).length,
+  )
 
   const candidates: UnitCandidate[] = []
   for (const defId of world.faction.roster) {
     const def = world.defs.units[defId]
     if (def === undefined) continue
-    // 可行性：有兵營能生產 + 負擔得起。
+    // 可行性：有兵營能生產 + 負擔得起（Prompt 5：三資源逐一檢查）。
     const hasProducer = world.buildings.some(
       (building) =>
         building.player === playerId &&
@@ -375,20 +427,19 @@ function evaluateUnits(world: World, playerId: PlayerId, policies: PolicyValues)
     if (!hasProducer) continue
     if (!canAfford(player.resources, def.cost)) continue
 
+    // 乘法結構（Prompt 6 #5）：各項為相對倍率，1.0 = 中性。
     const score =
-      counterScoreOf(world, def.role, share) +
-      tierScoreOf(world, defId, policies) +
-      rangeScoreOf(world, defId, policies) -
-      ownedCountOf(world, playerId, defId) * SCARCITY_PENALTY +
-      (threatened ? THREAT_DEFENSE_BONUS : 0) +
-      // 生存項（Prompt 3.1）：有效HP/cost 高者（如 shield_guard）加分。
-      survivalScoreOf(def, rosterDefs) * SURVIVAL_SCORE_WEIGHT
+      counterScoreOf(world, def.role, share) *
+      tierTermOf(world, defId, policies) *
+      rangeTermOf(world, defId, policies) *
+      (1 + policies.techRush * techLevel * 0.4) *
+      Math.max(0.1, 1 - ownedCountOf(world, playerId, defId) * SCARCITY_DECAY) *
+      survivalTermOf(def, rosterDefs) *
+      (threatened ? 1 + THREAT_DEFENSE_BONUS : 1)
     candidates.push({ defId, score })
   }
 
-  return candidates
-    .filter((candidate) => candidate.score > 0)
-    .sort((a, b) => b.score - a.score)
+  return candidates.sort((a, b) => b.score - a.score)
 }
 
 /* ------------------------------------------------------------------ */
@@ -414,12 +465,15 @@ function chooseProducer(world: World, playerId: PlayerId, defId: string): number
  * 執行一次戰略循環（呼叫端負責節流：每 STRATEGIC_INTERVAL_TICKS 一次）。
  * 建築軌與生產軌各嘗試執行一個最高分動作；
  * 回傳實際執行的動作（0–2 個）與對應的決策記錄（動作成功才記錄）。
+ * `policies` 是**用戶設定值**——內部先經 `effectivePolicies`（節奏預設覆蓋）。
  */
 export function runStrategicCycle(
   world: World,
   playerId: PlayerId,
-  policies: PolicyValues,
+  userPolicies: PolicyValues,
 ): StrategicCycleResult {
+  // Prompt 6 #3：節奏預設覆蓋（standard = 恆等）。以下全用生效值。
+  const policies = effectivePolicies(userPolicies, world.tick)
   const actions: StrategicAction[] = []
   const records: DecisionRecord[] = []
   const player = getPlayer(world, playerId)
@@ -499,13 +553,14 @@ export function runStrategicCycle(
 
   // 生產軌：最高分優先，queueTrain 拒絕則嘗試次高。
   // **預備金保護**（Prompt 10.24 A）：扣掉預備金後仍買得起才排隊。
-  // 命運抽籤（Prompt 10.11）：分數在 best − FATE_BAND 內的候選以 fate 抽選先後——
-  // 同 tick 兩側同值（鏡像對稱）、跨種子變化（軍種組成因對局而異）。
-  // （稀缺性差 0.15 級的近似同分也納入，否則同帶候選永遠固定先後。）
-  const FATE_BAND = 0.2
+  // 命運抽籤（Prompt 10.11；Prompt 6 改**相對帶**）：分數 ≥ best × FATE_RATIO 的
+  // 候選以 fate 抽選先後——同 tick 兩側同值（鏡像對稱）、跨種子變化
+  // （軍種組成因對局而異）。乘法分差下絕對帶（best − 0.2）語義失真，
+  // 相對帶 0.85 = 「與最高分差 15% 以內都算同帶」。
+  const FATE_RATIO = 0.8
   const unitCandidates = evaluateUnits(world, playerId, policies)
   const bestScore = unitCandidates[0]?.score ?? 0
-  const tied = unitCandidates.filter((candidate) => candidate.score >= bestScore - FATE_BAND)
+  const tied = unitCandidates.filter((candidate) => candidate.score >= bestScore * FATE_RATIO)
   let ordered = unitCandidates
   if (tied.length > 1) {
     const cut = Math.floor(fateOf(world, world.tick) * tied.length) % tied.length

@@ -7,6 +7,7 @@ import { computeInfluenceMap, DEFENSE_RADIUS_TILES, enemyThreatAtPoint, enemyThr
 import type { BuildingThreat, InfluenceMap } from './influence.ts'
 import { clampSlider } from './policy.ts'
 import type { PolicyValues } from './policy.ts'
+import { effectivePolicies } from './tempo.ts'
 
 /**
  * AI 戰術層（SPEC §9.2，Prompt 7）：每 500ms（= 10 tick）重編小隊、指派任務、
@@ -263,6 +264,14 @@ export interface TacticalPlan {
   contact?: ContactState
   /** 本循環產生的接觸事件（迎戰／維持原命令／夾擊呼叫），session 轉進決策日誌。 */
   events?: readonly ContactEvent[]
+  /**
+   * 個體撤退閾值乘數（Prompt 6 #8）：有效 retreatHpPct = JSON 值 × 本因子
+   * （retreatThreshold 0.5 → 1.0 = 零偏移；0 → 0.4 更敢戰、1 → 1.6 更早撤）。
+   * micro 層從 plan 讀取——runMicroCycle 簽名不變。
+   */
+  retreatHpFactor: number
+  /** 小隊撤退戰力比（Prompt 6 #8）：RETREAT_POWER_RATIO × lerp(0.5, 1.43, threshold)。 */
+  squadRetreatRatio: number
 }
 
 /** 線性插值。 */
@@ -303,7 +312,12 @@ export function assignMissions(
   aggressionBonus = 0,
 ): SquadMission[] {
   const aggression = clampSlider(policies.aggression + aggressionBonus)
-  const attackCount = Math.round(squadCount * aggression)
+  // 戰力留守（Prompt 6 reserve）：攻擊份額 × 2×(1−reserve)——
+  // reserve 0.5 = 中性（恰為 aggression 編制）、0 = 全軍出擊、1 = 全軍留守。
+  // 敵方無單位的全軍出擊加成（Prompt 10.18，bonus ≥ 1）不受 reserve 削減。
+  const allOut = aggressionBonus >= 1
+  const reserveFactor = allOut ? 1 : 2 * (1 - clampSlider(policies.reserve))
+  const attackCount = Math.min(squadCount, Math.round(squadCount * aggression * reserveFactor))
   const harassCount = squadCount >= 3 && attackCount >= 2 ? 1 : 0
   const missions: SquadMission[] = []
   for (let index = 0; index < squadCount; index++) {
@@ -896,25 +910,35 @@ export function computeTacticalPlan(
   policies: PolicyValues,
   previous: TacticalPlan | null = null,
 ): TacticalPlan {
+  // Prompt 6 #3：節奏預設覆蓋——以下全用生效值（standard = 恆等）。
+  const eff = effectivePolicies(policies, world.tick)
   const influence = computeInfluenceMap(world, playerId)
   // 先偵測威脅（集結點依局勢選點；Prompt 10.13）。
   const threat = pickMostUrgentThreat(world, playerId)
   const rally = rallyPoint(world, playerId, threat)
 
-  // 個體撤退：hp < retreatHpPct × maxHp → 脫離戰鬥（JSON 讀門檻）。
+  // 撤退閾值（Prompt 6 #8，parity 乘法映射）：
+  // - 個體：有效 retreatHpPct = JSON 值 × lerp(0.4, 1.6, threshold)（0.5 → ×1.0 零偏移，
+  //   保留每單位 JSON 的分級差異）；micro 層從 plan 讀 factor。
+  // - 小隊：RETREAT_POWER_RATIO × (0.5 + threshold)（0.5 → ×1.0 = 舊常數 0.7；
+  //   0 → ×0.5 更敢戰、1 → ×1.5 比值 1.05 ≈ 死戰不撤）。
+  const retreatHpFactor = 0.4 + 1.2 * clampSlider(eff.retreatThreshold)
+  const squadRetreatRatio = RETREAT_POWER_RATIO * (0.5 + clampSlider(eff.retreatThreshold))
+
+  // 個體撤退：hp < retreatHpPct × maxHp → 脫離戰鬥（JSON 門檻 × 滑桿因子）。
   const disengaged: number[] = []
   const ready: Unit[] = []
   for (const unit of world.units) {
     if (unit.player !== playerId || unit.hp <= 0) continue
     const def = world.defs.units[unit.defId]
     const maxHp = def?.stats.hp ?? 0
-    const threshold = maxHp * (def?.ai.retreatHpPct ?? 0)
+    const threshold = maxHp * (def?.ai.retreatHpPct ?? 0) * retreatHpFactor
     if (def !== undefined && maxHp > 0 && unit.hp < threshold) disengaged.push(unit.id)
     else ready.push(unit)
   }
   ready.sort((a, b) => a.id - b.id)
 
-  const sizing = squadSizing(policies)
+  const sizing = squadSizing(eff)
 
   // 全體存活單位索引（含傷兵，供補位與重心計算共用）。
   const unitById = new Map<number, Unit>()
@@ -972,7 +996,7 @@ export function computeTacticalPlan(
 
   const missions = assignMissions(
     groups.filter((group) => group.length > 0).length,
-    policies,
+    eff,
     aggressionBonus,
   )
 
@@ -1001,6 +1025,12 @@ export function computeTacticalPlan(
     squads.push(squad)
     missionIndex += 1
   }
+
+  // 戰力留守（Prompt 6 #reserve）：語義落在 assignMissions 的攻擊份額乘數
+  // （×2×(1−reserve)：0.5 中性、0 全軍出擊、1 全軍留守、敵滅加成豁免）——
+  // 此處不再做事後翻隊：無狀態重編下「比例留守」會把攻擊隊永久壓回家
+  // （消融實測 24 全平）；乘數語義讓 0.5 預設零偏移、滑桿連續生效。
+  // （乘數語義已上移到 assignMissions。）
 
   // 傷兵補位（SPEC §9.2 補註，Prompt 9.4）：脫離戰鬥的單位不閒置——
   // round-robin 補進**守備隊**尾端（attack／harass 隊不收傷兵，避免拖累行軍）。
@@ -1283,7 +1313,8 @@ export function computeTacticalPlan(
       y: squad.centroid.y * UNITS_PER_TILE + UNITS_PER_TILE / 2,
     }
     const enemyThreat = enemyThreatAtPoint(world, playerId, centroidFixed.x, centroidFixed.y)
-    const threshold = Math.round(enemyThreat * RETREAT_POWER_RATIO)
+    // 撤退閾值（Prompt 6 #8）：常數改滑桿映射後的有效比（0.5 → 0.7 = 舊值）。
+    const threshold = Math.round(enemyThreat * squadRetreatRatio)
     if (squad.power * 1000 < threshold) {
       squad.mission = 'retreat'
       squad.target = { x: rally.x, y: rally.y }
@@ -1568,7 +1599,19 @@ const replyLimit = PINCER_REPLY_RADIUS_TILES * UNITS_PER_TILE
   // 出廠集合格（Prompt 10.19）：主目標定案後才計算（每間生產建築一筆）。
   const spawns = spawnPoints(world, playerId, rally, squads)
 
-  return { tick: world.tick, player: playerId, rally, spawns, squads, disengaged, influence, contact, events }
+  return {
+    tick: world.tick,
+    player: playerId,
+    rally,
+    spawns,
+    squads,
+    disengaged,
+    influence,
+    contact,
+    events,
+    retreatHpFactor,
+    squadRetreatRatio,
+  }
 }
 
 

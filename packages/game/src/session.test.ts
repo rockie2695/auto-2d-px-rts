@@ -176,6 +176,37 @@ describe('政策滑桿 getPolicies / applyPolicies（Prompt 10）', () => {
     expect(app.ticker.remove).toHaveBeenCalledOnce()
   })
 
+  it('節奏預設（Prompt 6）：冷卻中也可切換、不開冷卻；resourceBias 深合併', async () => {
+    const app = makeFakeApp()
+    const session: GameSession = await startGameSession(app as never, makeFakeScene() as never)
+
+    // 滑桿變更 → 開冷卻。
+    expect(session.applyPolicies('player', { aggression: 1 })).toBe(true)
+    expect(session.getPolicies('player').cooldownRemainingTicks).toBe(POLICY_COOLDOWN_TICKS)
+
+    // 冷卻中切節奏預設 → 允許、不重置冷卻、記一條政策日誌。
+    expect(session.applyPolicies('player', { tempoPreset: 'rush' })).toBe(true)
+    expect(session.getPolicies('player').values.tempoPreset).toBe('rush')
+    expect(session.getPolicies('player').cooldownRemainingTicks).toBe(POLICY_COOLDOWN_TICKS)
+    const tempoLog = session
+      .getBattleStats()
+      .log.find((item) => item.layer === 'policy' && item.text.includes('節奏預設'))
+    expect(tempoLog?.text).toContain('rush')
+
+    // 冷卻中改滑桿仍被拒。
+    expect(session.applyPolicies('player', { reserve: 0 })).toBe(false)
+
+    // resourceBias 部分子鍵深合併（其餘鍵用現值）；冷卻中先拒、解鎖後可改。
+    for (let frame = 0; frame < 31; frame++) {
+      await app.onFrame(1000)
+    }
+    expect(session.applyPolicies('player', { resourceBias: { red: 1 } })).toBe(true)
+    const values = session.getPolicies('player').values
+    expect(values.resourceBias).toEqual({ blue: 0.5, red: 1, green: 0.5 })
+
+    session.stop()
+  })
+
   it('超出 [0,1] 會被夾限', async () => {
     // 兩個 session：冷卻內只能套用一次實際變更，故各測上界與下界。
     const appHigh = makeFakeApp()

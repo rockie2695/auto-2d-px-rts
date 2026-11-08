@@ -231,7 +231,8 @@ describe('主動防禦（保護建築與水晶，Prompt 10.6）', () => {
     putUnit(world, 'player', 'u', { x: 3, y: 3 })
     putUnit(world, 'player', 'u', { x: 3, y: 4 }) // 離礦場較近 → 這隊被拉回
 
-    const plan = computeTacticalPlan(world, 'player', resolvePolicies({ aggression: 1 }))
+    // reserve 0：本測試驗證威脅攔截（Prompt 10.6），與 Prompt 6 戰力留守無關。
+    const plan = computeTacticalPlan(world, 'player', resolvePolicies({ aggression: 1, reserve: 0 }))
     const defenders = plan.squads.filter((squad) => squad.mission === 'defend')
     expect(defenders).toHaveLength(1)
     expect(defenders[0]?.memberIds).toEqual([3]) // (3,4) 的單位（id 3）被拉回
@@ -660,7 +661,8 @@ describe('交戰評估（打不贏就騷擾／守家，Prompt 10.8）', () => {
       putUnit(world, 'enemy', 'u', tile)
     }
 
-    const plan = computeTacticalPlan(world, 'player', resolvePolicies({ aggression: 1, clusterSpread: 0 }))
+    // reserve 0：本測試驗證 cohort 出擊（Prompt 10.21），與 Prompt 6 戰力留守無關。
+    const plan = computeTacticalPlan(world, 'player', resolvePolicies({ aggression: 1, clusterSpread: 0, reserve: 0 }))
     expect(plan.squads.length).toBeGreaterThanOrEqual(3)
     for (const squad of plan.squads) {
       expect(squad.mission).toBe('attack')
@@ -697,7 +699,8 @@ describe('交戰評估（打不贏就騷擾／守家，Prompt 10.8）', () => {
       putUnit(world, 'enemy', 'u', tile)
     }
 
-    const plan = computeTacticalPlan(world, 'player', resolvePolicies({ aggression: 1, clusterSpread: 0 }))
+    // reserve 0：本測試驗證 stage 蓄兵（Prompt 10.21），與 Prompt 6 戰力留守無關。
+    const plan = computeTacticalPlan(world, 'player', resolvePolicies({ aggression: 1, clusterSpread: 0, reserve: 0 }))
     expect(plan.squads.length).toBeGreaterThanOrEqual(2)
     for (const squad of plan.squads) {
       expect(squad.mission).toBe('stage')
@@ -824,7 +827,7 @@ describe('突變期（Prompt 10.23：對稱局的確定破局壓力）', () => {
       }
       return world
     }
-    const policies = resolvePolicies({ aggression: 1, clusterSpread: 0 })
+    const policies = resolvePolicies({ aggression: 1, clusterSpread: 0, reserve: 0 })
 
     const before = build()
     before.tick = SUDDEN_DEATH_START_TICK - 1
@@ -1136,5 +1139,129 @@ describe('塔火接觸與求援（Prompt 10.24 D：塔對舊版 AI 是隱形的�
     // A 已有響應 → 不誤觸「無響應撤退」
     const lone = plan.squads.find((squad) => squad.memberIds.includes(aId))
     expect(lone?.mission).not.toBe('retreat')
+  })
+})
+
+/* ------------------------------------------------------------------ */
+/* 戰力留守與撤退閾值（階段三 Prompt 6）                                  */
+/* ------------------------------------------------------------------ */
+
+describe('戰力留守（Prompt 6 reserve：攻擊份額乘數 ×2×(1−reserve)）', () => {
+  const UNIT = makeUnitDef({ id: 'u' })
+  const KEEP = makeBuildingDef({ id: 'keep', size: [3, 3], ai: { value: 1000 } })
+
+  /** 對稱世界（無攻勢加成）：玩家 8 兵、clusterSpread 0 → 4 隊 2 兵。 */
+  function fourSquadWorld(): World {
+    const world = createTestWorld({ size: 32, units: [UNIT], buildings: [KEEP] })
+    addBuilding(world, 'player', 'keep', { x: 2, y: 2 }, { built: true, nodeId: null })
+    addBuilding(world, 'enemy', 'keep', { x: 28, y: 28 }, { built: true, nodeId: null })
+    // 敵我戰力對等（加成 0）。
+    putUnit(world, 'enemy', 'u', { x: 27, y: 27 })
+    for (let index = 0; index < 8; index++) {
+      putUnit(world, 'player', 'u', { x: 3 + (index % 4), y: 3 + Math.floor(index / 4) })
+    }
+    return world
+  }
+
+  it('reserve=0.5（預設）：與 aggression 編制一致（aggression 1 → 全軍出擊）', () => {
+    const plan = computeTacticalPlan(
+      fourSquadWorld(),
+      'player',
+      resolvePolicies({ aggression: 1, clusterSpread: 0, reserve: 0.5 }),
+    )
+    // 乘數 ×2×0.5 = 1 → attackCount = 4×1 = 4（零偏移）。
+    expect(plan.squads.every((squad) => squad.mission !== 'defend')).toBe(true)
+  })
+
+  it('reserve=1：全軍留守（attackCount 歸 0）', () => {
+    const plan = computeTacticalPlan(
+      fourSquadWorld(),
+      'player',
+      resolvePolicies({ aggression: 1, clusterSpread: 0, reserve: 1 }),
+    )
+    expect(plan.squads.every((squad) => squad.mission === 'defend')).toBe(true)
+  })
+
+  it('reserve=0：攻擊份額 ×2（aggression 0.5 → 全軍出擊）', () => {
+    const plan = computeTacticalPlan(
+      fourSquadWorld(),
+      'player',
+      resolvePolicies({ aggression: 0.5, clusterSpread: 0, reserve: 0 }),
+    )
+    expect(plan.squads.every((squad) => squad.mission !== 'defend')).toBe(true)
+  })
+
+  it('敵方無單位（全軍出擊加成）→ reserve 不削減（10.18 語義保留）', () => {
+    const world = createTestWorld({ size: 32, units: [UNIT], buildings: [KEEP] })
+    addBuilding(world, 'player', 'keep', { x: 2, y: 2 }, { built: true, nodeId: null })
+    addBuilding(world, 'enemy', 'keep', { x: 28, y: 28 }, { built: true, nodeId: null })
+    for (const tile of [
+      { x: 3, y: 3 },
+      { x: 4, y: 3 },
+    ]) {
+      putUnit(world, 'player', 'u', tile)
+    }
+    const plan = computeTacticalPlan(
+      world,
+      'player',
+      resolvePolicies({ aggression: 0.2, clusterSpread: 0, reserve: 0.9 }),
+    )
+    expect(plan.squads.every((squad) => squad.mission !== 'defend')).toBe(true)
+  })
+
+  it('純函數：aggression 1 × reserve 0.75 → 份額 0.5（2/4 隊出擊，其一為騷擾）', () => {
+    // share = 1 × 2×(1−0.75) = 0.5 → attackCount = round(4×0.5) = 2；≥2 → 派 1 騷擾。
+    expect(assignMissions(4, resolvePolicies({ aggression: 1, reserve: 0.75 })).join(',')).toBe(
+      'harass,attack,defend,defend',
+    )
+  })
+})
+
+describe('撤退閾值映射（Prompt 6 #8：parity 乘法）', () => {
+  const UNIT = makeUnitDef({ id: 'u' })
+
+  it('retreatThreshold=0.5 → 小隊比 0.7、個體因子 1.0（與舊常數完全一致）', () => {
+    const world = createTestWorld({ size: 12, units: [UNIT], buildings: [] })
+    const plan = computeTacticalPlan(world, 'player', DEFAULT_POLICIES)
+    expect(plan.squadRetreatRatio).toBeCloseTo(0.7, 10)
+    expect(plan.retreatHpFactor).toBeCloseTo(1.0, 10)
+  })
+
+  it('retreatThreshold=0 → 更敢戰（比 0.35、因子 0.4）；=1 → 死戰（比 1.05、因子 1.6）', () => {
+    const world = createTestWorld({ size: 12, units: [UNIT], buildings: [] })
+    const brave = computeTacticalPlan(world, 'player', resolvePolicies({ retreatThreshold: 0 }))
+    expect(brave.squadRetreatRatio).toBeCloseTo(0.7 * 0.5, 10)
+    expect(brave.retreatHpFactor).toBeCloseTo(0.4, 10)
+    const timid = computeTacticalPlan(world, 'player', resolvePolicies({ retreatThreshold: 1 }))
+    expect(timid.squadRetreatRatio).toBeCloseTo(0.7 * 1.5, 10)
+    expect(timid.retreatHpFactor).toBeCloseTo(1.6, 10)
+  })
+
+  it('retreatThreshold 兩端：劣勢邊緣上 timid 撤、brave 戰（映射方向驗證）', () => {
+    const world = createTestWorld({
+      size: 32,
+      units: [UNIT],
+      buildings: [makeBuildingDef({ id: 'keep', size: [3, 3], ai: { value: 1000 } })],
+    })
+    addBuilding(world, 'player', 'keep', { x: 2, y: 2 }, { built: true, nodeId: null })
+    addBuilding(world, 'enemy', 'keep', { x: 28, y: 28 }, { built: true, nodeId: null })
+    putUnit(world, 'player', 'u', { x: 10, y: 10 })
+    // 敵 2 兵鄰格 → 重心威脅 ≈ 100（= 我方戰力）：臨界劣勢。
+    putUnit(world, 'enemy', 'u', { x: 11, y: 10 })
+    putUnit(world, 'enemy', 'u', { x: 10, y: 11 })
+    // threshold 1（比 1.05）：100 × 1.05 > 100 → 撤。
+    const timid = computeTacticalPlan(
+      world,
+      'player',
+      resolvePolicies({ aggression: 1, clusterSpread: 1, reserve: 0, retreatThreshold: 1 }),
+    )
+    expect(timid.squads[0]?.mission).toBe('retreat')
+    // threshold 0（比 0.35）：100 × 0.35 < 100 → 戰。
+    const brave = computeTacticalPlan(
+      world,
+      'player',
+      resolvePolicies({ aggression: 1, clusterSpread: 1, reserve: 0, retreatThreshold: 0 }),
+    )
+    expect(brave.squads[0]?.mission).not.toBe('retreat')
   })
 })
