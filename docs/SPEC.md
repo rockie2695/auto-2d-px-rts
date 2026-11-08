@@ -272,20 +272,17 @@ P(生產 legionnaire) = 1 − unitRange
 
 ### 8.4 `aggression` — 0 = 固守，1 = 強攻
 
-作用於**戰術層**的**目標選擇**與**微操層**的**追擊意願**：
+作用於**戰術層**的**攻守比例**（assignMissions：attack/harass/defend 隊數分配）：
 
 | 值 | 行為 |
 | --- | --- |
-| 0 | 小隊只在基地防禦半徑 **8 格**內接戰，不越出 |
-| 1 | 小隊主動向敵方 `keep` 推進，並追擊射程外 **2 格**內的逃敵 |
+| 0 | 全隊守備（守備半徑 6 格內攔截來襲） |
+| 1 | 全軍出擊（≥2 攻擊隊且隊數 ≥3 時派 1 隊騷擾敵方經濟） |
 
-中間值線性插值：允許出擊距離 `8 + aggression × 22` 格（8 → 30 格，
-30 格足以涵蓋 32×32 全圖）。
-
-> **追擊距離的實作修訂（Prompt 10 變更）**：追擊不再隨 aggression 縮放，
-> 固定為 `range + CHASE_MARGIN（1.0 格）`，且受**追擊支援規則**約束
-> （§9.3 Prompt 10.8：單兵不追風箏遠程）。aggression 仍決定攻守比例
-> （assignMissions）與出擊距離。
+> **實作修訂（Prompt 10 系）**：基礎文本的「允許出擊距離 8 + aggression × 22 格」
+> 未實作——攻擊隊目標由影響力評分全圖選取，aggression 只決定**攻守比例**
+> 與 harass 派遣；追擊距離固定為 `range + CHASE_MARGIN`（§9.3）。
+> 隊級劣勢撤退另見 `RETREAT_POWER_RATIO` 與 §8.4 滑桿 `retreatThreshold`。
 
 > **撤退閾值的滑桿控制（階段三 Prompt 6 勘誤）**——原「可調撤退閾值屬延後清單、
 > 玩家不可調」已隨 **retreatThreshold 滑桿**失效：有效閾值 = 單位 JSON 值 ×

@@ -1180,7 +1180,9 @@ export function computeTacticalPlan(
       const cohortPower = cohort?.power ?? squad.power
       const cohortMembers = cohort?.memberIds ?? squad.memberIds
       const ratioMilli = Math.round(
-        (waveRatioMilli(policies) * suddenDeathMultiplierMilli(world.tick, rampPhase)) / 1000,
+        // Prompt 6：用**生效值**（節奏覆蓋後）——否則 tempo 對 clusterSpread 的
+        // 時段覆蓋會在此靜默失效。
+        (waveRatioMilli(eff) * suddenDeathMultiplierMilli(world.tick, rampPhase)) / 1000,
       )
       const gateMet = cohortPower * 1000 * 1000 >= defense.powerMilli * ratioMilli
       const killableCohort = canKillGroup(

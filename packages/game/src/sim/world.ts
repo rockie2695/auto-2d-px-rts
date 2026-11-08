@@ -135,6 +135,10 @@ export function tryFindNearestFreeNode(
     if (node.buildingId !== null) return
     // 類型過濾（Prompt 5）：指定類型時只找對應節點（紅礦場不搶藍節點）。
     if (resourceType !== null && node.resourceType !== resourceType) return
+    // 節點格不可放置（被建築佔住或落在岩石上，如 keep 壓在節點上）；
+    // 沒有這道過濾，AI 會反覆挑中該節點、placeBuilding 永遠失敗而停擺
+    // （Prompt 6 全滑桿審計實測：keep 壓住的節點令礦場永遠蓋不出）。
+    if (isBlockedAt(world, { x: node.x, y: node.y })) return
     const distance = manhattan(anchor, { x: node.x, y: node.y })
     if (distance > bestDistance) return
     if (distance < bestDistance) {
