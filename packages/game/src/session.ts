@@ -15,7 +15,7 @@ import {
   SUDDEN_DEATH_START_TICK,
   TACTICAL_INTERVAL_TICKS,
 } from './ai/tactics.ts'
-import type { Squad, TacticalPlan } from './ai/tactics.ts'
+import type { Squad, TacticalPlan, TacticalRecord } from './ai/tactics.ts'
 import { loadContentPackFromFetch } from './data/loadFromFetch.ts'
 import { ReplayRecorder, REPLAY_SAMPLE_INTERVAL_TICKS } from './replay.ts'
 import type { MatchResult, ReplayRecord } from './replay.ts'
@@ -477,22 +477,51 @@ export async function startGameSession(app: Application, scene: GameScene): Prom
         })
       }
       if (previous === null) continue
+      // 戰術層決策記錄（Prompt 7.5）：任務／目標**變化時**才進日誌（每 10 tick
+      // 一循環 × 1200 循環若全量會刷屏），文字取自記錄的 topFactor＋解釋。
+      const recordOf = (
+        action: 'mission' | 'target',
+        predicate: (record: TacticalRecord) => boolean,
+      ): TacticalRecord | undefined =>
+        (next.records ?? []).find(
+          (record) => record.action === action && predicate(record),
+        )
       for (const squad of next.squads) {
         const before = previous.squads.find((candidate) => candidate.index === squad.index)
         if (before === undefined) continue
         if (before.mission !== squad.mission) {
+          const record = recordOf(
+            'mission',
+            (candidate) => candidate.target === `#${squad.index}:${squad.mission}`,
+          )
           pushLog({
             tick,
             layer: 'tactical',
             actor: player.id,
-            text: `小隊 #${squad.index} ${before.mission}→${squad.mission}（${missionChangeReason(player.id, before.mission, squad.mission)}）`,
+            text:
+              `小隊 #${squad.index} ${before.mission}→${squad.mission}` +
+              `（${record?.reason.topFactor ?? missionChangeReason(player.id, before.mission, squad.mission)}）` +
+              (record !== undefined ? `：${record.reason.explanation}` : ''),
           })
         } else if (before.target.x !== squad.target.x || before.target.y !== squad.target.y) {
+          const aimedBuilding = squad.targetBuildingId === null
+            ? undefined
+            : world.buildings.find((building) => building.id === squad.targetBuildingId)
+          const record =
+            aimedBuilding === undefined
+              ? undefined
+              : recordOf(
+                  'target',
+                  (candidate) =>
+                    candidate.target === `${aimedBuilding.defId}@(${aimedBuilding.x},${aimedBuilding.y})`,
+                )
           pushLog({
             tick,
             layer: 'tactical',
             actor: player.id,
-            text: `小隊 #${squad.index} 目標改為 (${squad.target.x},${squad.target.y})`,
+            text: record !== undefined
+              ? `小隊 #${squad.index} 目標改為 ${record.target}（${record.reason.explanation}）`
+              : `小隊 #${squad.index} 目標改為 (${squad.target.x},${squad.target.y})`,
           })
         }
       }

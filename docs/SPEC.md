@@ -505,6 +505,24 @@ px 恰停**格邊界**時兩側起點格不同步（紅方 `tileOf` 翻錯邊）
 - **敘事**：`suddenDeathLogText(tick)` 純函式在 7200／10800 各回一次 tactical 日誌
   （純敘事、不影響決策）。
 
+**實作補註（階段三 Prompt 7.5，SPEC 變更）**：**戰術層決策記錄**——
+`TacticalPlan.records: TacticalRecord[]`（**每循環重建、不累積**），與戰略層
+`DecisionRecord` 同構：`{tick, layer:'tactical', actor, action:'mission'|'target', target,
+reason:{candidates, weights, topFactor, explanation}}`。
+- **mission 記錄**（每隊每循環 1 條）：所有任務／覆蓋定案後產出最終 mission；
+  `candidates = []`（候選語意屬目標選擇）；`weights` = **生效政策**快照；
+  `topFactor` 成因優先序：`waveGate`（蓄兵門檻未達）／`retreat`（撤退）＞
+  `contact`（接觸迎戰 engaging）＞ `aggressionBonus`（10.18 全軍出擊）／
+  `reserve`（留守非中性）／`mission`（純攻守比例）；`target = "#i:mission"`。
+- **target 記錄**（本循環跑過目標選擇的隊各 1 條，含後續轉 stage 的隊）：
+  `candidates` = `pickTarget` 全候選效用分數（`defId@(x,y)`＋`scoreTarget` 值、
+  降冪）；`topFactor`：騷擾隊 `harassEconomy`、否則贏家威脅最低 `defense`／
+  價值最高 `value`／`distance`；`explanation` 含「防守弱（敵戰力 X）且價值 Y、
+  距離 Z 格」。
+- 消費：session **僅任務／目標變化時**進決策日誌（附 topFactor＋解釋；防 1200
+  循環刷屏）；`pnpm sim` 印「最近的戰術決策（5 條）」含 **top-3 候選分數**；
+  記錄純觀測、不影響任何決策（對局與鏡像不變）。
+
 **實作補註（Prompt 10.24，SPEC 變更）**：**塔火進入接觸評估＋求援收口**——
 - **塔火接觸**：敵方帶 `defense` 的**已完工**建築若防禦射程覆蓋小隊重心 → 視為
   接觸（unit 掃描對塔隱形是守備隊站樁被點射到死的根因）。威脅 =

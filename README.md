@@ -483,3 +483,19 @@ JSON 結構會按最終 schema 設計，方便日後遷移到 DB。
   saltMirrorProbe 363 采樣 0；24-seed tally **7 藍 / 9 紅 / 8 平**（消融兩輪：
   reserve 比例版→24 全平、expansion 全線→16 平，定稿後回到 Prompt 5 基線）、
   12 種子公平門通過、pnpm dev 200。
+
+- [x] 階段三 Prompt 7.5 — AI 戰術層決策記錄：
+  1. **資料模型**：`TacticalRecord`（與戰略 `DecisionRecord` 同構）＋
+     `TacticalPlan.records`（每循環重建、不累積）；`TacticalTopFactor`
+     任務成因 6 種＋目標成因 4 種。
+  2. **產出**：mission 記錄（每隊每循環 1 條，最終 mission＋成因優先序
+     stage/retreat ＞ contact ＞ aggressionBonus/reserve/mission）；target 記錄
+     （本循環跑過目標選擇的隊，`pickTarget` 改回傳全候選分數分解、降冪；
+     topFactor 依贏家三項歸因 defense/value/distance、騷擾隊 harassEconomy）。
+  3. **消費**：session 僅變化時進決策日誌（附 topFactor＋解釋）；`pnpm sim`
+     新增「最近的戰術決策（5 條）」含 top-3 候選分數；記錄純觀測。
+  **驗證**——416/416 測試全過（+8：500 tick 記錄存在與結構、同 seed 序列
+  deep-equal、目標記錄 winner/候選降冪/分數有效、weights 為生效政策、
+  reserve/waveGate/contact/defense 成因覆蓋）；tsc＋oxlint 乾淨；三鏡像探針
+  0 mismatch；24-seed tally 7/9/8 不變（純觀測零副作用）；`pnpm sim` 目視
+  戰術記錄與候選分數；pnpm dev 200。

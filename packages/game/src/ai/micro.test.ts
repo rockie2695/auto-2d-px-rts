@@ -82,6 +82,7 @@ function planWith(world: World, rallies: TilePos, squads: Squad[]): TacticalPlan
     influence: computeInfluenceMap(world, 'player'),
     retreatHpFactor: 1, // 中性因子：測試仍用單位 JSON 的 retreatHpPct
     squadRetreatRatio: 0.7,
+    records: [], // Prompt 7.5：手工 fixture 不產決策記錄
   }
 }
 

@@ -8,7 +8,7 @@ import type { PolicyValues } from './policy.ts'
 import { runStrategicCycle, STRATEGIC_INTERVAL_TICKS } from './strategy.ts'
 import type { DecisionRecord } from './strategy.ts'
 import { computeTacticalPlan, TACTICAL_INTERVAL_TICKS } from './tactics.ts'
-import type { SquadMission, TacticalPlan } from './tactics.ts'
+import type { SquadMission, TacticalPlan, TacticalRecord } from './tactics.ts'
 import { focusTargets, MICRO_INTERVAL_TICKS, runMicroCycle } from './micro.ts'
 import { createWorld, describePlayer, snapshotWorld, stepWorld } from '../sim/world.ts'
 import type { PlayerId, World } from '../sim/types.ts'
@@ -74,6 +74,7 @@ function printStatus(
   world: World,
   records: readonly DecisionRecord[],
   plans: Record<PlayerId, TacticalPlan | null>,
+  tacticalRecords: readonly TacticalRecord[] = [],
 ): void {
   console.log(`--- tick ${world.tick} ---`)
   for (const player of world.players) {
@@ -113,6 +114,23 @@ function printStatus(
       )
     }
   }
+
+  // 戰術層決策記錄（Prompt 7.5）：最近 5 條；目標記錄附 top-3 候選效用分數。
+  const recentTactical = tacticalRecords.slice(-5)
+  if (recentTactical.length > 0) {
+    console.log(`  最近戰術決策（${recentTactical.length}/${tacticalRecords.length} 條）:`)
+    for (const record of recentTactical) {
+      const top = record.reason.candidates
+        .slice(0, 3)
+        .map((candidate) => `${candidate.defId}:${candidate.score.toFixed(2)}`)
+        .join(' > ')
+      console.log(
+        `    t=${record.tick} ${record.actor}: ${record.action} ${record.target}` +
+          ` [${record.reason.topFactor}] — ${record.reason.explanation}` +
+          (top.length > 0 ? `\n      候選：${top}` : ''),
+      )
+    }
+  }
 }
 
 function main(): void {
@@ -130,6 +148,8 @@ function main(): void {
   )
 
   const decisionLog: DecisionRecord[] = []
+  /** 戰術層決策記錄（Prompt 7.5）：只保留最近 500 條（CLI 目視用）。 */
+  const tacticalLog: TacticalRecord[] = []
   const lastPlans: Record<PlayerId, TacticalPlan | null> = { player: null, enemy: null }
   const prevMissions: Record<PlayerId, SquadMission[]> = { player: [], enemy: [] }
   const reportedDisengaged: Record<PlayerId, Set<number>> = { player: new Set(), enemy: new Set() }
@@ -145,7 +165,7 @@ function main(): void {
     )
   }
 
-  printStatus(world, decisionLog, lastPlans)
+  printStatus(world, decisionLog, lastPlans, tacticalLog)
   while (world.tick < TOTAL_TICKS) {
     stepWorld(world)
 
@@ -168,17 +188,25 @@ function main(): void {
     if (world.tick % TACTICAL_INTERVAL_TICKS === 0) {
       for (const player of world.players) {
         const plan = computeTacticalPlan(world, player.id, policies[player.id], lastPlans[player.id])
-    lastPlans[player.id] = plan
         lastPlans[player.id] = plan
+        tacticalLog.push(...plan.records)
+        if (tacticalLog.length > 500) tacticalLog.splice(0, tacticalLog.length - 500)
         const before = prevMissions[player.id]
         for (const squad of plan.squads) {
           const previous = before[squad.index]
           if (previous === squad.mission) continue
           const from = previous === undefined ? '組成' : MISSION_LABEL[previous]
+          // 任務記錄（Prompt 7.5）：附 topFactor 與解釋參數。
+          const record = plan.records.find(
+            (candidate) =>
+              candidate.action === 'mission' &&
+              candidate.target === `#${squad.index}:${squad.mission}`,
+          )
           console.log(
             `t=${world.tick} ${player.id}: squad ${squad.index} ${from}→` +
               `${MISSION_LABEL[squad.mission]} 目標(${squad.target.x},${squad.target.y})` +
-              ` 兵力${squad.memberIds.length} 戰力${squad.power}`,
+              ` 兵力${squad.memberIds.length} 戰力${squad.power}` +
+              (record !== undefined ? ` [${record.reason.topFactor}] ${record.reason.explanation}` : ''),
           )
         }
         prevMissions[player.id] = plan.squads.map((squad) => squad.mission)
@@ -220,7 +248,7 @@ function main(): void {
       }
     }
 
-    if (world.tick % PRINT_EVERY === 0) printStatus(world, decisionLog, lastPlans)
+    if (world.tick % PRINT_EVERY === 0) printStatus(world, decisionLog, lastPlans, tacticalLog)
   }
 }
 

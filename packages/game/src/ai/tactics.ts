@@ -241,6 +241,45 @@ export interface SpawnPoint {
   tile: TilePos
 }
 
+/**
+ * 戰術層決策主導因素（Prompt 7.5；與 tactical 解釋同源）：
+ * - 任務成因：mission（攻守比例）／reserve（留守削減）／aggressionBonus（優勢加成）
+ *   ／waveGate（蓄兵門檻未達）／contact（接觸迎戰）／retreat（撤退收斂）
+ * - 目標成因：defense（防守弱）／value（價值高）／distance（距離近）
+ *   ／harassEconomy（騷擾選經濟建築）
+ */
+export type TacticalTopFactor =
+  | 'mission'
+  | 'reserve'
+  | 'aggressionBonus'
+  | 'waveGate'
+  | 'contact'
+  | 'retreat'
+  | 'defense'
+  | 'value'
+  | 'distance'
+  | 'harassEconomy'
+
+/** 戰術層決策記錄（Prompt 7.5）：與戰略層 DecisionRecord 同構、獨立型別。 */
+export interface TacticalRecord {
+  tick: number
+  layer: 'tactical'
+  actor: PlayerId
+  /** mission＝任務分配；target＝進攻目標選擇。 */
+  action: 'mission' | 'target'
+  /** mission → `#index:mission`；target → `defId@(x,y)`。 */
+  target: string
+  reason: {
+    /** 目標記錄＝全部候選的效用分數（降冪）；任務記錄＝空（候選概念屬目標選擇）。 */
+    candidates: Array<{ defId: string; score: number }>
+    /** 當時的生效政策（節奏覆蓋後；快照複本）。 */
+    weights: PolicyValues
+    topFactor: TacticalTopFactor
+    /** 一行中文解釋（參數內嵌）。 */
+    explanation: string
+  }
+}
+
 export interface TacticalPlan {
   tick: number
   player: PlayerId
@@ -272,6 +311,12 @@ export interface TacticalPlan {
   retreatHpFactor: number
   /** 小隊撤退戰力比（Prompt 6 #8）：RETREAT_POWER_RATIO × lerp(0.5, 1.43, threshold)。 */
   squadRetreatRatio: number
+  /**
+   * 本循環的戰術決策記錄（Prompt 7.5）：每隊 1 條 mission ＋ 每攻擊／騷擾隊
+   * 1 條 target（候選含全部效用分數）。**每循環重建、不累積**——呼叫端
+   * （session／sim／測試）自行決定要留哪些（session 僅變化時進日誌）。
+   */
+  records: TacticalRecord[]
 }
 
 /** 線性插值。 */
@@ -774,9 +819,14 @@ function pickTarget(
   influence: InfluenceMap,
   from: { x: number; y: number },
   candidates: readonly Building[],
-): Building | null {
+): {
+  best: Building | null
+  /** 全候選的效用分解（Prompt 7.5 目標記錄用；與 scoreTarget 同式、降冪）。 */
+  scores: Array<{ defId: string; score: number; value: number; threat: number; distance: number }>
+} {
   let best: Building | null = null
   let bestScore = Number.NEGATIVE_INFINITY
+  const scores: Array<{ defId: string; score: number; value: number; threat: number; distance: number }> = []
   for (const building of candidates) {
     const value = world.defs.buildings[building.defId]?.ai.value ?? 0
     const center = buildingCenter(building)
@@ -784,13 +834,23 @@ function pickTarget(
     const dy = center.y - from.y
     const distanceTiles = Math.sqrt(dx * dx + dy * dy) / UNITS_PER_TILE
     const tile = mirrorSafeTileOf(world.map.size, playerId === 'enemy', center.x, center.y)
-    const score = scoreTarget(value, enemyThreatAtTile(influence, tile), distanceTiles)
+    const threat = enemyThreatAtTile(influence, tile)
+    const score = scoreTarget(value, threat, distanceTiles)
+    scores.push({
+      defId: `${building.defId}@(${building.x},${building.y})`,
+      score,
+      value,
+      threat: Math.round(threat), // 記錄用整數；計分仍用原始值（行為零改動）
+      distance: distanceTiles,
+    })
     if (score > bestScore) {
       bestScore = score
       best = building
     }
   }
-  return best
+  // 降冪（穩定性：平手保留候選原序——候選已按 id 升冪，確定性）。
+  scores.sort((a, b) => b.score - a.score)
+  return { best, scores }
 }
 
 /** 敵方目標建築清單（economicOnly 時只取需資源點的礦場）。 */
@@ -925,6 +985,18 @@ export function computeTacticalPlan(
   const retreatHpFactor = 0.4 + 1.2 * clampSlider(eff.retreatThreshold)
   const squadRetreatRatio = RETREAT_POWER_RATIO * (0.5 + clampSlider(eff.retreatThreshold))
 
+  /* ---- 戰術層決策記錄（Prompt 7.5）---- */
+  /** 每隊的任務成因（保底 mission；stage/retreat/contact 於結尾由狀態推導）。 */
+  const missionReason = new Map<number, TacticalTopFactor>()
+  /** 每隊的目標候選分解（pickTarget 當下捕捉；結尾為攻擊／騷擾隊產出記錄）。 */
+  const targetScores = new Map<
+    number,
+    Array<{ defId: string; score: number; value: number; threat: number; distance: number }>
+  >()
+  /** 每隊的解釋補充（stage／降級／攔截等現場參數）。 */
+  const explanationNote = new Map<number, string>()
+  const records: TacticalRecord[] = []
+
   // 個體撤退：hp < retreatHpPct × maxHp → 脫離戰鬥（JSON 門檻 × 滑桿因子）。
   const disengaged: number[] = []
   const ready: Unit[] = []
@@ -999,6 +1071,18 @@ export function computeTacticalPlan(
     eff,
     aggressionBonus,
   )
+  // 任務成因（Prompt 7.5）：優勢加成全軍出擊 → aggressionBonus；留守非中性
+  // → reserve；否則純攻守比例 mission。stage/contact/retreat 於結尾覆蓋。
+  const shareReason: TacticalTopFactor =
+    aggressionBonus >= 1
+      ? 'aggressionBonus'
+      : Math.abs(clampSlider(eff.reserve) - 0.5) > 1e-9
+        ? 'reserve'
+        : 'mission'
+  const shareParams =
+    `攻守份額 ${missions.filter((mission) => mission === 'attack' || mission === 'harass').length}` +
+    `/${missions.length}（aggression ${clampSlider(eff.aggression).toFixed(2)}` +
+    `＋優勢 ${aggressionBonus.toFixed(2)}、留守 ${clampSlider(eff.reserve).toFixed(2)}）`
 
   // squad.index ＝ group index（可能因空群而有跳號）：與上一循環的鍵同一索引空間，
   // warm start／遲滯才能跨循環對齊（微操只用 index 當 map 鍵，跳號無妨）。
@@ -1023,6 +1107,11 @@ export function computeTacticalPlan(
       squad.power += unitPower(world, unit)
     }
     squads.push(squad)
+    missionReason.set(groupIndex, shareReason)
+    explanationNote.set(
+      groupIndex,
+      `${shareParams}；兵力 ${memberIds.length} 戰力 ${squad.power}`,
+    )
     missionIndex += 1
   }
 
@@ -1117,7 +1206,10 @@ export function computeTacticalPlan(
       x: squad.centroid.x * UNITS_PER_TILE + UNITS_PER_TILE / 2,
       y: squad.centroid.y * UNITS_PER_TILE + UNITS_PER_TILE / 2,
     }
-    const target = pickTarget(world, playerId, influence, centroidFixed, candidates)
+    const picked = pickTarget(world, playerId, influence, centroidFixed, candidates)
+    const target = picked.best
+    // 目標候選分解（Prompt 7.5）：攻擊／騷擾隊結尾產出 target 記錄用。
+    targetScores.set(squad.index, picked.scores)
     if (target === null) {
       // 沒有可攻擊目標 → 轉為守備，避免空轉。
       squad.mission = 'defend'
@@ -1202,6 +1294,11 @@ export function computeTacticalPlan(
           nearestSpawnPoint(stageSpawns, squad.centroid)?.tile ?? { x: rally.x, y: rally.y }
         squad.targetBuildingId = null
         squad.engaging = false
+        missionReason.set(squad.index, 'waveGate')
+        explanationNote.set(
+          squad.index,
+          `蓄兵：cohort 戰力 ${cohortPower} ${!gateMet ? `< 門檻 ${ratioMilli}‰ × 守備 ${defense.powerMilli}` : '已過門檻但守軍殺不掉'}（clusterSpread ${clampSlider(eff.clusterSpread).toFixed(2)}）`,
+        )
         continue
       }
     } else if (committed && !killable) {
@@ -1211,7 +1308,7 @@ export function computeTacticalPlan(
         const econCandidates = enemyTargets(world, playerId, true).filter(
           (candidate) => candidate.id !== target.id,
         )
-        const econ = pickTarget(world, playerId, influence, centroidFixed, econCandidates)
+        const econ = pickTarget(world, playerId, influence, centroidFixed, econCandidates).best
         if (econ !== null) {
           const econCenter = buildingCenter(econ)
           const econApproach =
@@ -1601,6 +1698,66 @@ const replyLimit = PINCER_REPLY_RADIUS_TILES * UNITS_PER_TILE
   // 出廠集合格（Prompt 10.19）：主目標定案後才計算（每間生產建築一筆）。
   const spawns = spawnPoints(world, playerId, rally, squads)
 
+  /* ------------------------------------------------------------------ */
+  /* 戰術層決策記錄（Prompt 7.5）：所有任務／目標已定案，於此一併產出      */
+  /* ------------------------------------------------------------------ */
+
+  // (1) 任務記錄（每隊 1 條）：成因優先序 stage/retreat > 接觸迎戰 > 份額成因。
+  for (const squad of squads) {
+    let factor: TacticalTopFactor = missionReason.get(squad.index) ?? 'mission'
+    if (squad.mission === 'stage') factor = 'waveGate'
+    else if (squad.mission === 'retreat') factor = 'retreat'
+    else if (squad.engaging === true) factor = 'contact' // 接觸迎戰優先於份額成因
+    records.push({
+      tick: world.tick,
+      layer: 'tactical',
+      actor: playerId,
+      action: 'mission',
+      target: `#${squad.index}:${squad.mission}`,
+      reason: {
+        candidates: [],
+        weights: { ...eff },
+        topFactor: factor,
+        explanation:
+          explanationNote.get(squad.index) ??
+          `任務 ${squad.mission}（兵力 ${squad.memberIds.length} 戰力 ${squad.power}）`,
+      },
+    })
+  }
+
+  // (2) 目標記錄（本循環跑過 target 選擇的隊各 1 條，含後續轉 stage 的隊——
+  //     目標選擇確實發生過）：候選＝當下 pickTarget 的全部分數（降冪）。
+  for (const squad of squads) {
+    const scores = targetScores.get(squad.index)
+    if (scores === undefined || scores.length === 0) continue
+    const winner = scores[0]
+    if (winner === undefined) continue
+    const minThreat = Math.min(...scores.map((entry) => entry.threat))
+    const maxValue = Math.max(...scores.map((entry) => entry.value))
+    const factor: TacticalTopFactor =
+      squad.mission === 'harass'
+        ? 'harassEconomy'
+        : winner.threat <= minThreat
+          ? 'defense'
+          : winner.value >= maxValue
+            ? 'value'
+            : 'distance'
+    const defenseText = winner.threat > 0 ? `防守弱（敵戰力 ${winner.threat}）` : '無守軍'
+    records.push({
+      tick: world.tick,
+      layer: 'tactical',
+      actor: playerId,
+      action: 'target',
+      target: winner.defId,
+      reason: {
+        candidates: scores.map((entry) => ({ defId: entry.defId, score: entry.score })),
+        weights: { ...eff },
+        topFactor: factor,
+        explanation: `目標 ${winner.defId} ${defenseText}且價值 ${winner.value}，距離 ${winner.distance.toFixed(1)} 格`,
+      },
+    })
+  }
+
   return {
     tick: world.tick,
     player: playerId,
@@ -1613,6 +1770,7 @@ const replyLimit = PINCER_REPLY_RADIUS_TILES * UNITS_PER_TILE
     events,
     retreatHpFactor,
     squadRetreatRatio,
+    records,
   }
 }
 
