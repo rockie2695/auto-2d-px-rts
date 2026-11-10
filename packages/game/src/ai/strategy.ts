@@ -11,6 +11,8 @@ import { getPlayer } from '../sim/types.ts'
 import type { PlayerId, TilePos, World } from '../sim/types.ts'
 import { hashFate } from '../sim/rng.ts'
 import { survivalScoreOf } from '../balance/unitStats.ts'
+import { checkSurrender } from './surrender.ts'
+import type { SurrenderCheck } from './surrender.ts'
 
 /**
  * AI 戰略層（SPEC §8，Prompt 6 / 6.5）：每 40 tick（= 2 秒）決定「蓋什麼、生什麼」。
@@ -85,6 +87,8 @@ export interface DecisionRecord {
 export interface StrategicCycleResult {
   actions: StrategicAction[]
   records: DecisionRecord[]
+  /** 投降判定（Prompt 8.6）：每循環 1 次的絕望指數快照與是否觸發。 */
+  surrenderCheck: SurrenderCheck
 }
 
 /* ------------------------------------------------------------------ */
@@ -474,6 +478,14 @@ export function runStrategicCycle(
 ): StrategicCycleResult {
   // Prompt 6 #3：節奏預設覆蓋（standard = 恆等）。以下全用生效值。
   const policies = effectivePolicies(userPolicies, world.tick)
+
+  // AI 投降判定（Prompt 8.6）：每戰略循環 1 次（40 tick = 2 秒）。已投降者
+  // 不再行動（session／sim 閘門兜底）；本循環觸發投降 → 跳過 build/train。
+  const surrenderCheck = checkSurrender(world, playerId, policies)
+  if (world.surrender !== null || surrenderCheck.surrendered) {
+    return { actions: [], records: [], surrenderCheck }
+  }
+
   const actions: StrategicAction[] = []
   const records: DecisionRecord[] = []
   const player = getPlayer(world, playerId)
@@ -606,5 +618,5 @@ export function runStrategicCycle(
     }
   }
 
-  return { actions, records }
+  return { actions, records, surrenderCheck }
 }

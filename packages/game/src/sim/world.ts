@@ -188,6 +188,9 @@ export function createWorld(content: ContentPack, seed: number): World {
     hash: { units: new Map(), buildings: new Map() },
     nextUnitId: 1,
     nextBuildingId: 1,
+    surrender: null,
+    initialBuildingCount: { player: 0, enemy: 0 },
+    despairBreachSince: { player: null, enemy: null },
   }
 
   const spawnA = content.map.spawnPoints[0]
@@ -227,6 +230,14 @@ export function createWorld(content: ContentPack, seed: number): World {
   placeOpeningBuildings(world, 'player', spawnA)
   placeStartUnits(world, 'player', spawnA)
   placeMirroredOpening(world, 'enemy')
+
+  // 開局每陣營建築數（Prompt 8.6 territoryLoss 分母；鏡像佈局 → 兩側相等）。
+  world.initialBuildingCount.player = world.buildings.filter(
+    (building) => building.player === 'player',
+  ).length
+  world.initialBuildingCount.enemy = world.buildings.filter(
+    (building) => building.player === 'enemy',
+  ).length
 
   rebuildSpatialHash(world)
   return world

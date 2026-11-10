@@ -38,6 +38,18 @@
         "melee": 1,
         "ranged": 1
       }
+    },
+    "aiSurrenderConfig": {
+      "surrenderThreshold": 0.75,
+      "weights": {
+        "power": 0.35,
+        "income": 0.25,
+        "territory": 0.15,
+        "time": 0.15,
+        "tech": 0.10
+      },
+      "minGameTimeSec": 120,
+      "sustainSec": 15
     }
   }
 }

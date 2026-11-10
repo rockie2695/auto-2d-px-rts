@@ -201,6 +201,40 @@ export const CounterMatrixSchema = z.object({
 
 export type CounterMatrix = z.infer<typeof CounterMatrixSchema>
 
+/**
+ * AI 投降判定配置（階段三 Prompt 8.6；可選——缺省時套用下方默認值，
+ * 舊陣營檔不需變更即可運行）。投降不是「輸了就投」，是確認無法翻盤：
+ * **絕望指數**（0..1）＝五項劣勢的加權和，連續 `sustainSec` 秒超過有效
+ * 閾值（threshold ＋ aggression/reserve/techRush 修正）且對局超過
+ * `minGameTimeSec` 才投降。
+ */
+export const AiSurrenderConfigSchema = z.object({
+  /** 投降閾值基準（aggression=0.5 等中性政策下）。 */
+  surrenderThreshold: z.number().min(0).max(1),
+  /** 絕望指數五成分權重（總和應為 1；不強制——加權和自然 ≤ 1）。 */
+  weights: z.object({
+    power: z.number().min(0).max(1),
+    income: z.number().min(0).max(1),
+    territory: z.number().min(0).max(1),
+    time: z.number().min(0).max(1),
+    tech: z.number().min(0).max(1),
+  }),
+  /** 對局至少進行多少秒才開始判定（開局波動不算）。 */
+  minGameTimeSec: z.number().min(0),
+  /** 絕望指數需**連續**超閾多少秒才投降（一時劣勢不算）。 */
+  sustainSec: z.number().min(0),
+})
+
+export type AiSurrenderConfig = z.infer<typeof AiSurrenderConfigSchema>
+
+/** `aiSurrenderConfig` 缺省時的默認值（Prompt 8.6 基準參數）。 */
+export const DEFAULT_AI_SURRENDER_CONFIG: AiSurrenderConfig = {
+  surrenderThreshold: 0.75,
+  weights: { power: 0.35, income: 0.25, territory: 0.15, time: 0.15, tech: 0.1 },
+  minGameTimeSec: 120,
+  sustainSec: 15,
+}
+
 export const FactionDefSchema = z
   .object({
     id: IdSchema,
@@ -215,6 +249,8 @@ export const FactionDefSchema = z
     buildings: z.array(IdSchema),
     startResources: ResourceAmountSchema,
     counterMatrix: CounterMatrixSchema,
+    /** AI 投降判定配置（階段三 Prompt 8.6；可選——缺省套 DEFAULT_AI_SURRENDER_CONFIG）。 */
+    aiSurrenderConfig: AiSurrenderConfigSchema.optional(),
   })
   .superRefine((faction, ctx) => {
     // 開局單位必須在可訓練名單內，否則開局後無法補充。

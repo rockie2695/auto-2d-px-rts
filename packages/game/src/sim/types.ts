@@ -159,6 +159,20 @@ export interface WorldDefs {
   buildings: Record<string, BuildingDef>
 }
 
+/**
+ * AI 投降事件（階段三 Prompt 8.6）：一方 AI 確認無法翻盤 → 主動投降。
+ * 投降當刻寫入（同時供 replay 與結局面板讀取）。
+ */
+export interface SurrenderEvent {
+  readonly player: PlayerId
+  readonly tick: number
+  readonly despairAtSurrender: number
+  /** 投降當刻戰力比（我方 / 敵方；投降方檢視）。 */
+  readonly powerRatio: number
+  /** 投降當刻收入比（我方 / 敵方；投降方檢視）。 */
+  readonly incomeRatio: number
+}
+
 export interface World {
   tick: number
   /** 比賽種子：命運雜湊（hashFate）輸入之一，讓每場對局的抽籤真正隨種子改變。 */
@@ -175,6 +189,18 @@ export interface World {
   hash: SpatialHash
   nextUnitId: number
   nextBuildingId: number
+  /**
+   * AI 投降狀態（Prompt 8.6）：null = 未投降；非 null = 已投降（投降方
+   * 停止一切行動：單位／塔停火、停移動、停生產與採集），優勢方勝。
+   */
+  surrender: SurrenderEvent | null
+  /** 開局每陣營建築數（territoryLoss 分母；createWorld 佈局後記錄）。 */
+  initialBuildingCount: { player: number; enemy: number }
+  /**
+   * 絕望指數持續超閾的起點（Prompt 8.6 持續性判定）：
+   * `playerId → 起始 tick`；喪失持續性（回到閾下）即清除。
+   */
+  despairBreachSince: { player: number | null; enemy: number | null }
 }
 
 /** 戰鬥目標：單位或建築。 */

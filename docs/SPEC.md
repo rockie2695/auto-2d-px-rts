@@ -778,6 +778,21 @@ A\* 路徑未變更且非重算點時沿用，`tick % 10 === 0`（500ms）定期
    只在 `world.tick ≥ match.maxTicks` 時生效——**手動提前結束（「結束並復盤」）
    維持平手**（Prompt 10.10 既有語義不變）。動機：完美鏡像自戰的對局超時是
    鏡像僵持的兜底裁定，兩邊狀態完全對稱時才真的平手。
+4. **AI 投降**（Prompt 8.6）：AI **確認無法翻盤才投**——絕望指數（0..1）＝
+   戰力／收入／領土／時間／科技五項劣勢加權和（權重在陣營檔
+   `aiSurrenderConfig.weights`，缺省 `0.35/0.25/0.15/0.15/0.10`）；對局超過
+   `minGameTimeSec`（默認 120 秒）後，絕望指數**連續** `sustainSec`
+   （默認 15 秒）高於有效閾值即投降——一時劣勢與反轉（回到閾下即重置）不投。
+   有效閾值 = `surrenderThreshold`（默認 0.75）`+ 0.1×aggression +
+   0.05×reserve + 0.08×techRush`——好戰／重留守／科技流的 AI 更不願投
+   （默認滑桿 0.5 → 實際 0.865）。投降方**完全停戰**：單位與塔停火（仍可被
+   打）、停移動、停生產與採集、生產隊列清空、AI 各層不再決策；**3 秒寬限**
+   （遊戲繼續）後對局結束、投降方判負（同 tick 雙投 → 平手）。事件寫入
+   replay（`surrender`，可缺）與結局面板橫幅（`post-game-surrender`）。
+   判定與行為閘門：`ai/surrender.ts`（判定）＋ `sim/economy.ts`／
+   `sim/combat.ts`（閘門）＋ `sim/matchResult.ts`（3 秒寬限與判負）；
+   開發驗收可加 `SURRENDER_DEMO=1`（CLI-only 手柄：2 分 1 秒強制極端劣勢＋
+   閾值暫降 0.5）。
 
 > 「當前庫存」代表手上還剩多少，因此囤積不花並非無敵策略。
 >
@@ -958,7 +973,9 @@ AI 會**主動保護建築與水晶收入**，而不是窩在集結點被動挨�
   完整**資源曲線、單位數量曲線與戰力曲線**（三張 canvas 自繪兩線、y 軸 3 格線標整數、
   x 軸 `0:00`～總時長）、Policy 調整時間軸（0→時長水平軸、每次變更一個 ▼ 標記＋
   下方 `m:ss key from→to` 明細）、「再來一場」按鈕重開對局。
-- **不做（延後）**：反事實建議、決策歸因表、投降分析、戰鬥事件時間軸。
+- **不做（延後）**：反事實建議、決策歸因表、戰鬥事件時間軸。
+  （Prompt 8.6 補 AI 投降橫幅：`surrender` 欄位有值時顯示投降方、時鐘與
+  絕望／戰力比／收入比——見 §11 第 4 條。）
 
 ---
 
@@ -1070,6 +1087,14 @@ public/data/
     "counterMatrix": {
       "melee": { "melee": 1.0, "ranged": 1.0 },
       "ranged": { "melee": 1.0, "ranged": 1.0 }
+    },
+    "aiSurrenderConfig": {
+      "surrenderThreshold": 0.75,
+      "weights": {
+        "power": 0.35, "income": 0.25, "territory": 0.15, "time": 0.15, "tech": 0.10
+      },
+      "minGameTimeSec": 120,
+      "sustainSec": 15
     }
   }
 }
@@ -1078,6 +1103,8 @@ public/data/
 - `roster` = 可訓練單位；`buildings` = **可建造**建築（不含不可建造的 `keep`）。
 - 開局配置即 §7 對稱標準局；雙方共用此陣營，差別只在出生點與滑桿（敵方用固定預設值）。
 - `counterMatrix` 四格皆為 **1.0**：欄位已預留，MVP 戰鬥公式不讀取（§10）。
+- `aiSurrenderConfig`（Prompt 8.6）**可選**：缺省套 `DEFAULT_AI_SURRENDER_CONFIG`
+  （同上值）；語義見 §11 第 4 條。
 
 ### `policies.json`
 

@@ -1,5 +1,5 @@
 import type { Application, Ticker } from 'pixi.js'
-import type { ResourceAmount, ResourceId } from '@auto-2d-px-rts/shared'
+import type { ResourceId } from '@auto-2d-px-rts/shared'
 
 import { MICRO_INTERVAL_TICKS, microRecords, runMicroCycle } from './ai/micro.ts'
 import type { MicroDecision, MicroRecordState } from './ai/micro.ts'
@@ -157,99 +157,12 @@ export const POLICY_COOLDOWN_TICKS = 600
 /* ------------------------------------------------------------------ */
 /* 對局結束與勝負判定（Prompt 10.5，純函數供測試）                      */
 /* ------------------------------------------------------------------ */
+/* Prompt 8.6：抽出至 `sim/matchResult.ts`（無渲染依賴，session 與 CLI 共用 */
+/* 同一語義來源）。此處 re-export 維持既有 import 路徑不變。               */
 
-/** 主堡 defId（不可建造、只能由開局配置放置；SPEC §12）。 */
-const KEEP_DEF_ID = 'keep'
+export { matchEnded, matchSideValue, resolveMatchResult } from './sim/matchResult.ts'
 
-function keepAlive(world: World, playerId: PlayerId): boolean {
-  return world.buildings.some(
-    (building) =>
-      building.player === playerId && building.defId === KEEP_DEF_ID && building.hp > 0,
-  )
-}
-
-/** 一方是否全滅：無任何存活建築且無存活單位（Prompt 10.5 修：全滅也結束）。 */
-function hasNoForces(world: World, playerId: PlayerId): boolean {
-  if (world.buildings.some((building) => building.player === playerId && building.hp > 0)) {
-    return false
-  }
-  return !world.units.some((unit) => unit.player === playerId && unit.hp > 0)
-}
-
-/** 對局是否已結束：一方主堡被毀、一方全滅（無建築且無單位），或達 `match.maxTicks` 上限。 */
-export function matchEnded(world: World): boolean {
-  if (world.tick >= world.match.maxTicks) return true
-  return (
-    !keepAlive(world, 'player') ||
-    !keepAlive(world, 'enemy') ||
-    hasNoForces(world, 'player') ||
-    hasNoForces(world, 'enemy')
-  )
-}
-
-/**
- * 勝負判定：一方主堡被毀 → 對方勝；同 tick 雙殺 → 全滅者敗（都還有部隊 → 平手）；
- * **超時（10:00 雙主堡俱在）→ 總價值多者勝、嚴格相等才平手**
- * （Prompt 10.23 破局：鏡像僵持的兜底裁定——取代 Prompt 10.10 的「一律平手」）。
- * 全滅（無建築且無單位）同樣判負——無建築必含主堡已毀，此為 SPEC §11.1 的另一面。
- * 手動提前結束（雙主堡俱在且未超時）→ 平手（Prompt 10.10 既有語義不變）。
- */
-export function resolveMatchResult(world: World): MatchResult {
-  const playerAlive = keepAlive(world, 'player')
-  const enemyAlive = keepAlive(world, 'enemy')
-  if (playerAlive !== enemyAlive) return playerAlive ? 'player' : 'enemy'
-  if (!playerAlive && !enemyAlive) {
-    // 雙主堡俱毀：全滅者敗；雙方都沒有部隊 → 平手。
-    const playerWiped = hasNoForces(world, 'player')
-    const enemyWiped = hasNoForces(world, 'enemy')
-    if (playerWiped !== enemyWiped) return playerWiped ? 'enemy' : 'player'
-    return 'draw'
-  }
-  // 雙主堡俱在且已超時 → 超時值裁定（Prompt 10.23）；未超時（手動提前結束）→ 平手。
-  if (world.tick >= world.match.maxTicks) {
-    const playerValue = matchSideValue(world, 'player')
-    const enemyValue = matchSideValue(world, 'enemy')
-    if (playerValue !== enemyValue) return playerValue > enemyValue ? 'player' : 'enemy'
-  }
-  return 'draw'
-}
-
-/** 三資源總和（Prompt 5：超時值裁定的庫存項）。 */
-function totalResourcesOf(stock: ResourceStock): number {
-  return stock.blue_crystal + stock.red_ruby + stock.green_emerald
-}
-
-/** 單位／建築總成本（三資源等權求和）。 */
-function totalCostOf(cost: ResourceAmount): number {
-  return cost.blue_crystal + (cost.red_ruby ?? 0) + (cost.green_emerald ?? 0)
-}
-
-/**
- * 陣營**總價值**（Prompt 10.23 超時值裁定）：三資源庫存 + 單位殘值 + 建築殘值
- * （Prompt 5：庫存項 = 藍水晶＋紅寶石＋綠翡翠總和——紅綠即時無消費者也是資產；
- * 殘值成本 = 三資源總成本）。
- * 殘值 = `cost ×（現 hp ÷ 有效最大 hp）` 四捨五入——興建中建築的有效最大 hp
- * 已按完成比例折算（SPEC §5）→ 殘值自動含完成度。全整數運算、跨平台一致。
- */
-export function matchSideValue(world: World, playerId: PlayerId): number {
-  const player = world.players.find((candidate) => candidate.id === playerId)
-  let value = player === undefined ? 0 : totalResourcesOf(player.resources)
-  for (const unit of world.units) {
-    if (unit.player !== playerId || unit.hp <= 0) continue
-    const def = world.defs.units[unit.defId]
-    if (def === undefined) continue
-    value += Math.round((totalCostOf(def.cost) * unit.hp) / Math.max(1, def.stats.hp))
-  }
-  for (const building of world.buildings) {
-    if (building.player !== playerId || building.hp <= 0) continue
-    const def = world.defs.buildings[building.defId]
-    if (def === undefined) continue
-    value += Math.round(
-      (totalCostOf(def.cost) * building.hp) / buildingEffectiveMaxHp(def, building),
-    )
-  }
-  return value
-}
+import { matchEnded, resolveMatchResult } from './sim/matchResult.ts'
 
 /**
  * 突變期敘事文字（Prompt 10.23）：只在突變期起點／硬期限的**那一 tick** 回傳
@@ -551,7 +464,35 @@ export async function startGameSession(app: Application, scene: GameScene): Prom
     }
     if (w.tick % STRATEGIC_INTERVAL_TICKS === 0) {
       for (const player of w.players) {
-        logDecisionRecords(runStrategicCycle(w, player.id, policies[player.id]).records)
+        // AI 投降（Prompt 8.6）：投降方不再參與 AI 決策（sim 停產／停火兜底）。
+        if (w.surrender?.player === player.id) continue
+        const strategic = runStrategicCycle(w, player.id, policies[player.id])
+        logDecisionRecords(strategic.records)
+        if (strategic.surrenderCheck.surrendered) {
+          const event = w.surrender
+          const detail =
+            `AI 投降：絕望 ${strategic.surrenderCheck.despair.toFixed(2)} > ` +
+            `閾 ${strategic.surrenderCheck.threshold.toFixed(2)}（持續超閾 15 秒）` +
+            (event === null
+              ? ''
+              : `；戰力比 ${event.powerRatio.toFixed(2)}、收入比 ${event.incomeRatio.toFixed(2)}`)
+          pushLog({
+            tick: w.tick,
+            layer: 'strategic',
+            actor: player.id,
+            text: detail,
+          })
+          if (event !== null) {
+            recorder.recordSurrender({
+              tick: event.tick,
+              player: event.player,
+              type: 'ai_surrender',
+              despairAtSurrender: event.despairAtSurrender,
+              powerRatio: event.powerRatio,
+              incomeRatio: event.incomeRatio,
+            })
+          }
+        }
       }
     }
     if (w.tick % TACTICAL_INTERVAL_TICKS === 0) {

@@ -2,7 +2,7 @@ import { fileURLToPath } from 'node:url'
 
 import { describe, expect, it, vi } from 'vitest'
 
-import { MAP_SIZE } from '@auto-2d-px-rts/shared'
+import { MAP_SIZE, TICK_RATE_HZ } from '@auto-2d-px-rts/shared'
 
 import { DEFAULT_POLICIES } from './ai/policy.ts'
 import {
@@ -312,6 +312,36 @@ describe('勝負判定（純函數）', () => {
     if (playerKeep === undefined) throw new Error('找不到玩家 keep')
     playerKeep.hp = 0
     expect(resolveMatchResult(world)).toBe('draw')
+  })
+
+  it('AI 投降（Prompt 8.6）：寬限 3 秒內未結束、寬限後 matchEnded；投降方判負', () => {
+    const world = keepWorld()
+    world.surrender = {
+      player: 'player',
+      tick: 2000,
+      despairAtSurrender: 0.81,
+      powerRatio: 0.3,
+      incomeRatio: 0.4,
+    }
+    world.tick = 2000 + 3 * TICK_RATE_HZ - 1
+    expect(matchEnded(world)).toBe(false)
+    world.tick += 1
+    expect(matchEnded(world)).toBe(true)
+    // 我方投降 → 敵方勝（雙 keep 俱在也以投降歸屬定案）。
+    expect(resolveMatchResult(world)).toBe('enemy')
+
+    // 敵方投降 → 我方勝。
+    const mirrored = keepWorld()
+    mirrored.surrender = {
+      player: 'enemy',
+      tick: 100,
+      despairAtSurrender: 0.9,
+      powerRatio: 0.2,
+      incomeRatio: 0.2,
+    }
+    mirrored.tick = 100 + 3 * TICK_RATE_HZ
+    expect(matchEnded(mirrored)).toBe(true)
+    expect(resolveMatchResult(mirrored)).toBe('player')
   })
 
   it('超時（雙 keep 俱在）→ 總價值多者勝、嚴格相等才平手（Prompt 10.23）；matchEnded 為真', () => {

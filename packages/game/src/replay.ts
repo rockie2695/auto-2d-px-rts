@@ -25,6 +25,16 @@ export interface ReplayPolicyEvent {
   readonly to: number
 }
 
+/** AI 投降事件（Prompt 8.6；舊 replay 檔缺欄 = undefined，UI 顯示 --）。 */
+export interface ReplaySurrenderEvent {
+  readonly tick: number
+  readonly player: string
+  readonly type: 'ai_surrender'
+  readonly despairAtSurrender: number
+  readonly powerRatio: number
+  readonly incomeRatio: number
+}
+
 export interface ReplayRecord {
   /** 對局種子（同一種子 + 同一滑桿序列 → 可逐 tick 重播）。 */
   readonly seed: number
@@ -40,6 +50,8 @@ export interface ReplayRecord {
   readonly powerSeries: readonly ReplaySample[]
   /** 玩家每次改滑桿的時間點。 */
   readonly policyEvents: readonly ReplayPolicyEvent[]
+  /** AI 投降事件（Prompt 8.6；最多一筆——先投方即結束對局走向）。 */
+  readonly surrender?: ReplaySurrenderEvent
   /** 紅寶石曲線（Prompt 5；舊 replay 檔缺欄 = undefined，UI 顯示 --）。 */
   readonly rubySeries?: readonly ReplaySample[]
   readonly emeraldSeries?: readonly ReplaySample[]
@@ -61,6 +73,7 @@ export class ReplayRecorder {
   private readonly policies: ReplayPolicyEvent[] = []
   private readonly ruby: ReplaySample[] = []
   private readonly emerald: ReplaySample[] = []
+  private surrender: ReplaySurrenderEvent | null = null
 
   /** 對局中取一個雙陣營樣本（三資源、存活單位數、戰力，同一時刻成對）。 */
   sample(
@@ -89,6 +102,11 @@ export class ReplayRecorder {
     this.policies.push(event)
   }
 
+  /** 記錄 AI 投降事件（Prompt 8.6；後投方不覆蓋先投方）。 */
+  recordSurrender(event: ReplaySurrenderEvent): void {
+    if (this.surrender === null) this.surrender = event
+  }
+
   /** 對局結束：組出不可變的完整紀錄（陣列複本，之後再動紀錄器不影響已產出者）。 */
   finish(
     seed: number,
@@ -111,6 +129,7 @@ export class ReplayRecorder {
       emeraldSeries: [...this.emerald],
       finalRuby: { player: finalRuby.player, enemy: finalRuby.enemy },
       finalEmerald: { player: finalEmerald.player, enemy: finalEmerald.enemy },
+      ...(this.surrender === null ? {} : { surrender: this.surrender }),
     }
   }
 }
@@ -192,5 +211,29 @@ export function parseReplay(json: unknown): ReplayRecord {
       raw.emeraldSeries === undefined
         ? undefined
         : requireSamples(raw.emeraldSeries, 'emeraldSeries'),
+    // Prompt 8.6：投降事件可缺（舊 replay 檔）。
+    surrender: raw.surrender === undefined ? undefined : requireSurrender(raw.surrender),
+  }
+}
+
+/** 投降事件欄位驗證（可缺；型別壞擲錯）。 */
+function requireSurrender(value: unknown): ReplaySurrenderEvent {
+  if (typeof value !== 'object' || value === null) {
+    throw new Error('replay 欄位 surrender 必須是物件')
+  }
+  const raw = value as Record<string, unknown>
+  if (raw.player !== 'player' && raw.player !== 'enemy') {
+    throw new Error('replay 欄位 surrender.player 必須是 player / enemy')
+  }
+  if (raw.type !== 'ai_surrender') {
+    throw new Error('replay 欄位 surrender.type 必須是 ai_surrender')
+  }
+  return {
+    tick: requireFiniteNumber(raw.tick, 'surrender.tick'),
+    player: raw.player,
+    type: raw.type,
+    despairAtSurrender: requireFiniteNumber(raw.despairAtSurrender, 'surrender.despairAtSurrender'),
+    powerRatio: requireFiniteNumber(raw.powerRatio, 'surrender.powerRatio'),
+    incomeRatio: requireFiniteNumber(raw.incomeRatio, 'surrender.incomeRatio'),
   }
 }

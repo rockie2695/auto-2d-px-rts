@@ -261,6 +261,9 @@ export function createTestWorld(options: TestWorldOptions = {}): World {
     hash: { units: new Map(), buildings: new Map() },
     nextUnitId: 1,
     nextBuildingId: 1,
+    surrender: null,
+    initialBuildingCount: { player: 0, enemy: 0 },
+    despairBreachSince: { player: null, enemy: null },
   }
   rebuildSpatialHash(world)
   return world

@@ -66,6 +66,37 @@ describe('ReplayRecorder', () => {
   })
 })
 
+describe('投降事件（Prompt 8.6）', () => {
+  it('recordSurrender：先投方入冊、後投不覆蓋；finish 附帶 surrender', () => {
+    const recorder = new ReplayRecorder()
+    recorder.recordSurrender({
+      tick: 2400,
+      player: 'enemy',
+      type: 'ai_surrender',
+      despairAtSurrender: 0.81,
+      powerRatio: 0.4,
+      incomeRatio: 0.5,
+    })
+    recorder.recordSurrender({
+      tick: 2401,
+      player: 'player',
+      type: 'ai_surrender',
+      despairAtSurrender: 0.9,
+      powerRatio: 0.2,
+      incomeRatio: 0.3,
+    })
+    const record = recorder.finish(7, 'player', { player: 100, enemy: 900 }, 2400)
+    expect(record.surrender).toEqual({
+      tick: 2400,
+      player: 'enemy',
+      type: 'ai_surrender',
+      despairAtSurrender: 0.81,
+      powerRatio: 0.4,
+      incomeRatio: 0.5,
+    })
+  })
+})
+
 describe('parseReplay（replay 檔驗證）', () => {
   it('合法 JSON fixture → 完整 ReplayRecord', () => {
     const json = JSON.parse(JSON.stringify(FIXTURE)) as unknown
@@ -115,5 +146,34 @@ describe('parseReplay（replay 檔驗證）', () => {
     })
     expect(record.policyEvents).toHaveLength(0)
     expect(record.resourceSeries).toHaveLength(0)
+  })
+
+  it('surrender（Prompt 8.6）：可缺（舊檔 undefined）；合法原樣；壞型別擲錯', () => {
+    // 舊檔缺欄 → undefined。
+    expect(parseReplay(FIXTURE).surrender).toBeUndefined()
+
+    // 合法 → 原樣。
+    const event = {
+      tick: 2400,
+      player: 'enemy',
+      type: 'ai_surrender',
+      despairAtSurrender: 0.81,
+      powerRatio: 0.4,
+      incomeRatio: 0.5,
+    }
+    const record = parseReplay({ ...FIXTURE, surrender: event })
+    expect(record.surrender).toEqual(event)
+
+    // 壞型別：player/type 非法、非物件、數值壞。
+    expect(() =>
+      parseReplay({ ...FIXTURE, surrender: { ...event, player: 'nobody' } }),
+    ).toThrow(/surrender\.player/)
+    expect(() =>
+      parseReplay({ ...FIXTURE, surrender: { ...event, type: 'other' } }),
+    ).toThrow(/surrender\.type/)
+    expect(() => parseReplay({ ...FIXTURE, surrender: 'nope' })).toThrow(/surrender/)
+    expect(() =>
+      parseReplay({ ...FIXTURE, surrender: { ...event, despairAtSurrender: 'high' } }),
+    ).toThrow(/despairAtSurrender/)
   })
 })

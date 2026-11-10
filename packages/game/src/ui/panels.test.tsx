@@ -621,4 +621,32 @@ describe('PostGamePanel（/post-game，Prompt 10.5）', () => {
     expect(result.textContent).toBe('戰敗')
     expect(result.style.color).toBe('rgb(255, 122, 122)')
   })
+
+  it('投降橫幅（Prompt 8.6）：投降方＋絕望值＋時鐘；無投降不渲染', () => {
+    const withSurrender = render(
+      <PostGamePanel
+        replay={{
+          ...replayFixture,
+          surrender: {
+            tick: 2400,
+            player: 'enemy',
+            type: 'ai_surrender',
+            despairAtSurrender: 0.81,
+            powerRatio: 0.42,
+            incomeRatio: 0.35,
+          },
+        }}
+        onRestart={() => {}}
+      />,
+    )
+    const banner = withSurrender.querySelector('[data-testid="post-game-surrender"]')
+    expect(banner).not.toBeNull()
+    expect(banner?.textContent).toContain('2:00') // tick 2400
+    expect(banner?.textContent).toContain('敵方')
+    expect(banner?.textContent).toContain('0.81')
+
+    // 舊 replay（無投降欄）→ 不渲染橫幅。
+    const without = render(<PostGamePanel replay={replayFixture} onRestart={() => {}} />)
+    expect(without.querySelector('[data-testid="post-game-surrender"]')).toBeNull()
+  })
 })

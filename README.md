@@ -519,3 +519,30 @@ JSON 結構會按最終 schema 設計，方便日後遷移到 DB。
   覆蓋 ≥ 4 種）；tsc＋oxlint 乾淨；三鏡像探針 0 mismatch；24-seed tally
   7/9/8 不變（記錄純觀測）；`pnpm sim` 目視微操記錄（[chaseMargin]/
   [inRange]/[underFire]/[fallbackSquad]）；pnpm dev 200。
+
+- [x] 階段三 Prompt 8.6 — AI 投降判定（確認無法翻盤才投）：
+  1. **絕望指數**（`ai/surrender.ts`，0..1）：戰力／收入／領土／時間／科技
+     五項劣勢加權和；權重與參數在陣營檔 `aiSurrenderConfig`（可選，缺省
+     `DEFAULT_AI_SURRENDER_CONFIG`：閾 0.75、權重 0.35/0.25/0.15/0.15/0.10、
+     最早 120 秒、持續 15 秒；`test_faction.json` 帶一份樣例）。
+  2. **閾值修正**：有效閾 = base + 0.1×aggression + 0.05×reserve +
+     0.08×techRush（默認滑桿 0.5 → 0.865；好戰／重留守／科技流更不願投）。
+  3. **持續性**：連續超閾 `sustainSec` 才投；回到閾下即重置
+     （`world.despairBreachSince`）；對局 < 120 秒不判定。
+  4. **投降行為**：完全停戰——單位與塔停火（仍可被打）、停移動、停生產與
+     採集、生產隊列清空、AI 三層不再決策；**3 秒寬限**後結束、投降方判負
+     （`sim/matchResult.ts`——自 session 抽出，session 與 CLI 共用語義）。
+     事件寫 `world.surrender`＋replay `surrender`（可缺）＋決策日誌＋
+     結局面板橫幅（`post-game-surrender`）。
+  5. **CLI**：`pnpm sim` 印「★ AI 投降」；`SURRENDER_DEMO=1`（CLI-only
+     手柄）2 分 1 秒強制極端劣勢＋閾值暫降 0.5；`SEED`／`TOTAL_TICKS`
+     環境變數可覆寫（24-seed tally 機讀 `RESULT` 行）。
+  **驗證**——441/441 測試全過（+15：絕望公式與成分、閾值公式與夾 1、
+  三政策對照投／不投、持續性三段與反轉重置、120 秒下限與邊界、JSON 配置
+  生效與缺省回退、sim 閘門 20 tick（停火／停走／停產／停收＋敵方對照組）、
+  定案動作（清隊列／斷令）、matchEnded 寬限與判負、replay 記錄／解析／
+  舊檔相容、面板橫幅）；tsc×2＋oxlint 乾淨；session 鏡像探針 0 mismatch；
+  **24-seed tally 新基線 7 藍 / 8 紅 / 9 平、自然投降 0 例**（默認閾 0.865
+  ＋持續 15 秒是高門檻——正常對局 AI 不會誤投；公平門 12 種子 ≤ 9/側
+  不變）；`SURRENDER_DEMO=1 TOTAL_TICKS=6000 pnpm sim` 目視：2 分 1 秒清場
+  → t=2800 ★ 投降（絕望 0.70 > 閾 0.62）→ 判負 enemy；pnpm dev 200。

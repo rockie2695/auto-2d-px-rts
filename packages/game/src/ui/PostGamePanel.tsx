@@ -16,7 +16,7 @@ import type { PlotGeometry } from './chartDraw.ts'
  * 戰後復盤頁（Prompt 10.5，MVP）：對局結束後的靜態資訊頁。
  * 輸入只有一份 `ReplayRecord`（props 純渲染）——**不依賴即時 sim、不 import session/pixi**。
  * 內容：勝負結果、對局時長、雙方最終資源、完整資源曲線、單位數量曲線、
- * Policy 調整時間軸。不做：反事實建議、決策歸因、投降分析、戰鬥事件時間軸。
+ * Policy 調整時間軸、AI 投降標記（Prompt 8.6）。不做：反事實建議、決策歸因。
  */
 
 /** 結果顯示：文字與顏色（我方視角）。 */
@@ -24,6 +24,18 @@ function resultDisplay(result: ReplayRecord['result']): { text: string; color: s
   if (result === 'player') return { text: '勝利', color: '#7ce38b' }
   if (result === 'enemy') return { text: '戰敗', color: '#ff7a7a' }
   return { text: '平手', color: '#ffd866' }
+}
+
+/** AI 投降標記（Prompt 8.6）：誰投了、絕望指數與戰力／收入比。 */
+function SurrenderBanner({ surrender }: { surrender: ReplayRecord['surrender'] }) {
+  if (surrender === undefined) return null
+  const side = surrender.player === 'player' ? '我方' : '敵方'
+  return (
+    <div className="post-game-surrender" data-testid="post-game-surrender">
+      {formatClock(surrender.tick)} {side} AI 投降（絕望 {surrender.despairAtSurrender.toFixed(2)}、
+      戰力比 {surrender.powerRatio.toFixed(2)}、收入比 {surrender.incomeRatio.toFixed(2)}）
+    </div>
+  )
 }
 
 /**
@@ -136,6 +148,7 @@ export function PostGamePanel({
           最終水晶 我方 {replay.finalCrystal.player} / 敵方 {replay.finalCrystal.enemy}
         </span>
       </div>
+      <SurrenderBanner surrender={replay.surrender} />
 
       <section className="post-game-section">
         <h2>資源曲線（全程）</h2>

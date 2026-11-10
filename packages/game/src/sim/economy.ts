@@ -73,6 +73,8 @@ function stepIncome(world: World): void {
     if (def === undefined || rate === undefined) continue
     const resourceType = producedResourceOf(def)
     if (resourceType === null) continue
+    // AI 投降（Prompt 8.6）：投降方停止資源採集。
+    if (isSurrendered(world, building.player)) continue
 
     building.incomeAccMilli += Math.round(rate[resourceType] * 1000)
     let gain = Math.floor(building.incomeAccMilli / INCOME_DIVISOR)
@@ -223,9 +225,16 @@ export function spawnUnit(
 /* 生產佇列                                                            */
 /* ------------------------------------------------------------------ */
 
+/** 建築是否屬已投降方（Prompt 8.6：停生產、停採集）。 */
+function isSurrendered(world: World, playerId: PlayerId): boolean {
+  return world.surrender !== null && world.surrender.player === playerId
+}
+
 function stepProduction(world: World): void {
   for (const building of world.buildings) {
     if (!isConstructed(building) || building.queue.length === 0) continue
+    // AI 投降（Prompt 8.6）：投降方不再生產（佇列在投降當刻已清空）。
+    if (isSurrendered(world, building.player)) continue
     const job = building.queue[0]
     if (job === undefined) continue
     job.remainingTicks -= 1

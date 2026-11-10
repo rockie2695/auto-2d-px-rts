@@ -222,8 +222,11 @@ function removeDead(world: World): void {
  */
 export function stepCombat(world: World): void {
   const pending: Array<{ attackerId: number; targetUnitId: number | null; targetBuildingId: number | null; dmg: number }> = []
+  const surrenderedPlayer = world.surrender?.player ?? null
   for (const unit of world.units) {
     if (unit.hp <= 0) continue
+    // AI 投降（Prompt 8.6）：投降方單位不再開火（仍可被打）。
+    if (unit.player === surrenderedPlayer) continue
     const def = world.defs.units[unit.defId]
     if (def === undefined) throw new Error(`未知單位定義：${unit.defId}`)
 
@@ -253,6 +256,8 @@ export function stepCombat(world: World): void {
   // 建築攻擊也受「被擊殺者死亡當 tick 仍能還手」的公平性保護涵蓋）。
   for (const building of world.buildings) {
     if (building.hp <= 0 || !isConstructed(building)) continue
+    // AI 投降（Prompt 8.6）：投降方建築（含塔）停火。
+    if (building.player === surrenderedPlayer) continue
     const def = world.defs.buildings[building.defId]
     const defense = def?.defense
     if (def === undefined || defense === undefined) continue

@@ -12,7 +12,10 @@ import type { SquadMission, TacticalPlan, TacticalRecord } from './tactics.ts'
 import { focusTargets, MICRO_INTERVAL_TICKS, microRecords, runMicroCycle } from './micro.ts'
 import type { MicroRecord, MicroRecordState } from './micro.ts'
 import { createWorld, describePlayer, snapshotWorld, stepWorld } from '../sim/world.ts'
+import { matchEnded, resolveMatchResult } from '../sim/matchResult.ts'
+import { rebuildSpatialHash } from '../sim/spatialHash.ts'
 import type { PlayerId, World } from '../sim/types.ts'
+import { surrenderConfigOf } from './surrender.ts'
 
 /**
  * 組合根 CLI（`pnpm sim`）：data + sim + ai 三層在此匯合
@@ -39,9 +42,22 @@ const MISSION_LABEL: Record<SquadMission, string> = {
   retreat: '撤退',
 }
 
-const SEED = 42
-const TOTAL_TICKS = 1500
+const SEED = Number.parseInt(process.env.SEED ?? '42', 10) || 42
+/** 總 tick（CLI：`TOTAL_TICKS` 環境變數覆寫；預設 1500 ≈ 75 秒）。 */
+const TOTAL_TICKS = Number.parseInt(process.env.TOTAL_TICKS ?? '1500', 10) || 1500
 const PRINT_EVERY = 250
+
+/**
+ * AI 投降 demo 手柄（Prompt 8.6 驗收；**CLI-only，不進 sim 核心／UI**）：
+ * `SURRENDER_DEMO=1` 時——
+ * - `t=2420`（2 分 1 秒，恰過 minGameTimeSec=120）強行清空我方單位＋拆掉
+ *   我方非主堡建築（keep 保留——拆 keep 會直接觸發全滅結算、走不到投降）；
+ * - 把投降閾值暫降為 0.5（默認 0.75 的態勢下連全滅邊緣也只有 ~0.72——
+ *   0.75 就是用來防誤投的高門檻）。
+ * 目視預期：~2 分 35 秒前後印出 `★ AI 投降`、3 秒寬限後判負。
+ */
+const DEMO_TRIGGER_TICK = 2420
+const DEMO_THRESHOLD = 0.5
 
 /** 解析 `--econMilitary=0` 形式的滑桿覆寫（僅接受已知 id 與 [0,1] 數值）。 */
 function parsePolicyOverrides(argv: readonly string[]): Partial<Record<PolicyId, number>> {
@@ -187,13 +203,54 @@ function main(): void {
   }
 
   printStatus(world, decisionLog, lastPlans, tacticalLog)
+  const demo =
+    process.env.SURRENDER_DEMO === '1'
+      ? { triggered: false }
+      : null
+  if (demo !== null) {
+    // Demo 手柄：閾值暫降（JSON 可調意願的證明同時保留——正式對局走 JSON 值）。
+    world.faction = {
+      ...world.faction,
+      aiSurrenderConfig: {
+        ...surrenderConfigOf(world),
+        surrenderThreshold: DEMO_THRESHOLD,
+      },
+    }
+    console.log('[SURRENDER_DEMO] 閾值暫降為 0.5（CLI-only demo）')
+  }
   while (world.tick < TOTAL_TICKS) {
     stepWorld(world)
 
+    // Demo 手柄（CLI-only）：2 分 1 秒強行制造「極端劣勢」——清我方單位、
+    // 拆我方非主堡建築（keep 保留：拆 keep 是全滅結算、走不到投降判定）。
+    if (demo !== null && !demo.triggered && world.tick >= DEMO_TRIGGER_TICK) {
+      demo.triggered = true
+      world.units = world.units.filter((unit) => unit.player !== 'player')
+      world.buildings = world.buildings.filter(
+        (building) => building.player !== 'player' || building.defId === 'keep',
+      )
+      rebuildSpatialHash(world)
+      console.log('[SURRENDER_DEMO] 已清我方單位與非主堡建築（制造極端劣勢）')
+    }
+
     if (world.tick % STRATEGIC_INTERVAL_TICKS === 0) {
       for (const player of world.players) {
+        // AI 投降（Prompt 8.6）：投降方不再參與 AI 決策。
+        if (world.surrender?.player === player.id) continue
         const result = runStrategicCycle(world, player.id, policies[player.id])
         decisionLog.push(...result.records)
+        if (result.surrenderCheck.surrendered) {
+          console.log(
+            `t=${world.tick} ${player.id}: ★ AI 投降 絕望` +
+              `${result.surrenderCheck.despair.toFixed(2)} > 閾` +
+              `${result.surrenderCheck.threshold.toFixed(2)} ` +
+              `(powerGap ${result.surrenderCheck.components.powerGap.toFixed(2)}, ` +
+              `incomeGap ${result.surrenderCheck.components.incomeGap.toFixed(2)}, ` +
+              `territoryLoss ${result.surrenderCheck.components.territoryLoss.toFixed(2)}, ` +
+              `techGap ${result.surrenderCheck.components.techGap.toFixed(2)}); ` +
+              `3 秒後判負`,
+          )
+        }
         for (const action of result.actions) {
           if (action.kind === 'build') {
             console.log(
@@ -208,6 +265,8 @@ function main(): void {
 
     if (world.tick % TACTICAL_INTERVAL_TICKS === 0) {
       for (const player of world.players) {
+        // AI 投降（Prompt 8.6）：投降方不再參與戰術／微操。
+        if (world.surrender?.player === player.id) continue
         const plan = computeTacticalPlan(world, player.id, policies[player.id], lastPlans[player.id])
         lastPlans[player.id] = plan
         tacticalLog.push(...plan.records)
@@ -250,6 +309,7 @@ function main(): void {
     if (world.tick % MICRO_INTERVAL_TICKS === 0) {
       microCycleIndex += 1
       for (const player of world.players) {
+        if (world.surrender?.player === player.id) continue
         const decisions = runMicroCycle(world, player.id, lastPlans[player.id])
         // 微操層決策記錄（Prompt 8.5）：只在戰鬥狀態切換時產生（含 topFactor
         // ＋解釋），取代先前的「風箏首印」—手動集合；個體撤退首印仍保留
@@ -270,6 +330,16 @@ function main(): void {
       printStatus(world, decisionLog, lastPlans, tacticalLog, microLog)
     }
   }
+
+  // 24-seed tally / CI 採集用：一行機讀結果（與 session 的判定語義同源）。
+  console.log(
+    `RESULT seed=${SEED} tick=${world.tick} ended=${matchEnded(world)} ` +
+      `winner=${resolveMatchResult(world)} ` +
+      `surrender=${world.surrender === null ? 'none' : world.surrender.player}` +
+      (world.surrender === null
+        ? ''
+        : ` despair=${world.surrender.despairAtSurrender.toFixed(3)}`),
+  )
 }
 
 main()
