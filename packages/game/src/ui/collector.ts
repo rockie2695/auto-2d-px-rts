@@ -160,7 +160,7 @@ function sampleSpan(samples: readonly SamplePoint[]): number {
 export type RatioTone = 'red' | 'yellow' | 'green'
 
 /** 決策層標籤的來源型別（與 session 的 DecisionLogEntry.layer 同構）。 */
-export type DecisionLayerTag = 'strategic' | 'tactical' | 'policy'
+export type DecisionLayerTag = 'strategic' | 'tactical' | 'policy' | 'micro'
 
 /** tick（20Hz）→ `m:ss` 時鐘（日誌／小隊面板共用）。 */
 export function formatClock(tick: number): string {
@@ -170,9 +170,10 @@ export function formatClock(tick: number): string {
   return `${minutes}:${String(rest).padStart(2, '0')}`
 }
 
-/** 層級中文名：戰略／戰術／政策。 */
+/** 層級中文名：戰略／戰術／政策／微操。 */
 export function layerLabel(layer: DecisionLayerTag): string {
   if (layer === 'strategic') return '戰略'
+  if (layer === 'micro') return '微操'
   return layer === 'policy' ? '政策' : '戰術'
 }
 

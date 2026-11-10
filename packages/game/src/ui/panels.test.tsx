@@ -198,6 +198,7 @@ describe('DecisionLogPanel（左下）', () => {
     expect(layerLabel('strategic')).toBe('戰略')
     expect(layerLabel('tactical')).toBe('戰術')
     expect(layerLabel('policy')).toBe('政策')
+    expect(layerLabel('micro')).toBe('微操')
   })
 
   it('陣營色帶（Prompt 10.20）：藍列 actor-player、紅列 actor-enemy', () => {

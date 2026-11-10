@@ -119,7 +119,69 @@ export interface MicroDecision {
   attackTargetId: number | null
   /** 人類可讀的決策原因（規則生成、中文、確定性）。資訊面板直接顯示。 */
   reason: string
+  /** 決策主導因素（Prompt 8.5：記錄層歸因；與 action 不同——同一 action
+   *  有多個分支成因，如 retreat 的殘血／低於門檻二分支）。 */
+  topFactor: MicroTopFactor
 }
+
+/**
+ * 微操層決策主導因素（Prompt 8.5）：觸發分支的成因（不是 action 的複讀——
+ * 例如 `disengage` 有騷擾壓制／塔火／受火打不到三個分支，成因各自不同）。
+ */
+export type MicroTopFactor =
+  | 'hpCritical' // 殘血（< CRITICAL_HP_PCT）一律撤
+  | 'hpThreshold' // hp 低於 retreatHpPct 門檻且附近敵優勢
+  | 'harassPressured' // 騷擾隊遭優勢敵人壓制 → 脫離不硬拼
+  | 'kiteRange' // 敵距 < preferredRange × KITE_MARGIN → 風箏
+  | 'inRange' // 敵進入射程 → 接戰
+  | 'chaseMargin' // 敵在射程外一步內（含受火有支援貼身）→ 前壓接戰
+  | 'underFire' // 受火反應：塔火壓制／攻擊者打不到 → 脫離
+  | 'fallbackSquad' // 小隊級撤退（mission 'retreat'）：邊退邊打
+  | 'formation' // 移往隊形位／攻城接近格
+  | 'rally' // 未編隊 → 出廠集合格
+
+/** 動作中文名（記錄 explanation 開頭用）。 */
+const MICRO_ACTION_LABEL: Readonly<Record<MicroAction, string>> = {
+  retreat: '撤退',
+  attack: '攻擊',
+  kite: '風箏',
+  chase: '追擊',
+  disengage: '脫離',
+  fallback: '小隊撤退',
+  formation: '編隊',
+  rally: '集結',
+}
+
+/** 戰鬥態動作（Prompt 8.5 記錄過濾：切換的任一端 ∈ 此集合才記錄）。 */
+const COMBAT_ACTIONS: ReadonlySet<MicroAction> = new Set<MicroAction>([
+  'retreat',
+  'attack',
+  'kite',
+  'chase',
+  'disengage',
+  'fallback',
+])
+
+/**
+ * 微操層決策記錄（Prompt 8.5）：與戰略／戰術記錄同構、獨立型別。
+ * **只在戰鬥狀態切換時產生**（見 `microRecords`），避免每微操循環爆量。
+ */
+export interface MicroRecord {
+  tick: number
+  layer: 'micro'
+  actor: PlayerId
+  action: MicroAction
+  /** `u{單位id}`，有攻擊目標時附 `←t{目標id}`。 */
+  target: string
+  reason: {
+    topFactor: MicroTopFactor
+    /** 一行中文解釋，例：「撤退。理由：hp 22% < 閾值 25%」。 */
+    explanation: string
+  }
+}
+
+/** 每單位的微操狀態（記錄 diff 用）：上次動作＋上次被記錄的循環序號。 */
+export type MicroRecordState = Map<number, { action: MicroAction; lastRecordedCycle: number }>
 
 /** 環狀隊形偏移（radius 0→3，共 49 格，足夠 squadSize 上限 18）。 */
 const FORMATION_OFFSETS: readonly TilePos[] = (() => {
@@ -453,6 +515,7 @@ export function computeMicroPlan(
           moveDest: shouldIssueMove(world, unit, rally) ? { x: rally.x, y: rally.y } : null,
           attackTargetId: target?.id ?? null,
           reason: target !== null ? `${why}（邊退邊打）` : why,
+          topFactor: critical ? 'hpCritical' : 'hpThreshold',
         })
         continue
       }
@@ -481,6 +544,7 @@ export function computeMicroPlan(
             moveDest: shouldIssueMove(world, unit, escape) ? escape : null,
             attackTargetId: null,
             reason: `騷擾隊遭優勢敵人壓制（威脅 ${Math.round(threatMilli / 1000)} > 我隊戰力 ${squad.power} × 0.9）：脫離不硬拼`,
+            topFactor: 'harassPressured',
           })
           continue
         }
@@ -515,6 +579,7 @@ export function computeMicroPlan(
             moveDest: shouldIssueMove(world, unit, dest) ? dest : null,
             attackTargetId: target.id,
             reason: `敵距 ${(Math.sqrt(nearest.distSq) / UNITS_PER_TILE).toFixed(1)} 格 < ${def.ai.preferredRange * KITE_MARGIN} 格：邊退邊打`,
+            topFactor: 'kiteRange',
           })
           continue
         }
@@ -530,6 +595,7 @@ export function computeMicroPlan(
           target.id === focus?.id
             ? `集火同隊目標 #${target.id}（射程內）`
             : `敵人 #${target.id} 進入射程`,
+        topFactor: 'inRange',
       })
       continue
     }
@@ -561,7 +627,8 @@ export function computeMicroPlan(
           squadIndex,
           moveDest: shouldIssueMove(world, unit, cover) ? cover : null,
           attackTargetId: null,
-          reason: `塔火壓制（${tower.defId} #${tower.id}，非攻城目標）：撤出射程`,
+            reason: `塔火壓制（${tower.defId} #${tower.id}，非攻城目標）：撤出射程`,
+            topFactor: 'underFire',
         })
         continue
       }
@@ -586,6 +653,7 @@ export function computeMicroPlan(
             moveDest: shouldIssueMove(world, unit, enemyTile) ? enemyTile : null,
             attackTargetId: near.unit.id,
             reason: `受火反應：攻擊者 #${near.unit.id} 壓制中（${(Math.sqrt(near.distSq) / UNITS_PER_TILE).toFixed(1)} 格）——有支援，貼身接戰`,
+            topFactor: 'chaseMargin',
           })
           continue
         }
@@ -598,6 +666,7 @@ export function computeMicroPlan(
           moveDest: shouldIssueMove(world, unit, cover) ? cover : null,
           attackTargetId: null,
           reason: `受火反應：攻擊者 #${near.unit.id} 距 ${(Math.sqrt(near.distSq) / UNITS_PER_TILE).toFixed(1)} 格打不到——脫離不站樁挨打`,
+          topFactor: 'underFire',
         })
         continue
       }
@@ -629,6 +698,7 @@ export function computeMicroPlan(
             moveDest: shouldIssueMove(world, unit, enemyTile) ? enemyTile : null,
             attackTargetId: near.unit.id,
             reason: `敵人 #${near.unit.id} 在追擊距離內（${(Math.sqrt(near.distSq) / UNITS_PER_TILE).toFixed(1)} 格，射程 ${(rangeFixed / UNITS_PER_TILE).toFixed(1)} 格）：前壓接戰`,
+            topFactor: 'chaseMargin',
           })
           continue
         }
@@ -650,6 +720,7 @@ export function computeMicroPlan(
         reason: inRange !== null
           ? `小隊受襲撤退：邊退邊打 #${inRange.id}，撤回集結點等待支援`
           : '小隊受襲撤退：撤回集結點等待支援',
+        topFactor: 'fallbackSquad',
       })
       continue
     }
@@ -685,6 +756,7 @@ export function computeMicroPlan(
         reason: siege
           ? `小隊 #${squadIndex}（${squad.mission}）攻城接近格 (${slot.x},${slot.y})（原隊形位在射程外）`
           : `小隊 #${squadIndex}（${squad.mission}）→ 隊形位 (${slot.x},${slot.y})`,
+        topFactor: 'formation',
       })
       continue
     }
@@ -712,6 +784,7 @@ export function computeMicroPlan(
           : atGather
             ? `未編隊：在出廠集合格待命（${buildingName}）`
             : `未編隊：前往出廠集合格（${buildingName}）`,
+      topFactor: 'rally',
     })
   }
 
@@ -735,4 +808,63 @@ export function runMicroCycle(
   const decisions = computeMicroPlan(world, playerId, plan)
   applyMicroPlan(world, decisions)
   return decisions
+}
+
+/**
+ * 微操層決策記錄（Prompt 8.5）：**只在戰鬥狀態切換時**產生記錄。
+ * - 切換＝本循環 action 與該單位上次 action 不同，且切換的**任一端**屬
+ *   戰鬥態（`COMBAT_ACTIONS`）——formation↔rally 的常規巡迴切換不記。
+ * - 防抖：同一單位兩條記錄至少相隔 `cooldownCycles` 個微操循環（預設 20
+ *   ＝每微操循環 2 tick × 20 ＝ 40 tick）——杜絕「進出射程」震盪刷屏。
+ * - 首次進入戰鬥態（無上次動作）＝狀態入場，記錄且不受防抖約束。
+ *
+ * 純函式、無副作用：狀態由呼叫端持有（`state` 就地更新），對 sim 與決策
+ * **零影響**（記錄不進 replay）。回傳值確定性：決策順序＝單位順序。
+ */
+export function microRecords(
+  playerId: PlayerId,
+  tick: number,
+  decisions: readonly MicroDecision[],
+  state: MicroRecordState,
+  cycleIndex: number,
+  cooldownCycles = 20,
+): MicroRecord[] {
+  const records: MicroRecord[] = []
+  for (const decision of decisions) {
+    const before = state.get(decision.unitId)
+    const anchor = before?.lastRecordedCycle ?? Number.NEGATIVE_INFINITY
+    const changed =
+      before !== undefined &&
+      before.action !== decision.action &&
+      (COMBAT_ACTIONS.has(decision.action) || COMBAT_ACTIONS.has(before.action))
+    // 首次進入戰鬥態（狀態入場）或戰鬥態間切換且過防抖 → 記錄。
+    const entering =
+      before === undefined && COMBAT_ACTIONS.has(decision.action)
+    const shouldRecord =
+      entering || (changed && before !== undefined && cycleIndex - anchor >= cooldownCycles)
+    if (shouldRecord) {
+      records.push({
+        tick,
+        layer: 'micro',
+        actor: playerId,
+        action: decision.action,
+        target:
+          decision.attackTargetId === null
+            ? `u${decision.unitId}`
+            : `u${decision.unitId}←t${decision.attackTargetId}`,
+        reason: {
+          topFactor: decision.topFactor,
+          explanation: `${MICRO_ACTION_LABEL[decision.action]}。理由：${decision.reason}`,
+        },
+      })
+    }
+    // 狀態與冷卻錨點：action 始終推進（反映最新決策）；`lastRecordedCycle`
+    // 只在**真的記錄**時推進（被防抖壓制的切換不重置冷卻，否則高頻震盪會把
+    // 記錄永遠往後推）。
+    state.set(decision.unitId, {
+      action: decision.action,
+      lastRecordedCycle: shouldRecord ? cycleIndex : anchor,
+    })
+  }
+  return records
 }

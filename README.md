@@ -499,3 +499,23 @@ JSON 結構會按最終 schema 設計，方便日後遷移到 DB。
   reserve/waveGate/contact/defense 成因覆蓋）；tsc＋oxlint 乾淨；三鏡像探針
   0 mismatch；24-seed tally 7/9/8 不變（純觀測零副作用）；`pnpm sim` 目視
   戰術記錄與候選分數；pnpm dev 200。
+
+- [x] 階段三 Prompt 8.5 — AI 微操層決策記錄：
+  1. **資料模型**（micro.ts）：`MicroRecord`＋純函式 `microRecords`
+     （處理中狀態由呼叫端持有；sim／decisions 零影響）；
+     `MicroDecision.topFactor` 於 11 個 push 點顯式標注（撤退二分支
+     hpCritical/hpThreshold、harassPressured、kiteRange、inRange、
+     chaseMargin、underFire、fallbackSquad、formation、rally）。
+  2. **只在戰鬥狀態切換時記錄**：任一端 ∈ 戰鬥態六集合（formation↔rally
+     常規切換不記；首次進入戰鬥態＝入場記錄）；同單位 20 微操循環防抖
+     （40 tick；冷卻錨只在真記錄時推進，震盪不會無限後推）。
+  3. **消費**：session 全量進決策日誌（新層 `'micro'`；面板加「微操」篩選
+     片＋layerLabel）；`pnpm sim` 印「最近的微操決策（5 條）」取代先前的
+     風箏手寫首印；不進 replay。
+  **驗證**——426/426 測試全過（+10：入場／切換記錄、formation↔rally 零
+  記錄、防抖壓制與錨點、explanation 格式與 target、真實世界撤退記錄
+  hpCritical、500 tick 只在切換（相鄰同動作間隔 ≥ 40 tick 硬不變量）與
+  數量 ≪ 決策 1/10、同 seed deep-equal＋位置一致、不同 seed 不同、成因
+  覆蓋 ≥ 4 種）；tsc＋oxlint 乾淨；三鏡像探針 0 mismatch；24-seed tally
+  7/9/8 不變（記錄純觀測）；`pnpm sim` 目視微操記錄（[chaseMargin]/
+  [inRange]/[underFire]/[fallbackSquad]）；pnpm dev 200。

@@ -19,7 +19,7 @@ const LOG_SHOWN = 20
 /** 陣營篩選（藍／紅；null＝全部）。 */
 type TeamFilter = 'all' | 'player' | 'enemy'
 
-/** 層級篩選（戰略／戰術／政策；null＝全部）。 */
+/** 層級篩選（戰略／戰術／政策／微操；null＝全部）。 */
 type LayerFilter = DecisionLogEntry['layer'] | 'all'
 
 const TEAM_CHIPS: readonly { key: TeamFilter; label: string }[] = [
@@ -33,6 +33,7 @@ const LAYER_CHIPS: readonly { key: LayerFilter; label: string }[] = [
   { key: 'strategic', label: '戰略' },
   { key: 'tactical', label: '戰術' },
   { key: 'policy', label: '政策' },
+  { key: 'micro', label: '微操' },
 ]
 
 export function DecisionLogPanel({ entries }: { entries: readonly DecisionLogEntry[] }) {

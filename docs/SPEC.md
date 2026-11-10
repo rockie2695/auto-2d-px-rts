@@ -523,6 +523,26 @@ reason:{candidates, weights, topFactor, explanation}}`。
   循環刷屏）；`pnpm sim` 印「最近的戰術決策（5 條）」含 **top-3 候選分數**；
   記錄純觀測、不影響任何決策（對局與鏡像不變）。
 
+**實作補註（階段三 Prompt 8.5，SPEC 變更）**：**微操層決策記錄**——
+`MicroRecord`（`{tick, layer:'micro', actor, action: MicroAction,
+target:'u{id}[←t{目標id}]', reason:{topFactor, explanation}}`），由**純函式**
+`microRecords`（micro.ts）從每微操循環的決策 diff 產生（狀態由呼叫端持有；
+對 sim／decisions 零影響、不進 replay）：
+- **只在戰鬥狀態切換時記錄**：切換的任一端 ∈ 戰鬥態
+  `{retreat, attack, kite, chase, disengage, fallback}`——常規
+  formation↔rally 巡迴切換不記；首次進入戰鬥態＝狀態入場，記錄。
+- **防抖**：同一單位兩條記錄至少相隔 20 個微操循環（40 tick）；冷卻錨只在
+  「真的記錄」時推進（受壓切的切換不重置——高頻震盪不會無限後推記錄）。
+- **topFactor 顯式標注**（`MicroDecision.topFactor`，11 個 push 點逐一標）：
+  `hpCritical`／`hpThreshold`（撤退二分支）／`harassPressured`（騷擾壓制
+  脫離）／`kiteRange`／`inRange`／`chaseMargin`（追擊，含受火有支援貼身）／
+  `underFire`（塔火／受火打不到的脫離）／`fallbackSquad`／`formation`／
+  `rally`；`explanation` ＝「撤退。理由：hp 22% 殘血…」（中文動作＋既有
+  規則 reason）。
+- 消費：記錄只在切換時產生 → session 全量進決策日誌（新層 `'micro'`，
+  決策日誌面板加「微操」篩選片）；`pnpm sim` 印「最近的微操決策（5 條）」
+  （取代先前的風箏手寫首印）。
+
 **實作補註（Prompt 10.24，SPEC 變更）**：**塔火進入接觸評估＋求援收口**——
 - **塔火接觸**：敵方帶 `defense` 的**已完工**建築若防禦射程覆蓋小隊重心 → 視為
   接觸（unit 掃描對塔隱形是守備隊站樁被點射到死的根因）。威脅 =

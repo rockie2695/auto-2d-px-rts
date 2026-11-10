@@ -9,7 +9,8 @@ import { runStrategicCycle, STRATEGIC_INTERVAL_TICKS } from './strategy.ts'
 import type { DecisionRecord } from './strategy.ts'
 import { computeTacticalPlan, TACTICAL_INTERVAL_TICKS } from './tactics.ts'
 import type { SquadMission, TacticalPlan, TacticalRecord } from './tactics.ts'
-import { focusTargets, MICRO_INTERVAL_TICKS, runMicroCycle } from './micro.ts'
+import { focusTargets, MICRO_INTERVAL_TICKS, microRecords, runMicroCycle } from './micro.ts'
+import type { MicroRecord, MicroRecordState } from './micro.ts'
 import { createWorld, describePlayer, snapshotWorld, stepWorld } from '../sim/world.ts'
 import type { PlayerId, World } from '../sim/types.ts'
 
@@ -75,6 +76,7 @@ function printStatus(
   records: readonly DecisionRecord[],
   plans: Record<PlayerId, TacticalPlan | null>,
   tacticalRecords: readonly TacticalRecord[] = [],
+  microRecordsOut: readonly MicroRecord[] = [],
 ): void {
   console.log(`--- tick ${world.tick} ---`)
   for (const player of world.players) {
@@ -131,6 +133,18 @@ function printStatus(
       )
     }
   }
+
+  // 微操層決策記錄（Prompt 8.5）：最近 5 條（僅戰鬥狀態切換，附觸發成因）。
+  const recentMicro = microRecordsOut.slice(-5)
+  if (recentMicro.length > 0) {
+    console.log(`  最近微操決策（${recentMicro.length}/${microRecordsOut.length} 條）:`)
+    for (const record of recentMicro) {
+      console.log(
+        `    t=${record.tick} ${record.actor}: ${record.target}` +
+          ` [${record.reason.topFactor}] — ${record.reason.explanation}`,
+      )
+    }
+  }
 }
 
 function main(): void {
@@ -150,10 +164,17 @@ function main(): void {
   const decisionLog: DecisionRecord[] = []
   /** 戰術層決策記錄（Prompt 7.5）：只保留最近 500 條（CLI 目視用）。 */
   const tacticalLog: TacticalRecord[] = []
+  /** 微操層決策記錄（Prompt 8.5）：只保留最近 500 條（CLI 目視用）。 */
+  const microLog: MicroRecord[] = []
+  /** microRecords 的每單位狀態（上次動作＋上次記錄循環；呼叫端持有）。 */
+  const microStates: Record<PlayerId, MicroRecordState> = {
+    player: new Map(),
+    enemy: new Map(),
+  }
+  let microCycleIndex = 0
   const lastPlans: Record<PlayerId, TacticalPlan | null> = { player: null, enemy: null }
   const prevMissions: Record<PlayerId, SquadMission[]> = { player: [], enemy: [] }
   const reportedDisengaged: Record<PlayerId, Set<number>> = { player: new Set(), enemy: new Set() }
-  const kitingUnits: Record<PlayerId, Set<number>> = { player: new Set(), enemy: new Set() }
 
   // tick 0 先算一次戰術計畫，讓微操層從第 1 tick 起就有小隊目標。
   for (const player of world.players) {
@@ -227,28 +248,27 @@ function main(): void {
     }
 
     if (world.tick % MICRO_INTERVAL_TICKS === 0) {
+      microCycleIndex += 1
       for (const player of world.players) {
         const decisions = runMicroCycle(world, player.id, lastPlans[player.id])
-
-        // 風箏：首次進入風箏狀態時印一次（離開時靜默清除）。
-        const kiting = kitingUnits[player.id]
-        for (const decision of decisions) {
-          if (decision.action !== 'kite') {
-            kiting.delete(decision.unitId)
-            continue
-          }
-          if (kiting.has(decision.unitId)) continue
-          kiting.add(decision.unitId)
-          const dest = decision.moveDest
-          console.log(
-            `t=${world.tick} ${player.id}: unit ${decision.unitId} 風箏` +
-              (dest === null ? '' : ` → (${dest.x},${dest.y})`),
-          )
-        }
+        // 微操層決策記錄（Prompt 8.5）：只在戰鬥狀態切換時產生（含 topFactor
+        // ＋解釋），取代先前的「風箏首印」—手動集合；個體撤退首印仍保留
+        //（`disengaged` 事件的狀態、不與本記錄重複）。
+        const records = microRecords(
+          player.id,
+          world.tick,
+          decisions,
+          microStates[player.id],
+          microCycleIndex,
+        )
+        microLog.push(...records)
+        if (microLog.length > 500) microLog.splice(0, microLog.length - 500)
       }
     }
 
-    if (world.tick % PRINT_EVERY === 0) printStatus(world, decisionLog, lastPlans, tacticalLog)
+    if (world.tick % PRINT_EVERY === 0) {
+      printStatus(world, decisionLog, lastPlans, tacticalLog, microLog)
+    }
   }
 }
 

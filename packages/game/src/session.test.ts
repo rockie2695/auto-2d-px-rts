@@ -90,7 +90,7 @@ describe('組合根 getUnitInfo / getBattleStats（Prompt 9.5）', () => {
     expect(stats.log.length).toBeGreaterThan(0)
     for (const entry of stats.log) {
       expect(entry.text.length).toBeGreaterThan(0)
-      expect(['strategic', 'tactical']).toContain(entry.layer)
+      expect(['strategic', 'tactical', 'micro']).toContain(entry.layer)
     }
 
     // 有小隊任務的單位，其資訊同時帶「當下微操決策」。

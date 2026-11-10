@@ -1,8 +1,8 @@
 import type { Application, Ticker } from 'pixi.js'
 import type { ResourceAmount, ResourceId } from '@auto-2d-px-rts/shared'
 
-import { MICRO_INTERVAL_TICKS, runMicroCycle } from './ai/micro.ts'
-import type { MicroDecision } from './ai/micro.ts'
+import { MICRO_INTERVAL_TICKS, microRecords, runMicroCycle } from './ai/micro.ts'
+import type { MicroDecision, MicroRecordState } from './ai/micro.ts'
 import { DEFAULT_POLICIES, resolvePolicies } from './ai/policy.ts'
 import { POLICY_IDS } from '@auto-2d-px-rts/shared'
 import type { PolicyValues } from './ai/policy.ts'
@@ -36,12 +36,15 @@ function matchSeed(): number {
   return Math.floor(Math.random() * 2 ** 31)
 }
 
-/** 決策日誌單條（Prompt 9.5：左下面板顯示；戰略紀錄＋戰術小隊變動＋政策變更）。 */
+/**
+ * 決策日誌單條（Prompt 9.5：左下面板顯示；戰略紀錄＋戰術小隊變動＋政策變更；
+ * Prompt 8.5 起含微操層戰鬥狀態切換記錄）。
+ */
 export interface DecisionLogEntry {
   /** 單調遞增序號（面板 key 用；同 tick 同文字的兩條也不會撞）。 */
   readonly sequence: number
   readonly tick: number
-  readonly layer: 'strategic' | 'tactical' | 'policy'
+  readonly layer: 'strategic' | 'tactical' | 'policy' | 'micro'
   readonly actor: PlayerId
   /** 一行中文：動作＋原因（戰略例 `build mine（…）`）。 */
   readonly text: string
@@ -348,6 +351,12 @@ export async function startGameSession(app: Application, scene: GameScene): Prom
   pushMarkers()
   // 每玩家最新的微操決策（Prompt 9.4：點單位顯示 AI 當下在想什麼）。
   const latestMicro: Record<PlayerId, MicroDecision[]> = { player: [], enemy: [] }
+  // 微操層決策記錄狀態（Prompt 8.5）：每單位上次動作＋上次記錄循環（microRecords 就地更新）。
+  const microRecordState: Record<PlayerId, MicroRecordState> = {
+    player: new Map(),
+    enemy: new Map(),
+  }
+  let microCycleIndex = 0
   // 決策日誌（Prompt 9.5：戰略紀錄＋戰術小隊變動；面板取最後 5 條）。
   const decisionLog: DecisionLogEntry[] = []
   const LOG_LIMIT = 32
@@ -551,6 +560,26 @@ export async function startGameSession(app: Application, scene: GameScene): Prom
     if (w.tick % MICRO_INTERVAL_TICKS === 0) {
       for (const player of w.players) {
         latestMicro[player.id] = runMicroCycle(w, player.id, plans[player.id])
+      }
+      // 微操層決策記錄（Prompt 8.5）：`microRecords` 只在戰鬥狀態切換時產生
+      // （formation↔rally 常規切換不記；同單位 20 循環防抖），因此全量進日誌。
+      microCycleIndex += 1
+      for (const player of w.players) {
+        const records = microRecords(
+          player.id,
+          w.tick,
+          latestMicro[player.id],
+          microRecordState[player.id],
+          microCycleIndex,
+        )
+        for (const record of records) {
+          pushLog({
+            tick: w.tick,
+            layer: 'micro',
+            actor: player.id,
+            text: `${record.reason.explanation}（[${record.reason.topFactor}] ${record.target}）`,
+          })
+        }
       }
     }
     if (w.tick % REPLAY_SAMPLE_INTERVAL_TICKS === 0) {
