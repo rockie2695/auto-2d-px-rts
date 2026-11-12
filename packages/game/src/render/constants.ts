@@ -10,6 +10,9 @@ export const UNIT_RENDER_SIZE = 20
 /** 血條高度（px）。 */
 export const HP_BAR_HEIGHT = 3
 
+/** 裝甲條高度（px；Prompt 9.5 完整版：血條與單位色塊之間）。 */
+export const ARMOR_BAR_HEIGHT = 2
+
 /* ---- 配色（像素風深色主題）---- */
 
 /** 地板（可走格）。 */

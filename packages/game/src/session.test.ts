@@ -121,7 +121,39 @@ describe('組合根 getUnitInfo / getBattleStats（Prompt 9.5）', () => {
     // playerPower ≥ 3 × 125 × 12 × 1.2（受傷只會降低，不會低於 0）。
     expect(stats.playerPower).toBeGreaterThan(0)
 
-      session.stop()
+    // per-tier 堆疊（Prompt 9.5 完整版）：內容檔只有 small tier；
+    // rawHp = 現值 HP 總和、effHp ≥ rawHp（armor > 0 攤薄）。
+    expect(stats.playerTiers.small.rawHp).toBeGreaterThan(0)
+    expect(stats.playerTiers.small.effHp).toBeGreaterThan(stats.playerTiers.small.rawHp)
+    expect(stats.playerTiers.medium.rawHp).toBe(0)
+    expect(stats.playerTiers.large.rawHp).toBe(0)
+    expect(stats.enemyTiers.small.rawHp).toBeGreaterThan(0)
+
+    // 小隊資訊帶 engaging（Prompt 9.5 完整版：右下面板黃燈）。
+    for (const squad of stats.squads) {
+      expect(squad.engaging).toBeTypeOf('boolean')
+    }
+
+    // 戰略層日誌帶候選快照與裝甲分檔（Prompt 9.5 完整版）。
+    const strategicEntry = stats.log.find((item) => item.layer === 'strategic')
+    if (strategicEntry !== undefined) {
+      expect(strategicEntry.candidates !== undefined).toBe(true)
+      expect(strategicEntry.topFactor !== undefined).toBe(true)
+      expect(strategicEntry.armorTier).toBeDefined()
+    }
+
+    // getInfluence（Prompt 9.5 完整版）：同 tick 重複呼叫回同一物件（緩存）。
+    const map1 = session.getInfluence()
+    const map2 = session.getInfluence()
+    expect(map1).toBe(map2)
+    expect(map1.gridSize).toBeGreaterThan(0)
+    expect(map1.cellTiles).toBe(8)
+    // 跨 tick → 新物件（重算）。
+    await app.onFrame(1000)
+    const map3 = session.getInfluence()
+    expect(map3).not.toBe(map1)
+
+    session.stop()
     expect(app.ticker.remove).toHaveBeenCalledOnce()
   })
 })

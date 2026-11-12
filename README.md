@@ -546,3 +546,31 @@ JSON 結構會按最終 schema 設計，方便日後遷移到 DB。
   ＋持續 15 秒是高門檻——正常對局 AI 不會誤投；公平門 12 種子 ≤ 9/側
   不變）；`SURRENDER_DEMO=1 TOTAL_TICKS=6000 pnpm sim` 目視：2 分 1 秒清場
   → t=2800 ★ 投降（絕望 0.70 > 閾 0.62）→ 判負 enemy；pnpm dev 200。
+
+- [x] 階段三 Prompt 9.5a — 四象限圖表與熱力圖（純觀測輪；9.5b 視野迷霧續作）：
+  1. **依賴**：`uplot` 加入 game（~50KB 純 canvas 無子依賴）。
+  2. **左上**：資源曲線改 **uPlot 三線**（我方藍水晶／紅寶石／綠翡翠，
+     60 秒滾動窗、tick÷20 秒軸、nearest 像素風、無平滑）＋**線尾收入率**
+     （`x.x/s`，取 `playerIncomes`）；「單位數量／戰力」canvas 雙線模式
+     保留為同面板下拉切換；**圖表取樣 1Hz**（與 250ms 文字輪詢分離）。
+  3. **右上**：`PowerStack` 戰力對比——每陣營**原始 HP／有效 HP 兩根**
+     three-tier 堆疊條（共用比例尺）＋戰力比 `ratioTone` 警示。
+  4. **左下**：決策日誌最近 **10 條**、`LOG_LIMIT` 32→100；戰略條目
+     **點擊展開候選柱狀圖**（最高分金色高亮＋topFactor，CSS transition）；
+     政策變更後條目掛「受政策影響」標；裝甲色標（重紫／超重金，
+     `render/armor.ts` 四檔色階）。
+  5. **右下**：小隊狀態**色點**（撤退紅／交戰黃／其餘綠；`SquadInfo.engaging`
+     進數據層；`squadTone` 撤退蓋過交戰）。
+  6. **可疊加圖層**（`overlay-controls` 開關）：熱力圖（`getInfluence`
+     tick 緩存 → 離屏 canvas 每格一像素紅/藍 → Texture nearest 貼地圖，
+     UI 500ms 刷新、開關只切 `visible`）、迷霧層 API（9.5b 接 sight.ts）、
+     路徑**逐格虛線**（替代極淡直線）。
+  7. **裝甲條**：血條與單位色塊之間插 2px 條（armor > 0 才畫），
+     寬度 = armor ÷ 0.8，四檔顏色（輕綠/中藍/重紫/超重金）。
+  **驗證**——455/455 測試全過（+14：armor 四檔色階與邊界、條寬 armor÷0.8、
+  熱力圖格顏色映射（敵紅/我藍/全透明/強度歸一）、uPlot 三序列資料構建與
+  setData、日誌 10 條與篩選切片、展開柱狀圖（最高分滿寬高亮／收起）、
+  裝甲色標精確色、政策標記範圍、小隊三色點、per-tier rawHp/effHp、
+  小隊 engaging、戰略日誌 candidates/topFactor/armorTier、getInfluence
+  同 tick 同物件跨 tick 重算）；tsc×2＋oxlint 乾淨；**24-seed tally
+  7 藍/8 紅/9 平不變**（純觀測零 sim 改動）；pnpm dev 目視四象限。

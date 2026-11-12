@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { chartDomain, chartPoints, ratioTone, ResourceSeries } from './collector.ts'
+import { chartDomain, chartPoints, ratioTone, ResourceSeries, squadTone, uplotTripleData } from './collector.ts'
 
 /**
  * 戰況面板純邏輯測試（Prompt 9.5 / Prompt 10）：
@@ -130,5 +130,44 @@ describe('chartPoints 曲線座標', () => {
     )
     expect(Number.isFinite(points[0]?.y)).toBe(true)
     expect(Number.isFinite(points[1]?.y)).toBe(true)
+  })
+})
+
+describe('uplotTripleData（Prompt 9.5 完整版：uPlot 三資源資料構建）', () => {
+  it('x = tick ÷ 20（秒）、三序列取 player 值、順序＝藍／紅／綠', () => {
+    const crystal = [
+      { tick: 0, player: 600, enemy: 600 },
+      { tick: 40, player: 620, enemy: 610 },
+    ]
+    const ruby = [
+      { tick: 0, player: 0, enemy: 5 },
+      { tick: 40, player: 8, enemy: 9 },
+    ]
+    const emerald = [
+      { tick: 0, player: 0, enemy: 0 },
+      { tick: 40, player: 3, enemy: 3 },
+    ]
+    const [xs, blue, red, green] = uplotTripleData(crystal, ruby, emerald)
+    expect(xs).toEqual([0, 2])
+    expect(blue).toEqual([600, 620])
+    expect(red).toEqual([0, 8])
+    expect(green).toEqual([0, 3])
+  })
+
+  it('空樣本 → 全空陣列（component 走「不建實例」分支）', () => {
+    const data = uplotTripleData([], [], [])
+    expect(data[0].length).toBe(0)
+    expect(data[1].length).toBe(0)
+  })
+})
+
+describe('squadTone（Prompt 9.5 完整版：小隊狀態色）', () => {
+  it('撤退紅、交戰黃、其餘綠；retreat 蓋過 engaging', () => {
+    expect(squadTone('retreat', false)).toBe('red')
+    expect(squadTone('attack', true)).toBe('yellow')
+    expect(squadTone('defend', false)).toBe('green')
+    expect(squadTone('harass', false)).toBe('green')
+    expect(squadTone('stage', false)).toBe('green')
+    expect(squadTone('retreat', true)).toBe('red') // 撤退優先
   })
 })

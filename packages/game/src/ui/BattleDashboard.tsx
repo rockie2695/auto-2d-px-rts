@@ -3,17 +3,29 @@ import type { ReactNode } from 'react'
 
 import type { PolicyValues } from '../ai/policy.ts'
 import { getActiveSession } from '../session.ts'
-import type { BattleStats, PolicySnapshot } from '../session.ts'
+import type { BattleStats, PolicySnapshot, TierHpTable } from '../session.ts'
 import { formatClock, ResourceSeries } from './collector.ts'
 import type { SamplePoint } from './collector.ts'
 import { DecisionLogPanel } from './DecisionLogPanel.tsx'
+import { OverlayControls } from './OverlayControls.tsx'
 import { PolicyPanel } from './PolicyPanel.tsx'
+import { PowerStack } from './PowerStack.tsx'
 import { ResourceChart } from './ResourceChart.tsx'
 import { ResourcePanel } from './ResourcePanel.tsx'
 import { SquadPanel } from './SquadPanel.tsx'
 
+/** 圖表取樣前的空堆疊表（未掛 session 時的占位）。 */
+const EMPTY_TIERS: TierHpTable = {
+  small: { rawHp: 0, effHp: 0 },
+  medium: { rawHp: 0, effHp: 0 },
+  large: { rawHp: 0, effHp: 0 },
+}
+
 /** 面板輪詢間隔：四角面板是文字/曲線，250ms（~4Hz）夠流暢又不吃效能。 */
 const POLL_MS = 250
+
+/** 圖表取樣間隔（Prompt 9.5 完整版：圖表每秒更新 1 次）。 */
+const CHART_MS = 1000
 
 /** 戰力比：我方/敵方；敵方為 0 時回傳無限大（綠燈優勢）。 */
 function powerRatio(playerPower: number, enemyPower: number): number {
@@ -59,12 +71,19 @@ export function BattleDashboard({ children }: { children?: ReactNode }) {
       }
     }
     const { crystal, units, power, ruby, emerald } = seriesRef.current
+    // 文字面板輪詢（250ms）：只取 stats／policy——曲線不在這裡取樣。
     const refresh = (): void => {
       const active = getActiveSession()
       if (active === null) return
-      const next = active.getBattleStats()
-      setStats(next)
+      setStats(active.getBattleStats())
       setPolicy(active.getPolicies('player'))
+    }
+    // 圖表取樣（Prompt 9.5 完整版：圖表每秒更新 1 次）：獨立 1Hz interval
+    // 推環並轉發曲線樣本——文字 4Hz、曲線 1Hz，各走各的。
+    const sample = (): void => {
+      const active = getActiveSession()
+      if (active === null) return
+      const next = active.getBattleStats()
       crystal.push(next.tick, next.playerCrystal, next.enemyCrystal)
       units.push(next.tick, next.playerUnits, next.enemyUnits)
       power.push(next.tick, next.playerPower, next.enemyPower)
@@ -81,9 +100,12 @@ export function BattleDashboard({ children }: { children?: ReactNode }) {
       })
     }
     const timer = window.setInterval(refresh, POLL_MS)
-    refresh() // 掛載即取一次樣本：曲線第一格就有雙方資料（不等 250ms）
+    const chartTimer = window.setInterval(sample, CHART_MS)
+    refresh() // 掛載即取一次樣本：面板第一格就有資料
+    sample()
     return () => {
       window.clearInterval(timer)
+      window.clearInterval(chartTimer)
     }
   }, [])
 
@@ -117,6 +139,7 @@ export function BattleDashboard({ children }: { children?: ReactNode }) {
         powerSamples={curve.power}
         rubySamples={curve.ruby}
         emeraldSamples={curve.emerald}
+        playerIncomes={stats?.playerIncomes}
       />
       <div className="hud-top-right">
         <ResourcePanel
@@ -134,8 +157,14 @@ export function BattleDashboard({ children }: { children?: ReactNode }) {
           }
           ratio={ratio}
         />
+        <PowerStack
+          playerTiers={stats?.playerTiers ?? EMPTY_TIERS}
+          enemyTiers={stats?.enemyTiers ?? EMPTY_TIERS}
+          ratio={ratio}
+        />
         {children}
       </div>
+      <OverlayControls />
       <DecisionLogPanel entries={stats?.log ?? []} />
       <SquadPanel squads={stats?.squads ?? []} />
       <PolicyPanel policy={policy} onApply={applyPolicy} onEndMatch={endMatch} />

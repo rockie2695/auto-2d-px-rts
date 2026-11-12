@@ -1,8 +1,9 @@
-import { Container, Graphics } from 'pixi.js'
+import { Container, Graphics, Sprite, Texture } from 'pixi.js'
 
 import { isRockAt, UNITS_PER_TILE } from '../sim/types.ts'
 import type { World, WorldDefs } from '../sim/types.ts'
 import type { WorldSnapshot } from '../sim/world.ts'
+import type { InfluenceMap } from '../ai/influence.ts'
 
 import {
   COLOR_BUILDING_ENEMY,
@@ -19,10 +20,13 @@ import {
   COLOR_SELECTED,
   COLOR_UNIT_ENEMY,
   COLOR_UNIT_PLAYER,
+  ARMOR_BAR_HEIGHT,
   HP_BAR_HEIGHT,
   TILE_SIZE,
   UNIT_RENDER_SIZE,
 } from './constants.ts'
+import { armorBarRatio, armorTierColorPixiOf, armorTierOf } from './armor.ts'
+import { influenceCellColor } from './overlay.ts'
 import { clamp01, fixedToPx, interpolateDisplay } from './interpolate.ts'
 import { firedThisTick, towerVictimOf } from './attackFx.ts'
 import {
@@ -50,9 +54,21 @@ export class GameScene {
   readonly root = new Container()
 
   private readonly tilesG = new Graphics()
+  /** 疊加層容器（Prompt 9.5 完整版）：熱力圖 Sprite（tiles 之上、單位之下）。 */
+  private readonly overlayG = new Container()
+  private heatmapSprite: Sprite | null = null
+  private heatmapCanvas: HTMLCanvasElement | null = null
+  private heatmapTexture: Texture | null = null
+  private heatmapData: InfluenceMap | null = null
+  /** 迷霧暗罩（Prompt 9.5 完整版）：最頂層半透明暗格＝player AI 知識邊界。 */
+  private readonly fogG = new Graphics()
+  /** 路徑虛線（Prompt 9.5 完整版）：開關開啟時取代極淡意圖直線。 */
+  private readonly pathsG = new Graphics()
   private readonly markersG = new Graphics()
   private readonly objG = new Graphics()
   private readonly fxG = new Graphics()
+  /** 疊加層開關（Prompt 9.5 完整版）：只切 visible，不影響任何繪製與 sim。 */
+  private overlays = { heatmap: false, fog: false, paths: false }
 
   private readonly mapSizeTiles: number
   private defs: WorldDefs | null = null
@@ -69,7 +85,96 @@ export class GameScene {
 
   constructor(mapSizeTiles: number) {
     this.mapSizeTiles = mapSizeTiles
-    this.root.addChild(this.tilesG, this.markersG, this.objG, this.fxG)
+    // 圖層序：tiles → 熱力圖 → 標記 → 實體 → 路徑虛線 → 特效 → 迷霧暗罩（最頂）。
+    this.root.addChild(
+      this.tilesG,
+      this.overlayG,
+      this.markersG,
+      this.objG,
+      this.pathsG,
+      this.fxG,
+      this.fogG,
+    )
+    this.overlayG.visible = false
+    this.fogG.visible = false
+    this.pathsG.visible = false
+  }
+
+  /** 疊加層開關（Prompt 9.5 完整版）：只切容器 visible——不重繪、不碰 sim。 */
+  setOverlays(opts: { heatmap: boolean; fog: boolean; paths: boolean }): void {
+    this.overlays = { ...opts }
+    // 熱力圖：有資料才亮（開關先於資料推入時不會閃空圖）。
+    this.overlayG.visible = opts.heatmap && this.heatmapSprite !== null
+    this.fogG.visible = opts.fog
+    this.pathsG.visible = opts.paths
+    // 關閉路徑疊加 → 回到既有極淡意圖直線（fxG 內畫）。
+  }
+
+  /**
+   * 熱力圖資料推入（Prompt 9.5 完整版）：UI 500ms 呼叫一次。
+   * 離屏 canvas 每格一像素（紅＝敵威脅、藍＝我方控制）→ `Texture.from(canvas)`
+   * nearest 縮放貼滿地圖；同 tick 重複推入不重繪。
+   */
+  updateInfluence(map: InfluenceMap): void {
+    this.heatmapData = map
+    if (!this.overlays.heatmap) return
+    this.redrawHeatmap()
+  }
+
+  /** 迷霧暗罩資料推入（Prompt 9.5b 接 sight.ts；9.5a 為空 mask＝全可見）。 */
+  updateFogMask(mask: readonly boolean[] | null): void {
+    this.fogG.clear()
+    if (mask === null) return
+    const size = mask.length === 0 ? 0 : Math.round(Math.sqrt(mask.length))
+    for (let y = 0; y < size; y++) {
+      for (let x = 0; x < size; x++) {
+        if (mask[y * size + x] === true) continue
+        this.fogG
+          .rect(x * TILE_SIZE, y * TILE_SIZE, TILE_SIZE, TILE_SIZE)
+          .fill({ color: 0x05070c, alpha: 0.5 })
+      }
+    }
+  }
+
+  /** 離屏 canvas 重繪熱力圖（開關開啟或資料更新時呼叫）。 */
+  private redrawHeatmap(): void {
+    const map = this.heatmapData
+    if (map === null) return
+    if (this.heatmapSprite === null || this.heatmapCanvas === null) {
+      this.heatmapCanvas = document.createElement('canvas')
+      this.heatmapCanvas.width = map.gridSize
+      this.heatmapCanvas.height = map.gridSize
+      this.heatmapTexture = Texture.from(this.heatmapCanvas)
+      // 像素風：一格一像素、nearest 縮放不模糊。
+      this.heatmapTexture.source.scaleMode = 'nearest'
+      this.heatmapSprite = new Sprite(this.heatmapTexture)
+      this.heatmapSprite.width = map.mapSize * TILE_SIZE
+      this.heatmapSprite.height = map.mapSize * TILE_SIZE
+      this.overlayG.addChild(this.heatmapSprite)
+    }
+    const canvas = this.heatmapCanvas
+    if (canvas.width !== map.gridSize) {
+      canvas.width = map.gridSize
+      canvas.height = map.gridSize
+    }
+    const ctx = canvas.getContext('2d')
+    if (ctx === null) return
+    // 全圖最大格值（紅藍共用強度歸一，相對強度不失真）。
+    let max = 0
+    for (let index = 0; index < map.own.length; index++) {
+      max = Math.max(max, map.own[index] ?? 0, map.enemy[index] ?? 0)
+    }
+    const image = ctx.createImageData(map.gridSize, map.gridSize)
+    for (let index = 0; index < map.gridSize * map.gridSize; index++) {
+      const color = influenceCellColor(map.own[index] ?? 0, map.enemy[index] ?? 0, max)
+      const offset = index * 4
+      image.data[offset] = color.r
+      image.data[offset + 1] = color.g
+      image.data[offset + 2] = color.b
+      image.data[offset + 3] = Math.round(color.a * 255)
+    }
+    ctx.putImageData(image, 0, 0)
+    if (this.heatmapTexture !== null) this.heatmapTexture.source.update()
   }
 
   /** ui/session（戰術計畫）→ render 的標記推入（集結點／生產點）。 */
@@ -275,7 +380,20 @@ export class GameScene {
         .fill(unit.player === 'player' ? COLOR_UNIT_PLAYER : COLOR_UNIT_ENEMY)
 
       const ratio = def.stats.hp > 0 ? Math.min(1, Math.max(0, unit.hp / def.stats.hp)) : 0
-      this.drawHpBar({ x, y: y - HP_BAR_HEIGHT - 2, width: UNIT_RENDER_SIZE, ratio })
+      // 血條與單位色塊之間插裝甲條（Prompt 9.5 完整版）：armor > 0 才畫。
+      // 版式：血條（頂）→ 2px → 裝甲條 → 2px → 單位色塊。
+      const armorTier = armorTierOf(def.stats.armor)
+      const hasArmorBar = armorTier !== 'none'
+      const hpY = y - HP_BAR_HEIGHT - (hasArmorBar ? ARMOR_BAR_HEIGHT + 4 : 2)
+      this.drawHpBar({ x, y: hpY, width: UNIT_RENDER_SIZE, ratio })
+      if (hasArmorBar) {
+        this.drawArmorBar({
+          x,
+          y: y - ARMOR_BAR_HEIGHT - 2,
+          width: UNIT_RENDER_SIZE,
+          armor: def.stats.armor,
+        })
+      }
 
       if (this.selected?.kind === 'unit' && unit.id === this.selected.id) {
         this.objG
@@ -373,6 +491,9 @@ export class GameScene {
     // 移動意圖線（Prompt 10.17）：有路徑的單位畫一條**極淡**的線到路徑終點格心——
     // 一眼看出「部隊正往哪去」（alpha 0.12，與接戰線 0.28／開火線區隔，不喧賓奪主）。
     // 快照的 `path` 最後一格即當前移動目的地（`dest` 未進快照）。
+    // 路徑疊加（Prompt 9.5 完整版）：開關開啟 → 改畫**逐格虛線**（pathsG），
+    // 極淡直線停用（兩者擇一，不疊加）；關閉 → 回到既有直線。
+    this.pathsG.clear()
     for (const unit of curr.units) {
       if (unit.hp <= 0 || unit.path === null || unit.path.length === 0) continue
       const goal = unit.path[unit.path.length - 1]
@@ -383,7 +504,11 @@ export class GameScene {
       const toY = goal.y * TILE_SIZE + TILE_SIZE / 2
       if (Math.abs(toX - fromX) < 0.5 && Math.abs(toY - fromY) < 0.5) continue // 已抵達終點格
       const color = unit.player === 'player' ? COLOR_UNIT_PLAYER : COLOR_UNIT_ENEMY
-      this.fxG.moveTo(fromX, fromY).lineTo(toX, toY).stroke({ width: 1, color, alpha: 0.12 })
+      if (this.overlays.paths) {
+        this.drawDashedPath({ x: fromX, y: fromY }, unit.path, color)
+      } else {
+        this.fxG.moveTo(fromX, fromY).lineTo(toX, toY).stroke({ width: 1, color, alpha: 0.12 })
+      }
     }
 
     for (const fx of this.effects) {
@@ -420,6 +545,61 @@ export class GameScene {
       this.objG
         .rect(options.x, options.y, fillW, HP_BAR_HEIGHT)
         .fill(hpColor(options.ratio))
+    }
+  }
+
+  /** 裝甲條（Prompt 9.5 完整版）：底 + `armor / 0.8` 比例填充，顏色按分檔。 */
+  private drawArmorBar(options: {
+    x: number
+    y: number
+    width: number
+    armor: number
+  }): void {
+    this.objG.rect(options.x, options.y, options.width, ARMOR_BAR_HEIGHT).fill(COLOR_HP_BG)
+    const fillW = Math.round(options.width * armorBarRatio(options.armor))
+    if (fillW > 0) {
+      const color = armorTierColorPixiOf(options.armor)
+      if (color !== null) {
+        this.objG.rect(options.x, options.y, fillW, ARMOR_BAR_HEIGHT).fill(color)
+      }
+    }
+  }
+
+  /**
+   * 路徑虛線（Prompt 9.5 完整版）：沿路徑逐格畫短段模擬 dash
+   * （Pixi Graphics 無原生 dash——ON 8px / OFF 6px 的手工短段）。
+   */
+  private drawDashedPath(
+    from: { x: number; y: number },
+    path: readonly { x: number; y: number }[],
+    color: number,
+  ): void {
+    const centers = path.map((tile) => ({
+      x: tile.x * TILE_SIZE + TILE_SIZE / 2,
+      y: tile.y * TILE_SIZE + TILE_SIZE / 2,
+    }))
+    const points = [from, ...centers]
+    const DASH_ON = 8
+    const DASH_OFF = 6
+    const period = DASH_ON + DASH_OFF
+    for (let index = 0; index < points.length - 1; index++) {
+      const a = points[index]
+      const b = points[index + 1]
+      if (a === undefined || b === undefined) continue
+      const dx = b.x - a.x
+      const dy = b.y - a.y
+      const length = Math.hypot(dx, dy)
+      if (length < 0.5) continue
+      const ux = dx / length
+      const uy = dy / length
+      // 逐段：每 period 像素畫 ON 段、留 OFF 段（視覺用途，不需全局相位）。
+      for (let travelled = 0; travelled < length; travelled += period) {
+        const segEnd = Math.min(travelled + DASH_ON, length)
+        this.pathsG
+          .moveTo(a.x + ux * travelled, a.y + uy * travelled)
+          .lineTo(a.x + ux * segEnd, a.y + uy * segEnd)
+          .stroke({ width: 1, color, alpha: 0.75 })
+      }
     }
   }
 }

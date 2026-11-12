@@ -562,3 +562,178 @@ body,
 .post-game-restart:hover {
   background: #303845;
 }
+
+/* ---- Prompt 9.5 完整版：uPlot 資源曲線／戰力堆疊條／日誌展開／小隊色點／疊加開關 ---- */
+
+/* 左上 uPlot：與手繪 canvas 同尺寸，nearest 縮放保像素。 */
+.uplot-host {
+  width: 240px;
+  height: 64px;
+}
+.uplot-host .uplot {
+  font-family: 'Courier New', monospace;
+}
+.uplot-host .u-wrap,
+.uplot-host .u-inline {
+  background: #2a2f38;
+}
+
+/* uPlot 模式線尾收入率（藍／紅／綠三色）。 */
+.income-tail {
+  display: flex;
+  gap: 8px;
+  font-size: 11px;
+  margin-top: 2px;
+}
+
+/* 右上戰力堆疊條。 */
+.power-stack-bar {
+  display: flex;
+  width: 180px;
+  height: 6px;
+  background: #101014;
+  border: 1px solid #4a5568;
+  margin: 2px 0;
+}
+.power-stack-seg {
+  display: block;
+  height: 100%;
+}
+.power-stack-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.power-stack-side {
+  width: 14px;
+  text-align: center;
+}
+.power-stack-side.player {
+  color: #7ec7ff;
+}
+.power-stack-side.enemy {
+  color: #ff9d8a;
+}
+.power-stack-legend {
+  display: flex;
+  gap: 10px;
+  font-size: 10px;
+  color: #9aa5b1;
+  margin-top: 2px;
+}
+.power-stack-legend i {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 3px;
+}
+
+/* 左下決策日誌：展開（CSS transition）＋裝甲／政策標記。 */
+.decision-log-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: baseline;
+}
+.decision-log-row.expandable {
+  cursor: pointer;
+}
+.decision-log-row.expandable:hover {
+  background: rgba(122, 162, 247, 0.08);
+}
+.decision-log-armor {
+  font-size: 10px;
+  padding: 0 3px;
+  border: 1px solid currentColor;
+}
+.decision-log-policy {
+  font-size: 10px;
+  color: #ffd866;
+  border: 1px solid #8a7a3a;
+  padding: 0 3px;
+}
+.decision-candidates-wrap {
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height 0.2s ease-out;
+}
+.decision-candidates-wrap.open {
+  max-height: 160px;
+}
+.decision-candidates {
+  margin: 2px 0 4px 18px;
+  padding: 3px 6px;
+  background: rgba(10, 12, 16, 0.9);
+  border: 1px solid #3a4250;
+}
+.decision-candidates-factor {
+  font-size: 10px;
+  color: #9aa5b1;
+  margin-bottom: 2px;
+}
+.decision-candidate {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+}
+.decision-candidate-name {
+  width: 84px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.decision-candidate-bar-track {
+  flex: 1;
+  height: 6px;
+  background: #101014;
+}
+.decision-candidate-bar {
+  display: block;
+  height: 100%;
+  background: #5a8fd6;
+  transition: width 0.2s ease-out;
+}
+.decision-candidate.top .decision-candidate-bar {
+  background: #ffd866;
+}
+.decision-candidate.top .decision-candidate-name,
+.decision-candidate.top .decision-candidate-score {
+  color: #ffd866;
+}
+.decision-candidate-score {
+  width: 44px;
+  text-align: right;
+  color: #9aa5b1;
+}
+
+/* 右下小隊狀態色點（綠＝安全、黃＝交戰、紅＝撤退中）。 */
+.squad-tone {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 3px;
+}
+
+/* 疊加層開關（Prompt 9.5 完整版）：熱力圖／迷霧／路徑。 */
+.overlay-controls {
+  position: absolute;
+  z-index: 10;
+  top: 12px;
+  left: 290px;
+  display: flex;
+  gap: 8px;
+  padding: 4px 8px;
+  font-family: 'Courier New', monospace;
+  font-size: 11px;
+  color: #dfe5ec;
+  background: rgba(16, 18, 22, 0.88);
+  border: 1px solid #4a5568;
+  user-select: none;
+}
+.overlay-toggle {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  cursor: pointer;
+}

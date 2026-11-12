@@ -157,6 +157,25 @@ function sampleSpan(samples: readonly SamplePoint[]): number {
   return Math.max(1, latest.tick - first.tick)
 }
 
+/**
+ * 三資源樣本 → uPlot 資料（Prompt 9.5 完整版）：
+ * `[x[], 藍[], 紅[], 綠[]]`，x = tick ÷ 20（秒）。取 player 值（uPlot 三線
+ * 為我方三資源存量）；對齊問題不需要處理——三個環同一輪詢同時推進。
+ * 測試直接驗證數值，不需真 uPlot 實例。
+ */
+export function uplotTripleData(
+  crystal: readonly SamplePoint[],
+  ruby: readonly SamplePoint[],
+  emerald: readonly SamplePoint[],
+): [number[], number[], number[], number[]] {
+  return [
+    crystal.map((point) => point.tick / 20),
+    crystal.map((point) => point.player),
+    ruby.map((point) => point.player),
+    emerald.map((point) => point.player),
+  ]
+}
+
 export type RatioTone = 'red' | 'yellow' | 'green'
 
 /** 決策層標籤的來源型別（與 session 的 DecisionLogEntry.layer 同構）。 */
@@ -185,4 +204,21 @@ export function ratioTone(ratio: number): RatioTone {
   if (ratio < 0.7) return 'red'
   if (ratio <= 1.4) return 'yellow'
   return 'green'
+}
+
+/** 小隊狀態色（Prompt 9.5 完整版）：紅＝撤退中、黃＝交戰中、其餘綠（安全）。 */
+export type SquadTone = 'red' | 'yellow' | 'green'
+
+/** mission/engaging → 狀態色（retreat 最優先——「撤退中」蓋過交戰）。 */
+export function squadTone(mission: string, engaging: boolean): SquadTone {
+  if (mission === 'retreat') return 'red'
+  if (engaging) return 'yellow'
+  return 'green'
+}
+
+/** 小隊狀態色的 CSS 值（單一真相來源；面板與測試共用）。 */
+export function squadToneColor(tone: SquadTone): string {
+  if (tone === 'red') return '#ff7a7a'
+  if (tone === 'yellow') return '#ffd866'
+  return '#7ce38b'
 }

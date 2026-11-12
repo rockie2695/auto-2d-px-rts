@@ -5,7 +5,28 @@
 import { StrictMode, act } from 'react'
 import type { ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+// uPlot 在模組初始化時就碰 `matchMedia`（jsdom 沒有）——測試環境整體 mock：
+// 建構子/setData 記下收到的資料，供「圖表能正確渲染」斷言（Prompt 9.5 驗收）。
+const uplotInstances: Array<{ opts: unknown; data: unknown; setData: (data: unknown) => void; destroy: () => void }> = []
+vi.mock('uplot', () => ({
+  default: class FakeUPlot {
+    opts: unknown
+    data: unknown
+    constructor(opts: unknown, data: unknown) {
+      this.opts = opts
+      this.data = data
+      uplotInstances.push(this)
+    }
+    setData(data: unknown): void {
+      this.data = data
+    }
+    destroy(): void {
+      // 測試無需清理
+    }
+  },
+}))
 
 import { DecisionLogPanel } from './DecisionLogPanel.tsx'
 import { formatClock, layerLabel } from './collector.ts'
@@ -52,6 +73,7 @@ const squadOf = (
   memberCount: 2,
   power: 84,
   distTiles: dist,
+  engaging: false,
 })
 
 const DEFAULT_POLICY_VALUES: PolicyValues = {
@@ -178,16 +200,16 @@ describe('戰力比色階（0.7、1.4 邊界走黃）', () => {
 /* ---------- 決策日誌 ---------- */
 
 describe('DecisionLogPanel（左下）', () => {
-  it('顯示最近 20 條、新的在上（時間 + 層級 + 動作原因）', () => {
+  it('顯示最近 10 條、新的在上（時間 + 層級 + 動作原因）', () => {
     const entries: DecisionLogEntry[] = []
     for (let index = 1; index <= 21; index++) {
       entries.push(logEntry(index, index * 20, `決策 ${index}`, 'strategic'))
     }
     const container = render(<DecisionLogPanel entries={entries} />)
     const items = container.querySelectorAll('ol.decision-log li')
-    expect(items.length).toBe(20) // 21 條 → 顯示最近 20 條（捲動看較舊的）
+    expect(items.length).toBe(10) // 21 條 → 顯示最近 10 條（Prompt 9.5 完整版）
     expect(items[0]?.textContent).toContain('決策 21') // 新的在上
-    expect(items[19]?.textContent).toContain('決策 2') // 第 1 條被淘汰
+    expect(items[9]?.textContent).toContain('決策 12') // 第 11 條被淘汰
   })
 
   it('空日誌顯示尚未有決策；formatClock / layerLabel', () => {
@@ -212,7 +234,7 @@ describe('DecisionLogPanel（左下）', () => {
     expect(items[1]?.className).toContain('actor-player')
   })
 
-  it('篩選片（Prompt 10.20）：先篩選再取 20 條；陣營 × 層級可組合', () => {
+  it('篩選片（Prompt 10.20）：先篩選再取 10 條；陣營 × 層級可組合', () => {
     const entries: DecisionLogEntry[] = []
     for (let index = 1; index <= 25; index++) {
       const actor = index % 2 === 0 ? 'player' : 'enemy'
@@ -223,15 +245,15 @@ describe('DecisionLogPanel（左下）', () => {
     }
     const container = render(<DecisionLogPanel entries={entries} />)
 
-    // 藍：25 條中 12 條（偶數 index）全顯示（未滿 20）。
+    // 藍：25 條中 12 條（偶數 index）→ 取最新 10 條。
     act(() => {
       ;(container.querySelector('[data-testid="decision-log-chip-team-player"]') as HTMLButtonElement).click()
     })
     let items = container.querySelectorAll('ol.decision-log li')
-    expect(items.length).toBe(12)
+    expect(items.length).toBe(10)
     expect(Array.from(items).every((item) => item.className.includes('actor-player'))).toBe(true)
 
-    // 藍 × 戰略：12 條藍中非 3 的倍數者 → 8 條。
+    // 藍 × 戰略：12 條藍中非 3 的倍數者共 8 條（≤ 10 全顯示）。
     act(() => {
       ;(container.querySelector('[data-testid="decision-log-chip-layer-strategic"]') as HTMLButtonElement).click()
     })
@@ -249,7 +271,7 @@ describe('DecisionLogPanel（左下）', () => {
     expect(items[0]?.textContent).toContain('決策 21') // 最新（紅 × 戰術：3,9,15,21）
   })
 
-  it('篩選後仍只顯示最近 20 條（先篩選再切片）', () => {
+  it('篩選後仍只顯示最近 10 條（先篩選再切片）', () => {
     const entries: DecisionLogEntry[] = []
     for (let index = 1; index <= 30; index++) {
       entries.push({ ...logEntry(index, index * 20, `紅決策 ${index}`, 'strategic'), actor: 'enemy' })
@@ -259,9 +281,9 @@ describe('DecisionLogPanel（左下）', () => {
       ;(container.querySelector('[data-testid="decision-log-chip-team-enemy"]') as HTMLButtonElement).click()
     })
     const items = container.querySelectorAll('ol.decision-log li')
-    expect(items.length).toBe(20)
+    expect(items.length).toBe(10)
     expect(items[0]?.textContent).toContain('紅決策 30')
-    expect(items[19]?.textContent).toContain('紅決策 11') // 第 10 條被淘汰
+    expect(items[9]?.textContent).toContain('紅決策 21') // 第 11 條被淘汰
   })
 
   it('篩選無結果 → 尚未有決策', () => {
@@ -273,13 +295,84 @@ describe('DecisionLogPanel（左下）', () => {
     expect(container.querySelector('ol.decision-log')).toBeNull()
     expect(textOf(container)).toContain('尚未有決策')
   })
+
+  it('點擊展開候選柱狀圖（Prompt 9.5 完整版）：最高分高亮、分數歸一', () => {
+    const entry: DecisionLogEntry = {
+      ...logEntry(1, 20, 'train legionnaire（軍事權重主導）', 'strategic'),
+      candidates: [
+        { defId: 'legionnaire', score: 2.4 },
+        { defId: 'archer', score: 1.2 },
+      ],
+      topFactor: 'militaryWeight',
+    }
+    const container = render(<DecisionLogPanel entries={[entry]} />)
+    // 未展開：沒有柱狀圖。
+    expect(container.querySelector('[data-testid="decision-candidates"]')).toBeNull()
+    act(() => {
+      ;(container.querySelector('[data-testid="decision-log-row-1"]') as HTMLElement).click()
+    })
+    const panel = container.querySelector('[data-testid="decision-candidates"]')
+    expect(panel).not.toBeNull()
+    expect(panel?.textContent).toContain('militaryWeight')
+    const legionnaire = container.querySelector(
+      '[data-testid="decision-candidate-legionnaire"] .decision-candidate-bar',
+    ) as HTMLElement
+    const archer = container.querySelector(
+      '[data-testid="decision-candidate-archer"] .decision-candidate-bar',
+    ) as HTMLElement
+    expect(legionnaire.style.width).toBe('100%') // 最高分 = 滿寬
+    expect(archer.style.width).toBe('50%') // 1.2 / 2.4
+    // 最高分列高亮（.top class）。
+    expect(
+      container.querySelector('[data-testid="decision-candidate-legionnaire"]')?.className,
+    ).toContain('top')
+    expect(
+      container.querySelector('[data-testid="decision-candidate-archer"]')?.className,
+    ).not.toContain('top')
+    // 再點一次收起。
+    act(() => {
+      ;(container.querySelector('[data-testid="decision-log-row-1"]') as HTMLElement).click()
+    })
+    expect(container.querySelector('[data-testid="decision-candidates"]')).toBeNull()
+  })
+
+  it('裝甲色標（Prompt 9.5 完整版）：重裝甲紫、超重裝甲金、無甲不標', () => {
+    const entries: DecisionLogEntry[] = [
+      { ...logEntry(1, 20, 'train shield_guard', 'strategic'), armorTier: 'heavy' },
+      { ...logEntry(2, 40, 'train heavy_unit', 'strategic'), armorTier: 'ultra' },
+      { ...logEntry(3, 60, 'train archer', 'strategic'), armorTier: 'none' },
+    ]
+    const container = render(<DecisionLogPanel entries={entries} />)
+    const heavy = container.querySelector('[data-testid="decision-armor-1"]') as HTMLElement
+    const ultra = container.querySelector('[data-testid="decision-armor-2"]') as HTMLElement
+    expect(heavy.textContent).toBe('重甲')
+    expect(heavy.style.color).toBe('rgb(180, 74, 255)') // #b44aff
+    expect(ultra.textContent).toBe('超重甲')
+    expect(ultra.style.color).toBe('rgb(255, 210, 74)') // #ffd24a
+    expect(container.querySelector('[data-testid="decision-armor-3"]')).toBeNull()
+  })
+
+  it('政策標記（Prompt 9.5 完整版）：政策變更之後的條目掛「受政策影響」', () => {
+    const entries: DecisionLogEntry[] = [
+      logEntry(1, 20, '之前決策', 'strategic'),
+      logEntry(2, 40, '滑桿調整', 'policy'),
+      logEntry(3, 60, '之後決策', 'strategic'),
+    ]
+    const container = render(<DecisionLogPanel entries={entries} />)
+    const marks = container.querySelectorAll('[data-testid="decision-policy-mark"]')
+    expect(marks.length).toBe(1) // 只有政策變更「之後」的一條
+    expect(marks[0]?.parentElement?.textContent).toContain('之後決策')
+  })
 })
 
 /* ---------- 小隊狀態 ---------- */
 
 describe('SquadPanel（右下）', () => {
-  it('一隊一行：任務 + 人數 + 戰力 + 距離', () => {
-    const squads: SquadInfo[] = [squadOf('player', 0, 'attack', 3), squadOf('enemy', 0, 'defend', 0)]
+  it('一隊一行：狀態色點 + 任務 + 人數 + 戰力 + 距離', () => {
+    const squads: SquadInfo[] = [
+      squadOf('player', 0, 'attack', 3),
+      squadOf('enemy', 0, 'defend', 0),
+    ]
     const container = render(<SquadPanel squads={squads} />)
     const items = container.querySelectorAll('ul.squad-list li')
     expect(items.length).toBe(2)
@@ -291,6 +384,26 @@ describe('SquadPanel（右下）', () => {
     expect(items[0]?.textContent).toContain('距 3 格')
     expect(items[1]?.textContent).toContain('敵')
     expect(items[1]?.textContent).toContain('守備')
+    // 狀態色點（Prompt 9.5 完整版）：非撤退非交戰 → 綠（#7ce38b）。
+    const tone = container.querySelector(
+      '[data-testid="squad-tone-player-0"]',
+    ) as HTMLElement
+    expect(tone.style.background).toBe('rgb(124, 227, 139)')
+  })
+
+  it('狀態色（Prompt 9.5 完整版）：撤退紅、交戰黃、其餘綠', () => {
+    const squads: SquadInfo[] = [
+      squadOf('player', 0, 'retreat', 5),
+      { ...squadOf('player', 1, 'attack', 2), engaging: true },
+      squadOf('enemy', 0, 'defend', 0),
+    ]
+    const container = render(<SquadPanel squads={squads} />)
+    const retreat = container.querySelector('[data-testid="squad-tone-player-0"]') as HTMLElement
+    const engaging = container.querySelector('[data-testid="squad-tone-player-1"]') as HTMLElement
+    const safe = container.querySelector('[data-testid="squad-tone-enemy-0"]') as HTMLElement
+    expect(retreat.style.background).toBe('rgb(255, 122, 122)') // #ff7a7a
+    expect(engaging.style.background).toBe('rgb(255, 216, 102)') // #ffd866
+    expect(safe.style.background).toBe('rgb(124, 227, 139)') // #7ce38b
   })
 
   it('未編隊顯示提示', () => {
@@ -301,7 +414,7 @@ describe('SquadPanel（右下）', () => {
 
 /* ---------- 資源曲線 ---------- */
 
-describe('ResourceChart（左上，三指標切換）', () => {
+describe('ResourceChart（左上；uPlot 三資源 + 雙線切換）', () => {
   const crystalSamples = [
     { tick: 0, player: 10, enemy: 8 },
     { tick: 100, player: 12, enemy: 9 },
@@ -314,26 +427,59 @@ describe('ResourceChart（左上，三指標切換）', () => {
     { tick: 0, player: 1440, enemy: 1440 },
     { tick: 100, player: 2000, enemy: 960 },
   ]
+  const incomes = { blue_crystal: 0.8, red_ruby: 0.2, green_emerald: 0.1 }
 
-  it('預設資源曲線：select 有三個選項、標題隨模式變化', () => {
+  beforeEach(() => {
+    uplotInstances.length = 0
+  })
+
+  it('預設資源曲線：uPlot 三線（mock 收到 3 條序列）＋線尾收入率', () => {
     const container = render(
       <ResourceChart
         crystalSamples={crystalSamples}
         unitSamples={unitSamples}
         powerSamples={powerSamples}
+        playerIncomes={incomes}
       />,
     )
-    expect(container.querySelector('canvas')).not.toBeNull()
-    expect(textOf(container)).not.toContain('等待資料')
+    expect(container.querySelector('[data-testid="uplot-host"]')).not.toBeNull()
+    // StrictMode 雙掛載會建兩個實例（dev 行為）；斷言最後一個實例的資料。
+    expect(uplotInstances.length).toBeGreaterThan(0)
+    const data = (uplotInstances[uplotInstances.length - 1]?.data ?? null) as
+      | [number[], number[], number[], number[]]
+      | null
+    if (data === null) throw new Error('uPlot 實例未收到資料')
+    expect(data[0]).toEqual([0, 5]) // tick/20 → 秒
+    expect(data[1]).toEqual([10, 12]) // 藍水晶（player 值）
+    // 線尾收入率（x.x/s）。
+    const tail = container.querySelector('[data-testid="income-tail"]')
+    expect(tail?.textContent).toContain('藍 0.8/s')
+    expect(tail?.textContent).toContain('紅 0.2/s')
+    expect(tail?.textContent).toContain('綠 0.1/s')
     const select = container.querySelector('[data-testid="chart-mode"]') as HTMLSelectElement
-    expect(select).not.toBeNull()
-    expect(select.value).toBe('crystal')
+    expect(select.value).toBe('resources')
     const options = [...select.querySelectorAll('option')].map((option) => option.value)
-    expect(options).toEqual(['crystal', 'units', 'power', 'resources'])
+    expect(options).toEqual(['resources', 'units', 'power'])
     expect(textOf(container)).toContain('資源曲線（60 秒）')
   })
 
-  it('切換模式 → 標題變為單位數量／戰力（canvas 仍在）', () => {
+  it('資料更新 → setData 推新資料（不重建實例）', () => {
+    renderAndRerender(
+      <ResourceChart crystalSamples={crystalSamples} unitSamples={unitSamples} powerSamples={powerSamples} />,
+      <ResourceChart
+        crystalSamples={[...crystalSamples, { tick: 200, player: 15, enemy: 10 }]}
+        unitSamples={unitSamples}
+        powerSamples={powerSamples}
+      />,
+    )
+    expect(uplotInstances.length).toBeGreaterThan(0)
+    const data = (uplotInstances[uplotInstances.length - 1]?.data ?? null) as
+      | [number[], number[], number[], number[]]
+      | null
+    expect(data?.[0]).toEqual([0, 5, 10])
+  })
+
+  it('切換模式 → 單位數量／戰力（canvas 雙線仍在）', () => {
     const container = render(
       <ResourceChart
         crystalSamples={crystalSamples}
@@ -357,15 +503,41 @@ describe('ResourceChart（左上，三指標切換）', () => {
     expect(textOf(container)).toContain('戰力（60 秒）')
   })
 
-  it('空樣本：canvas 仍在，畫面走等待分支不擲錯', () => {
-    const container = render(
-      <ResourceChart crystalSamples={[]} unitSamples={[]} powerSamples={[]} />,
-    )
-    const canvas = container.querySelector('canvas')
-    expect(canvas).not.toBeNull() // 空樣本 → 折線分支跳過，畫「等待資料」文字於 canvas 上
-    expect(textOf(container)).toContain('資源曲線（60 秒）')
+  it('空樣本：資源模式不建 uPlot 實例；單位模式 canvas 走等待分支', () => {
+    const empty = render(<ResourceChart crystalSamples={[]} unitSamples={[]} powerSamples={[]} />)
+    expect(uplotInstances.length).toBe(0) // 空樣本 → 不建實例
+    const select = empty.querySelector('[data-testid="chart-mode"]') as HTMLSelectElement
+    const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set
+    act(() => {
+      setter?.call(select, 'units')
+      select.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    const canvas = empty.querySelector('canvas')
+    expect(canvas).not.toBeNull()
+    expect(textOf(empty)).toContain('單位數量（60 秒）')
   })
 })
+
+/** render ＋ rerender 工具（uPlot setData 測試用）。 */
+function renderAndRerender(first: ReactNode, second: ReactNode): { rerender: (node: ReactNode) => void } {
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const root = createRoot(container)
+  act(() => {
+    root.render(<StrictMode>{first}</StrictMode>)
+  })
+  act(() => {
+    root.render(<StrictMode>{second}</StrictMode>)
+  })
+  mounted = { container, root }
+  return {
+    rerender: (node: ReactNode) => {
+      act(() => {
+        root.render(<StrictMode>{node}</StrictMode>)
+      })
+    },
+  }
+}
 
 /* ---------- AI 政策滑桿（Prompt 10：草稿＋套用/還原） ---------- */
 

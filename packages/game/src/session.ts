@@ -8,7 +8,9 @@ import { POLICY_IDS } from '@auto-2d-px-rts/shared'
 import type { PolicyValues } from './ai/policy.ts'
 import { runStrategicCycle, STRATEGIC_INTERVAL_TICKS } from './ai/strategy.ts'
 import type { DecisionRecord } from './ai/strategy.ts'
-import { pickMostUrgentThreat } from './ai/influence.ts'
+import { pickMostUrgentThreat, computeInfluenceMap } from './ai/influence.ts'
+import type { InfluenceMap } from './ai/influence.ts'
+import { armorTierOf } from './render/armor.ts'
 import {
   computeTacticalPlan,
   SUDDEN_DEATH_HARD_TICK,
@@ -48,6 +50,17 @@ export interface DecisionLogEntry {
   readonly actor: PlayerId
   /** 一行中文：動作＋原因（戰略例 `build mine（…）`）。 */
   readonly text: string
+  /**
+   * 候選與主導因素（Prompt 9.5 完整版）：**只掛在戰略層條目**——點擊展開
+   * 候選分數柱狀圖用。其他層（戰術／政策／微操）無此欄（undefined）。
+   */
+  readonly candidates?: readonly { readonly defId: string; readonly score: number }[]
+  readonly topFactor?: string
+  /**
+   * 決策目標單位的裝甲分檔（Prompt 9.5 完整版：重裝甲紫／超重裝甲金標籤）。
+   * 戰略 train 條目＝目標單位檔；build／其他層＝'none'（undefined 視同 none）。
+   */
+  readonly armorTier?: 'none' | 'light' | 'medium' | 'heavy' | 'ultra'
 }
 
 /** 小隊狀態單條（Prompt 9.5：右下面板，一行一隊）。 */
@@ -63,7 +76,20 @@ export interface SquadInfo {
   readonly power: number
   /** 隊伍重心到目標格的距離（格，里程整數）。 */
   readonly distTiles: number
+  /** 接觸迎戰中（Prompt 10.15；右下面板黃燈＝交戰，Prompt 9.5 完整版）。 */
+  readonly engaging: boolean
 }
+
+/** 一個 tier 的 HP 堆疊數據（Prompt 9.5 完整版：右上戰力對比）。 */
+export interface TierHp {
+  /** 現值 HP 總和（原始）。 */
+  readonly rawHp: number
+  /** 有效 HP 總和 = Σ hp/(1−armor)（Prompt 3.1 當量）。 */
+  readonly effHp: number
+}
+
+/** 三個 tier（small/medium/large）→ HP 堆疊；無該 tier 單位時為 0。 */
+export type TierHpTable = Readonly<Record<'small' | 'medium' | 'large', TierHp>>
 
 /** 戰況快查（Prompt 9.5：四角面板一次取齊，500ms 級輪詢夠用）。 */
 export interface BattleStats {
@@ -84,6 +110,9 @@ export interface BattleStats {
   /** Σ hp/(1−armor) × dmg × attackSpeed（Prompt 3.1 有效當量）；雙方存活單位合計。 */
   readonly playerPower: number
   readonly enemyPower: number
+  /** 雙方 per-tier HP 堆疊（Prompt 9.5 完整版：右上原始／有效 HP 兩根堆疊條）。 */
+  readonly playerTiers: TierHpTable
+  readonly enemyTiers: TierHpTable
   readonly log: readonly DecisionLogEntry[]
   readonly squads: readonly SquadInfo[]
 }
@@ -196,6 +225,15 @@ export interface GameSession {
   getMarkerInfo(ref: { kind: 'gather'; player: PlayerId; buildingId: number }): MarkerInfo | null
   /** 四角面板（Prompt 9.5）一次取齊的戰況。 */
   getBattleStats(): BattleStats
+  /**
+   * 影響力粗格（Prompt 9.5 完整版：熱力圖疊加層數據源）。
+   * 以 tick 為鍵緩存——同一 tick 內重複呼叫回同一物件（UI 500ms 輪詢不重算）。
+   */
+  getInfluence(): InfluenceMap
+  /** 疊加層開關（Prompt 9.5 完整版）：只切場景容器 visible，不影響 sim。 */
+  setOverlays(opts: { heatmap: boolean; fog: boolean; paths: boolean }): void
+  /** 熱力圖資料推入場景（UI 500ms 呼叫一次；開關關閉時場景自行忽略）。 */
+  refreshInfluence(): void
   /** 政策滑桿（Prompt 10）：讀取某玩家的滑桿值與冷卻狀態。 */
   getPolicies(playerId: PlayerId): PolicySnapshot
   /**
@@ -270,9 +308,10 @@ export async function startGameSession(app: Application, scene: GameScene): Prom
     enemy: new Map(),
   }
   let microCycleIndex = 0
-  // 決策日誌（Prompt 9.5：戰略紀錄＋戰術小隊變動；面板取最後 5 條）。
+  // 決策日誌（Prompt 9.5：戰略紀錄＋戰術小隊變動；面板取最後 10 條）。
   const decisionLog: DecisionLogEntry[] = []
-  const LOG_LIMIT = 32
+  // Prompt 9.5 完整版：保留上限 32 → 100（展開候選柱狀圖需要回看更多史）。
+  const LOG_LIMIT = 100
   let logSequence = 0
   const pushLog = (entry: Omit<DecisionLogEntry, 'sequence'>): void => {
     logSequence += 1
@@ -290,6 +329,17 @@ export async function startGameSession(app: Application, scene: GameScene): Prom
 
   // 復盤紀錄（Prompt 10.5）：tick 0 起每 20 tick 取雙陣營樣本；政策變更即時記錄。
   const recorder = new ReplayRecorder()
+
+  // 影響力粗格（Prompt 9.5 完整版）：以 tick 為鍵的緩存——同一 tick 內重複
+  // 呼叫回同一物件；UI 500ms 熱力圖輪詢不重算，sim 決策亦不受影響（純觀測）。
+  let influenceCache: { tick: number; map: InfluenceMap } | null = null
+  const influenceOf = (): InfluenceMap => {
+    if (influenceCache === null || influenceCache.tick !== world.tick) {
+      influenceCache = { tick: world.tick, map: computeInfluenceMap(world, 'player') }
+    }
+    return influenceCache.map
+  }
+
   const resourcesOf = (playerId: PlayerId): ResourceStock =>
     world.players.find((player) => player.id === playerId)?.resources ?? {
       blue_crystal: 0,
@@ -347,14 +397,21 @@ export async function startGameSession(app: Application, scene: GameScene): Prom
   let prev: WorldSnapshot = snapshotWorld(world)
   let curr: WorldSnapshot = prev
 
-  /** 戰略紀錄 → 日誌一行（動作＋一行中文原因）。 */
+  /** 戰略紀錄 → 日誌一行（動作＋一行中文原因）＋候選快照（Prompt 9.5 完整版）。 */
   const logDecisionRecords = (records: readonly DecisionRecord[]): void => {
     for (const record of records) {
+      // 裝甲分檔：train 條目 target 即 defId；build 條目 target 為 `defId@(x,y)`
+      // （建築無裝甲 → 查單位檔查不到即 'none'）。
+      const targetDefId = record.action === 'build' ? (record.target.split('@')[0] ?? '') : record.target
+      const unitDef = world.defs.units[targetDefId]
       pushLog({
         tick: record.tick,
         layer: 'strategic',
         actor: record.actor,
         text: `${record.action} ${record.target}（${record.reason.explanation}）`,
+        candidates: record.reason.candidates,
+        topFactor: record.reason.topFactor,
+        armorTier: unitDef === undefined ? 'none' : armorTierOf(unitDef.stats.armor),
       })
     }
   }
@@ -642,6 +699,23 @@ export async function startGameSession(app: Application, scene: GameScene): Prom
         green_emerald: getIncome(world, id, 'green_emerald') / 3,
       })
       const power = powerOf
+      /** per-tier HP 堆疊（Prompt 9.5 完整版）：rawHp = 現值 HP、effHp = hp/(1−armor)。 */
+      const tiersOf = (id: PlayerId): TierHpTable => {
+        const table: Record<'small' | 'medium' | 'large', { rawHp: number; effHp: number }> = {
+          small: { rawHp: 0, effHp: 0 },
+          medium: { rawHp: 0, effHp: 0 },
+          large: { rawHp: 0, effHp: 0 },
+        }
+        for (const unit of world.units) {
+          if (unit.player !== id || unit.hp <= 0) continue
+          const def = world.defs.units[unit.defId]
+          if (def === undefined) continue
+          const bucket = table[def.tier]
+          bucket.rawHp += unit.hp
+          bucket.effHp += unit.hp / (1 - def.stats.armor)
+        }
+        return table
+      }
       const squads: SquadInfo[] = []
       for (const player of world.players) {
         const plan = plans[player.id]
@@ -673,6 +747,7 @@ export async function startGameSession(app: Application, scene: GameScene): Prom
             memberCount: squad.memberIds.length,
             power: squad.power,
             distTiles: dist,
+            engaging: squad.engaging === true,
           })
         }
       }
@@ -689,9 +764,18 @@ export async function startGameSession(app: Application, scene: GameScene): Prom
         enemyUnits: world.units.filter((unit) => unit.player === 'enemy' && unit.hp > 0).length,
         playerPower: power('player'),
         enemyPower: power('enemy'),
+        playerTiers: tiersOf('player'),
+        enemyTiers: tiersOf('enemy'),
         log: [...decisionLog],
         squads,
       }
+    },
+    getInfluence: influenceOf,
+    setOverlays: (opts): void => {
+      scene.setOverlays(opts)
+    },
+    refreshInfluence: (): void => {
+      scene.updateInfluence(influenceOf())
     },
     getPolicies: (playerId: PlayerId): PolicySnapshot => {
       let summary: string | null = null
