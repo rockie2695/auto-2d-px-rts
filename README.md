@@ -574,3 +574,28 @@ JSON 結構會按最終 schema 設計，方便日後遷移到 DB。
   小隊 engaging、戰略日誌 candidates/topFactor/armorTier、getInfluence
   同 tick 同物件跨 tick 重算）；tsc×2＋oxlint 乾淨；**24-seed tally
   7 藍/8 紅/9 平不變**（純觀測零 sim 改動）；pnpm dev 目視四象限。
+
+- [x] 階段三 Prompt 9.5b — 真·資訊不完全（視野過濾動 AI＋迷霧層接真資料）：
+  1. **單一真相來源**（新 `ai/sight.ts`）：`isVisibleTo`／`visibleTileMask`／
+     `buildingSightTiles`——單位視野 **6 格**（＝守備半徑 `DEFENSE_RADIUS_TILES`，
+     測試交叉守門）、建築 **6 格**、塔＝**防禦射程 + 2**；幾何全整數距離平方
+     （建築以佔地外框邊緣量測，與戰鬥射程同一量測）；**無記憶**——純函式，
+     敵人離開視野即從 AI 判知消失。
+  2. **消費點過濾**（五點）：影響力地圖敵方貢獻只計視野內
+     （`computeInfluenceMap`／`enemyThreatAtPoint`／`detectBuildingThreats`，
+     我方貢獻恆計）、生產克制 `enemyRoleCounts`（看不見的爆兵不扭轉克制，
+     現身即修正）、戰術接觸掃描 `seen`（半徑 6＝視野 6，防禦性檢查）、
+     微操 `nearestEnemy`／`nearestEnemyWithin`／`squadFocus`（出視野即失標）。
+     **刻意不過濾的全局 meta 量測**：投降絕望指數、攻勢優勢加權（10.18
+     全局戰力比）、攻擊波次門 `defendersNear`（10.21）——比賽級評估非戰場判知。
+  3. **迷霧層接真資料**：`session` onTick 末尾每 tick 推
+     `visibleTileMask(w,'player')`；場景存 mask、開關關閉零繪製成本、
+     開啟當下用已存 mask 立即補畫；不可見格半透明暗罩、最頂層。
+  **驗證**——465/465 測試全過（+10：視野半徑交叉守門、6 格邊界精確
+  1200/1201、死亡單位無視野、鏡像可見性對稱、32×32 mask、無記憶重算、
+  影響力視野外不記入/入視野當場記入、克制視野外中性化）；tsc×2＋oxlint
+  乾淨；鏡像探針 0 mismatch；受影響既有測試以**建築照視野**修復
+  （建築不累積威脅，精確值斷言不污染）；**24-seed tally 新基線
+  14 藍/6 紅/4 平、自然投降 0 例**（行為預期改變；12 種子公平門
+  3 藍/4 紅/5 平通過 ≤ 9/側——兩組種子偏斜方向相反，屬種子方差非
+  系統性陣營偏倚，記錄待平衡輪追蹤）。

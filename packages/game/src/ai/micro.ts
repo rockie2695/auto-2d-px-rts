@@ -3,6 +3,7 @@ import { isBlockedAt, isConstructed, UNITS_PER_TILE } from '../sim/types.ts'
 import { orderMove } from '../sim/world.ts'
 import type { Building, PlayerId, TilePos, Unit, World } from '../sim/types.ts'
 import { enemyThreatAtPoint, unitThreatMilli } from './influence.ts'
+import { isVisibleTo } from './sight.ts'
 import { mirrorSafeTileOf } from './mirrorTile.ts'
 import {
   nearestSpawnPoint,
@@ -218,7 +219,11 @@ function shouldIssueMove(world: World, unit: Unit, dest: TilePos): boolean {
   return world.tick % MICRO_REPATH_TICKS === 0
 }
 
-/** 射程內最近的敵方單位（平手取 id 小者）。 */
+/**
+ * 射程內最近的敵方單位（平手取 id 小者）。
+ * **視野過濾（Prompt 9.5b）**：只回視野內敵人——微操的攻擊／風箏／追擊目標
+ * 全部經此函式，出視野即失標（無記憶）；射程 ≤ 視野時為防禦性檢查。
+ */
 function nearestEnemyWithin(world: World, unit: Unit, rangeFixed: number): Unit | null {
   let best: Unit | null = null
   let bestDist = Number.POSITIVE_INFINITY
@@ -227,6 +232,7 @@ function nearestEnemyWithin(world: World, unit: Unit, rangeFixed: number): Unit 
     if (other.player === unit.player || other.hp <= 0) continue
     const dist = distanceSquared(unit.x, unit.y, other.x, other.y)
     if (dist > limit) continue
+    if (!isVisibleTo(world, unit.player, other.x, other.y)) continue
     if (dist < bestDist || (dist === bestDist && other.id < (best?.id ?? Number.POSITIVE_INFINITY))) {
       best = other
       bestDist = dist
@@ -235,7 +241,7 @@ function nearestEnemyWithin(world: World, unit: Unit, rangeFixed: number): Unit 
   return best
 }
 
-/** 全場最近的敵方單位（風箏判斷用）。 */
+/** 全場最近的敵方單位（風箏判斷用）；視野外不計（Prompt 9.5b）。 */
 function nearestEnemy(world: World, unit: Unit): { unit: Unit; distSq: number } | null {
   let best: Unit | null = null
   let bestDist = Number.POSITIVE_INFINITY
@@ -247,6 +253,7 @@ function nearestEnemy(world: World, unit: Unit): { unit: Unit; distSq: number } 
       bestDist = dist
     }
   }
+  if (best !== null && !isVisibleTo(world, unit.player, best.x, best.y)) return null
   return best === null ? null : { unit: best, distSq: bestDist }
 }
 
@@ -254,6 +261,7 @@ function nearestEnemy(world: World, unit: Unit): { unit: Unit; distSq: number } 
  * 小隊集火目標（Prompt 10.7 斬殺集火）：集火半徑（`FOCUS_RADIUS_TILES`）內
  * **hp% 最低**的敵方單位——集火用來收頭，加快滾雪球；半徑內無敵人 →
  * 退回「離小隊重心最近者」。平手：先近者、再 id 小者。純函式、確定性。
+ * **視野過濾（Prompt 9.5b）**：看不見的敵人不集火（無記憶）。
  */
 function squadFocus(world: World, playerId: PlayerId, squad: Squad): Unit | null {
   const cx = squad.centroid.x * UNITS_PER_TILE + UNITS_PER_TILE / 2
@@ -267,6 +275,7 @@ function squadFocus(world: World, playerId: PlayerId, squad: Squad): Unit | null
   let nearestDistance = Number.POSITIVE_INFINITY
   for (const other of world.units) {
     if (other.player === playerId || other.hp <= 0) continue
+    if (!isVisibleTo(world, playerId, other.x, other.y)) continue
     const distance = distanceSquared(cx, cy, other.x, other.y)
     if (
       distance < nearestDistance ||

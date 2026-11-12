@@ -138,6 +138,9 @@ describe('進攻目標選擇（Prompt 7）', () => {
     const near = addBuilding(world, 'enemy', 'mine', { x: 12, y: 2 }, { built: true, nodeId: null })
     const far = addBuilding(world, 'enemy', 'mine', { x: 28, y: 2 }, { built: true, nodeId: null })
     putUnit(world, 'player', 'u', { x: 2, y: 2 })
+    // 視野（9.5b）：近礦守軍需在視野內才構成「已知防守」——加一名斥候貼近
+    //（(9,2) 距守軍 3–4 格 ≤ 6，距 (2,2) 7 格不併隊干擾）。
+    putUnit(world, 'player', 'u', { x: 9, y: 2 })
     // 近處礦場旁堆 3 個敵方單位 → 防守強。
     for (const tile of [
       { x: 12, y: 2 },
@@ -589,8 +592,11 @@ describe('交戰評估（打不贏就騷擾／守家，Prompt 10.8）', () => {
       putUnit(world, 'enemy', 'raider', tile)
     }
     // 敵礦場旁 2 守軍（第一目標評分仍選高價值主堡，評估後降級改打礦場）。
-    putUnit(world, 'enemy', 'u', { x: 18, y: 19 })
-    putUnit(world, 'enemy', 'u', { x: 19, y: 18 })
+    // 視野（9.5b）：守軍位置改放 (20,19)/(19,20)——距我方 (23,24) 單位 5–6 格
+    // 可見（不可見時礦場在目標評分「看似無防守」反而搶走高價值主堡）、
+    // 距小隊重心 6.6 格仍在接觸半徑外、距礦場中心 2.2 格仍在守備半徑內。
+    putUnit(world, 'enemy', 'u', { x: 20, y: 19 })
+    putUnit(world, 'enemy', 'u', { x: 19, y: 20 })
 
     const plan = computeTacticalPlan(world, 'player', resolvePolicies({ aggression: 1, clusterSpread: 1 }))
     const squad = plan.squads[0]

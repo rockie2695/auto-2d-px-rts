@@ -9,21 +9,28 @@ import {
   ownThreatAtTile,
   unitThreatMilli,
 } from './influence.ts'
-import { createTestWorld, makeUnitDef, putUnit } from '../sim/testFixtures.ts'
+import { createTestWorld, makeBuildingDef, makeUnitDef, putUnit } from '../sim/testFixtures.ts'
+import { addBuilding } from '../sim/economy.ts'
 import type { World } from '../sim/types.ts'
 import type { TilePos } from '../sim/types.ts'
 
 /**
- * 影響力地圖測試（Prompt 7 驗收）：
+ * 影響力地圖測試（Prompt 7 驗收；9.5b 視野過濾更新）：
  * - 敵方單位附近威脅值高、遠處低
  * - 精確公式：threat = value × (hp/maxHp) / (1 + dist²)
  * - 我方 / 敵方雙視角
  * - 殘血衰減、確定性
+ * - 9.5b：敵方貢獻只計**視野內**（單位 6 格／建築 6 格）——
+ *   測試以我方建築提供視野（建築不累積威脅，不污染精確值斷言）。
  */
 
 /** 32×32 地圖、8×8 tile 粗格 → 4×4 網格；格中心＝**固定點中點**（cell 0 → (800,800)，見 cellCenterFixed）。 */
 function influenceWorld(): World {
-  return createTestWorld({ size: 32, units: [makeUnitDef({ id: 'u' })] })
+  return createTestWorld({
+    size: 32,
+    units: [makeUnitDef({ id: 'u' })],
+    buildings: [makeBuildingDef({ id: 'b' })],
+  })
 }
 
 describe('影響力地圖（Prompt 7）', () => {
@@ -40,6 +47,9 @@ describe('影響力地圖（Prompt 7）', () => {
     // tile(4,4) 中心 = 固定點 (900,900)；格 0 中心（固定點中點）= (800,800)，
     // 差 (100,100) → 100000 × 200² / (200² + 100² + 100²) = 66667（milli）。
     putUnit(world, 'enemy', 'u', { x: 4, y: 4 })
+    // 視野（9.5b）：我方建築貼旁提供視野——敵單位才「已知」記入 enemy
+    // （建築不累積威脅，own[0] 仍為 0）。
+    addBuilding(world, 'player', 'b', { x: 5, y: 4 }, { built: true, nodeId: null })
     const map = computeInfluenceMap(world, 'player')
 
     expect(map.enemy[0]).toBe(66667)
@@ -59,6 +69,8 @@ describe('影響力地圖（Prompt 7）', () => {
   it('殘血單位威脅按 hp 比例衰減；死亡單位不計', () => {
     const world = influenceWorld()
     const id = putUnit(world, 'enemy', 'u', { x: 4, y: 4 })
+    // 視野（9.5b）：我方建築貼旁提供視野。
+    addBuilding(world, 'player', 'b', { x: 5, y: 4 }, { built: true, nodeId: null })
     const unit = world.units.find((candidate) => candidate.id === id)!
     unit.hp = 50
     expect(computeInfluenceMap(world, 'player').enemy[0]).toBe(33333)
@@ -71,6 +83,10 @@ describe('影響力地圖（Prompt 7）', () => {
     const world = influenceWorld()
     putUnit(world, 'player', 'u', { x: 20, y: 4 }) // 格 2
     putUnit(world, 'enemy', 'u', { x: 4, y: 4 }) // 格 0
+    // 視野（9.5b）：雙方各放一座建築照給對面視野——建築不累積威脅，
+    // 精確值斷言不受污染；enemy(4,4) 與 player(20,4) 都「已知」。
+    addBuilding(world, 'player', 'b', { x: 5, y: 4 }, { built: true, nodeId: null })
+    addBuilding(world, 'enemy', 'b', { x: 19, y: 4 }, { built: true, nodeId: null })
 
     const fromPlayer = computeInfluenceMap(world, 'player')
     expect(fromPlayer.own[2]).toBe(66667)
@@ -89,6 +105,10 @@ describe('影響力地圖（Prompt 7）', () => {
     const mirrorTile = (tile: TilePos): TilePos => ({ x: 31 - tile.x, y: 31 - tile.y })
     putUnit(world, 'player', 'u', { x: 5, y: 7 })
     putUnit(world, 'enemy', 'u', mirrorTile({ x: 5, y: 7 })) // (26,24)
+    // 視野（9.5b）：鏡射建築互為對面照視野（兩單位相距 21 格看不見彼此）；
+    // 建築不累積威脅 → enemy[c] = own[mirror(c)] 的精確對稱不變。
+    addBuilding(world, 'player', 'b', { x: 25, y: 23 }, { built: true, nodeId: null })
+    addBuilding(world, 'enemy', 'b', mirrorTile({ x: 25, y: 23 }), { built: true, nodeId: null })
     const map = computeInfluenceMap(world, 'player')
     const grid = map.gridSize
     const mirrorIndex = (index: number): number => {
@@ -117,6 +137,8 @@ describe('影響力地圖（Prompt 7）', () => {
   it('threatAtTile 以格為單位查詢（界外夾到邊界格）', () => {
     const world = influenceWorld()
     putUnit(world, 'enemy', 'u', { x: 4, y: 4 })
+    // 視野（9.5b）：我方建築貼旁提供視野。
+    addBuilding(world, 'player', 'b', { x: 5, y: 4 }, { built: true, nodeId: null })
     const map = computeInfluenceMap(world, 'player')
     expect(cellIndexOf(map, { x: -5, y: -5 })).toBe(0)
     expect(cellIndexOf(map, { x: 999, y: 999 })).toBe(15)
@@ -128,12 +150,28 @@ describe('影響力地圖（Prompt 7）', () => {
   it('enemyThreatAtPoint：在指定點求值（不受格中心稀釋）', () => {
     const world = influenceWorld()
     putUnit(world, 'enemy', 'u', { x: 20, y: 4 }) // 固定點 (4100, 900)
+    // 視野（9.5b）：我方單位貼旁提供視野（enemyThreatAtPoint 不計我方單位，
+    // 敵方可見性斷言值不變）。
+    putUnit(world, 'player', 'u', { x: 20, y: 5 })
     expect(enemyThreatAtPoint(world, 'player', 4100, 900)).toBe(100000)
     // 距 1 格（200 固定點）→ 100000 / (1 + 1) = 50000。
     expect(enemyThreatAtPoint(world, 'player', 4300, 900)).toBe(50000)
-    // 我方單位不計入敵方威脅。
-    putUnit(world, 'player', 'u', { x: 20, y: 5 })
+    // 我方單位不計入敵方威脅（再多一名也不變）。
+    putUnit(world, 'player', 'u', { x: 19, y: 5 })
     expect(enemyThreatAtPoint(world, 'player', 4100, 900)).toBe(100000)
+  })
+
+  it('視野過濾（Prompt 9.5b）：視野外敵人不記入 enemy；取得視野後當場記入（無記憶）', () => {
+    const world = influenceWorld()
+    putUnit(world, 'enemy', 'u', { x: 4, y: 4 })
+    putUnit(world, 'player', 'u', { x: 20, y: 20 }) // 距敵 16 格 → 敵不可見
+    const map = computeInfluenceMap(world, 'player')
+    expect(map.enemy.every((value) => value === 0)).toBe(true)
+
+    // 我方斥候推進到敵旁 → 敵單位當場入圖（無記憶：純函式重算）。
+    putUnit(world, 'player', 'u', { x: 5, y: 4 })
+    const after = computeInfluenceMap(world, 'player')
+    expect(after.enemy[0]).toBe(66667)
   })
 
   it('相同世界 → 相同地圖（確定性）', () => {

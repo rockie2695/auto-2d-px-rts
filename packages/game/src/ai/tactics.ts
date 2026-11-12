@@ -5,6 +5,7 @@ import { hashFate } from '../sim/rng.ts'
 import { mirrorSafeTileOf } from './mirrorTile.ts'
 import { computeInfluenceMap, DEFENSE_RADIUS_TILES, enemyThreatAtPoint, enemyThreatAtTile, pickMostUrgentThreat, unitThreatMilli } from './influence.ts'
 import type { BuildingThreat, InfluenceMap } from './influence.ts'
+import { isVisibleTo } from './sight.ts'
 import { clampSlider } from './policy.ts'
 import type { PolicyValues } from './policy.ts'
 import { effectivePolicies } from './tempo.ts'
@@ -1469,6 +1470,9 @@ const replyLimit = PINCER_REPLY_RADIUS_TILES * UNITS_PER_TILE
       const dx = enemy.x - centroidFixed.x
       const dy = enemy.y - centroidFixed.y
       if (dx * dx + dy * dy > noticeSq) continue
+      // 視野過濾（Prompt 9.5b）：接觸半徑（6）＝單位視野（6），半徑內敵人
+      // 必在小隊成員視野內——此檢查為防禦性（與判知語言一致），不變更結果。
+      if (!isVisibleTo(world, playerId, enemy.x, enemy.y)) continue
       seen.push(enemy)
       contactPower += unitThreatMilli(world, enemy)
       sumX += enemy.x

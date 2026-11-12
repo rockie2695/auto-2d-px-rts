@@ -62,6 +62,8 @@ export class GameScene {
   private heatmapData: InfluenceMap | null = null
   /** 迷霧暗罩（Prompt 9.5 完整版）：最頂層半透明暗格＝player AI 知識邊界。 */
   private readonly fogG = new Graphics()
+  /** 最新視野 mask（Prompt 9.5b：`visibleTileMask`；null = 全可見不畫）。 */
+  private fogMask: readonly boolean[] | null = null
   /** 路徑虛線（Prompt 9.5 完整版）：開關開啟時取代極淡意圖直線。 */
   private readonly pathsG = new Graphics()
   private readonly markersG = new Graphics()
@@ -106,6 +108,8 @@ export class GameScene {
     // 熱力圖：有資料才亮（開關先於資料推入時不會閃空圖）。
     this.overlayG.visible = opts.heatmap && this.heatmapSprite !== null
     this.fogG.visible = opts.fog
+    // 開啟迷霧 → 用已存的 mask 立即重繪（不必等下一 tick 的資料推入）。
+    if (opts.fog) this.redrawFog()
     this.pathsG.visible = opts.paths
     // 關閉路徑疊加 → 回到既有極淡意圖直線（fxG 內畫）。
   }
@@ -121,9 +125,20 @@ export class GameScene {
     this.redrawHeatmap()
   }
 
-  /** 迷霧暗罩資料推入（Prompt 9.5b 接 sight.ts；9.5a 為空 mask＝全可見）。 */
+  /**
+   * 迷霧暗罩資料推入（Prompt 9.5b：每 tick 由 session 推 `visibleTileMask`）。
+   * 只存 mask；開關開啟時才重繪（關閉時 20Hz 推入零繪製成本）。
+   * 無記憶語義：敵人離開視野 → mask 翻 false → 暗罩當場蓋回。
+   */
   updateFogMask(mask: readonly boolean[] | null): void {
+    this.fogMask = mask
+    if (this.overlays.fog) this.redrawFog()
+  }
+
+  /** 依已存 mask 重繪迷霧暗罩（不可見格 = 半透明暗格）。 */
+  private redrawFog(): void {
     this.fogG.clear()
+    const mask = this.fogMask
     if (mask === null) return
     const size = mask.length === 0 ? 0 : Math.round(Math.sqrt(mask.length))
     for (let y = 0; y < size; y++) {

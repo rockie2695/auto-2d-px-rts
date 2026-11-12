@@ -2,6 +2,7 @@ import type { PolicyValues } from './policy.ts'
 import { buildEconWeight, buildExpandBias, buildMilitaryWeight, buildTechBias } from './policy.ts'
 import { effectivePolicies } from './tempo.ts'
 import { pickMostUrgentThreat } from './influence.ts'
+import { isVisibleTo } from './sight.ts'
 import type { DecisionTopFactor, ExplainState } from './explain.ts'
 import { explainBuild, explainTrain } from './explain.ts'
 import type { ResourceId, Role, UnitDef } from '@auto-2d-px-rts/shared'
@@ -300,11 +301,16 @@ interface UnitCandidate {
   score: number
 }
 
-/** 敵方活著單位的角色計數（melee / ranged）。 */
+/**
+ * 敵方活著單位的角色計數（melee / ranged）。
+ * **視野過濾（Prompt 9.5b）**：只計視野內的敵單位——看不見的爆兵不進克制判斷
+ * （隱形堆兵 → AI 短暫誤判克制是特性，敵人現身後即修正）；無記憶。
+ */
 function enemyRoleCounts(world: World, playerId: PlayerId): Record<Role, number> {
   const totals: Record<Role, number> = { melee: 0, ranged: 0 }
   for (const unit of world.units) {
     if (unit.hp <= 0 || unit.player === playerId) continue
+    if (!isVisibleTo(world, playerId, unit.x, unit.y)) continue
     totals[unit.role] += 1
   }
   return totals

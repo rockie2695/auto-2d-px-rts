@@ -10,6 +10,7 @@ import { runStrategicCycle, STRATEGIC_INTERVAL_TICKS } from './ai/strategy.ts'
 import type { DecisionRecord } from './ai/strategy.ts'
 import { pickMostUrgentThreat, computeInfluenceMap } from './ai/influence.ts'
 import type { InfluenceMap } from './ai/influence.ts'
+import { visibleTileMask } from './ai/sight.ts'
 import { armorTierOf } from './render/armor.ts'
 import {
   computeTacticalPlan,
@@ -593,6 +594,10 @@ export async function startGameSession(app: Application, scene: GameScene): Prom
     }
     prev = curr
     curr = snapshotWorld(w)
+    // 視野迷霧（Prompt 9.5b）：每 tick 重算 player 視野並推入場景——
+    // 無記憶（純函式），敵人離開視野即同步從 AI 判知與迷霧消失；
+    // 開關關閉時場景只存 mask 不重繪（零繪製成本）。
+    scene.updateFogMask(visibleTileMask(w, 'player'))
   }
 
   const onFrame = (ticker: Ticker): void => {

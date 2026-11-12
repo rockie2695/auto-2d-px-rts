@@ -543,6 +543,21 @@ describe('克制與稀缺性', () => {
     )
   })
 
+  it('視野過濾（Prompt 9.5b）：視野外的敵人不進克制判斷（看不見的爆兵不扭轉生產）', () => {
+    const world = productionWorld(
+      rangeUnits(),
+      { melee: { melee: 1.0, ranged: 1.0 }, ranged: { melee: 2.0, ranged: 1.0 } },
+    )
+    // 敵方 4 近戰堆在 (20..23,20)：離我方 3 座兵營（視野 6 格）與出生單位都遠
+    // → 對 player 完全不可見 → enemyRoleShare = null → 克制分中性（1.0），
+    // ranged 不再因克制勝出（對照上一測試：可見時 ranged 勝出）。
+    for (let index = 0; index < 4; index++) putUnit(world, 'enemy', 'meleeU', { x: 20 + index, y: 20 })
+
+    runCycles(world, 'player', resolvePolicies({ unitRange: 0.5 }), 8)
+
+    expect(countUnits(world, 'player', 'rangedU')).toBe(countUnits(world, 'player', 'meleeU'))
+  })
+
   it('同分候選：稀缺性懲罰使生產自然均攤', () => {
     const twin = (id: string): UnitDef => makeUnitDef({ id })
     const world = productionWorld([twin('a'), twin('b')])

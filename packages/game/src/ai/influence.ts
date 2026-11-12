@@ -1,5 +1,6 @@
 import { UNITS_PER_TILE } from '../sim/types.ts'
 import type { PlayerId, TilePos, World } from '../sim/types.ts'
+import { isVisibleTo } from './sight.ts'
 import { mirrorSafeTileOf } from './mirrorTile.ts'
 
 /**
@@ -15,6 +16,10 @@ import { mirrorSafeTileOf } from './mirrorTile.ts'
  *
  * 數值以**整數 milli** 累積（`value × permille × 40000 / (40000 + dist²固定點)`），
  * 不引入浮點，跨平台結果一致；AI 只在每 `TACTICAL_INTERVAL_TICKS` 重算一次。
+ *
+ * **視野過濾（Prompt 9.5b 真·資訊不完全）**：敵方貢獻只計**視野內**的敵單位
+ * （`isVisibleTo`，單位 6 格／建築 6 格／塔射程+2）；我方貢獻恆計
+ * （自己的部隊必然「知道」）。無記憶——敵人離開視野即從地圖消失。
  */
 
 /** 粗格邊長（tile）。SPEC §9.2 補註：MVP 採 8×8 tile 粗網格。 */
@@ -59,6 +64,8 @@ export function enemyThreatAtPoint(world: World, playerId: PlayerId, x: number, 
   let total = 0
   for (const unit of world.units) {
     if (unit.player === playerId) continue
+    // 視野過濾（Prompt 9.5b）：視野外敵人不構成「已知威脅」（無記憶）。
+    if (!isVisibleTo(world, playerId, unit.x, unit.y)) continue
     const threat = unitThreatMilli(world, unit)
     if (threat <= 0) continue
     total += contributionMilli(threat, unit.x - x, unit.y - y)
@@ -144,6 +151,9 @@ export function detectBuildingThreats(world: World, playerId: PlayerId): Buildin
       const dx = unit.x - centerX
       const dy = unit.y - centerY
       if (dx * dx + dy * dy > limit) continue
+      // 視野過濾（Prompt 9.5b）：守備半徑（6）≤ 建築視野（6／塔射程+2），
+      // 半徑內來襲敵軍必然可見——此檢查為防禦性（與視野語言一致），不改變結果。
+      if (!isVisibleTo(world, playerId, unit.x, unit.y)) continue
       const milli = unitThreatMilli(world, unit)
       if (milli <= 0) continue
       threatPower += milli
@@ -217,6 +227,8 @@ export function computeInfluenceMap(world: World, playerId: PlayerId): Influence
     if (unit.hp <= 0) continue
     const threat = unitThreatMilli(world, unit)
     if (threat <= 0) continue
+    // 視野過濾（Prompt 9.5b）：敵方貢獻只計視野內（我方貢獻恆計）。
+    if (unit.player !== playerId && !isVisibleTo(world, playerId, unit.x, unit.y)) continue
     const grid = unit.player === playerId ? own : enemy
 
     for (let cy = 0; cy < gridSize; cy++) {

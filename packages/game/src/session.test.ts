@@ -61,6 +61,7 @@ function makeFakeScene() {
     update: vi.fn(),
     setSelected: vi.fn(),
     setMarkers: vi.fn(),
+    updateFogMask: vi.fn(),
   }
 }
 
