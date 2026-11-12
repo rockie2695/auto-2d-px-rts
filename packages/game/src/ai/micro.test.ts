@@ -537,6 +537,18 @@ describe('追擊（SPEC §9.3 第 4 節，Prompt 10）', () => {
     expect(decision?.attackTargetId).toBe(enemyId)
   })
 
+  it('收斂閘（Prompt 9.5c）：追擊距內的更快風箏遠程、退路開闊 → 不追（前壓也是白挨射）', () => {
+    const world = microWorld()
+    const meleeId = putUnit(world, 'player', 'melee', { x: 10, y: 10 })
+    putUnit(world, 'enemy', 'archer', { x: 11, y: 10 }) // 距 1 格：追擊距內
+    putUnit(world, 'player', 'melee', { x: 8, y: 10 }) // 支援在內（10.8 舊閘放行）…
+    const plan = planWith(world, { x: 2, y: 2 }, [makeSquad(0, [meleeId], { x: 20, y: 20 })])
+    // …但風箏退格 (13,10) 開闊、無友軍蓋住 → 收斂閘擋下。
+    const decision = computeMicroPlan(world, 'player', plan).find((d) => d.unitId === meleeId)
+    expect(decision?.action).toBe('formation')
+    expect(decision?.attackTargetId).toBeNull()
+  })
+
   it('常數：追擊門檻 1.0 格、追擊支援半徑 4 格', () => {
     expect(CHASE_MARGIN).toBe(1.0)
     expect(CHASE_SUPPORT_RADIUS_TILES).toBe(4)
@@ -862,5 +874,43 @@ describe('受火反應（Prompt 10.24 D：被打不再站樁挨打）', () => {
     const plan = planWith(world, { x: 2, y: 2 }, [])
     const decision = runMicroCycle(world, 'player', plan).find((d) => d.unitId === id)
     expect(decision?.action).toBe('disengage')
+  })
+
+  it('收斂閘（Prompt 9.5c）：攻擊者是更快風箏遠程、退路開闊 → 不追、脫離（不再點射到死）', () => {
+    const world = createTestWorld({ size: 32, units: [MELEE, ARCHER], buildings: [] })
+    const id = putUnit(world, 'player', 'melee', { x: 4, y: 4 })
+    putUnit(world, 'enemy', 'archer', { x: 7, y: 4 }) // 3 格：受火上限內（≤ 4.8）
+    putUnit(world, 'player', 'melee', { x: 6, y: 4 }) // 支援在內（10.8 舊閘會放行）…
+    wounded(world, id)
+    // …但風箏退格（背離我退 2 格 → (9,4)）開闊、無友軍火力圈覆蓋 → 追不上。
+    const decision = runMicroCycle(world, 'player', null).find((d) => d.unitId === id)
+    expect(decision?.action).toBe('disengage')
+    expect(decision?.reason).toContain('脫離')
+  })
+
+  it('收斂閘：風箏退格被友軍接戰半徑蓋住（包夾）→ 照樣追（包夾收頭保留）', () => {
+    const world = createTestWorld({ size: 32, units: [MELEE, ARCHER], buildings: [] })
+    const id = putUnit(world, 'player', 'melee', { x: 10, y: 10 })
+    putUnit(world, 'enemy', 'archer', { x: 11, y: 10 }) // 距 1 格（追擊距內，走 2.5）
+    putUnit(world, 'player', 'melee', { x: 12, y: 10 }) // 蓋住退格 (13,10)
+    wounded(world, id)
+    const decision = runMicroCycle(world, 'player', null).find((d) => d.unitId === id)
+    expect(decision?.action).toBe('chase')
+  })
+
+  it('收斂閘：較慢遠程（移速 < 我方）追得上 → 維持受火貼身（10.24 D 對可追目標不變）', () => {
+    const SLOW_ARCHER = makeUnitDef({
+      id: 'slowarcher',
+      role: 'ranged',
+      stats: { hp: 60, dmg: 8, range: 3.0, attackSpeed: 1.0, moveSpeed: 0.5 },
+      ai: { value: 100, preferredRange: 3.0, retreatHpPct: 0.2 },
+    })
+    const world = createTestWorld({ size: 32, units: [MELEE, SLOW_ARCHER], buildings: [] })
+    const id = putUnit(world, 'player', 'melee', { x: 4, y: 4 })
+    putUnit(world, 'enemy', 'slowarcher', { x: 7, y: 4 }) // 3 格：受火上限內
+    putUnit(world, 'player', 'melee', { x: 6, y: 4 }) // 支援
+    wounded(world, id)
+    const decision = runMicroCycle(world, 'player', null).find((d) => d.unitId === id)
+    expect(decision?.action).toBe('chase')
   })
 })

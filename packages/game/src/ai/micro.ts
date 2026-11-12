@@ -395,6 +395,65 @@ function chaseSupported(
 }
 
 /**
+ * 追擊收斂判定（Prompt 9.5c）：這個目標**追得上嗎**？
+ * - 我方移速 > 目標移速 → 追得上（距離單調收斂；如近戰追 ballista）；
+ * - 目標射程 ≤ 我方（非風箏型，如同速近戰互追）→ 可追（對方要接戰就會停下）；
+ * - 風箏型遠程且移速 ≥ 我方 → 看退路：**預演它的風箏退格**（背離我退 2 格，
+ *   與 `kiteDest` 同方向序）——退格被地形全擋（夾角）或有其他友軍的接戰半徑
+ *   蓋住（包夾收頭）→ 收斂可追；退路開闊 → **數學上追不上**（風箏門檻 2.1 格
+ *   > 我方追擊半徑 1.8 格，我還沒貼身它就退開，「站定」也只是風箏間歇——
+ *   追擊 = 持續走進自由傷害，守備隊被點射到死的根因，Prompt 10.24 D 的
+ *   「有支援就貼身」給這個死循環開了閘）→ 不可追。
+ * 純函式、預演走目標自己的鏡像視角、對兩側同一規則（鏡像對稱）。
+ */
+function chaseConverges(world: World, unit: Unit, target: Unit): boolean {
+  const myDef = world.defs.units[unit.defId]
+  const targetDef = world.defs.units[target.defId]
+  if (myDef === undefined || targetDef === undefined) return false
+  if (myDef.stats.moveSpeed > targetDef.stats.moveSpeed) return true
+  if (targetDef.stats.range <= myDef.stats.range) return true
+  // 風箏退格預演（目標自己的鏡像視角；kiteDest 同序：對角 → 主軸）。
+  const targetMirror = target.player === 'enemy'
+  const from = mirrorSafeTileOf(world.map.size, targetMirror, target.x, target.y)
+  const src = mirrorSafeTileOf(world.map.size, targetMirror, unit.x, unit.y)
+  const dx = Math.sign(from.x - src.x)
+  const dy = Math.sign(from.y - src.y)
+  const size = world.map.size
+  const candidates: TilePos[] = []
+  if (dx !== 0 || dy !== 0) {
+    candidates.push(
+      { x: from.x + dx * 2, y: from.y + dy * 2 },
+      { x: from.x + dx * 2, y: from.y },
+      { x: from.x, y: from.y + dy * 2 },
+    )
+  }
+  let fleeTile: TilePos | null = null
+  for (const candidate of candidates) {
+    if (candidate.x < 0 || candidate.y < 0 || candidate.x >= size || candidate.y >= size) continue
+    if (!isBlockedAt(world, candidate)) {
+      fleeTile = candidate
+      break
+    }
+  }
+  if (fleeTile === null) return true // 退無可退（被地形夾住）→ 追得上
+  // 退格落入其他友軍的接戰半徑（射程 + 追擊距）→ 逃進火力圈 → 收斂。
+  for (const ally of world.units) {
+    if (ally.player !== unit.player || ally.id === unit.id || ally.hp <= 0) continue
+    const allyDef = world.defs.units[ally.defId]
+    if (allyDef === undefined) continue
+    const reach =
+      (Math.round(allyDef.stats.range * UNITS_PER_TILE) + CHASE_MARGIN * UNITS_PER_TILE) *
+      (Math.round(allyDef.stats.range * UNITS_PER_TILE) + CHASE_MARGIN * UNITS_PER_TILE)
+    const fx = fleeTile.x * UNITS_PER_TILE + UNITS_PER_TILE / 2
+    const fy = fleeTile.y * UNITS_PER_TILE + UNITS_PER_TILE / 2
+    const ddx = ally.x - fx
+    const ddy = ally.y - fy
+    if (ddx * ddx + ddy * ddy <= reach) return true
+  }
+  return false
+}
+
+/**
  * 正在射我的敵方防禦建築（Prompt 10.24 D）：帶 `defense`、**已完工**、防禦射程
  * 覆蓋我（外框量測，與 sim 同算法）。回傳覆蓋我的**最近**一座；平手取 id 小者
  * （掃描序 id 升冪＋嚴格小於 ⟺ 同）。純函式、確定性。
@@ -647,7 +706,10 @@ export function computeMicroPlan(
         const underFireLimitFixed = rangeFixed + UNDER_FIRE_CHASE_MARGIN * UNITS_PER_TILE
         if (
           near.distSq <= underFireLimitFixed * underFireLimitFixed &&
-          chaseSupported(world, playerId, near.unit, unit.id)
+          chaseSupported(world, playerId, near.unit, unit.id) &&
+          // 收斂閘（Prompt 9.5c）：追不上的風箏型攻擊者不貼身——貼身 =
+          // 持續走進自由傷害（守備隊被點射到死的死循環），改走下方脫離。
+          chaseConverges(world, unit, near.unit)
         ) {
           const enemyTile = mirrorSafeTileOf(
             world.map.size,
@@ -692,7 +754,11 @@ export function computeMicroPlan(
     if (near !== null) {
       const chaseLimitFixed = rangeFixed + CHASE_MARGIN * UNITS_PER_TILE
       if (near.distSq <= chaseLimitFixed * chaseLimitFixed) {
-        const supported = chaseSupported(world, playerId, near.unit, unit.id)
+        const supported =
+          chaseSupported(world, playerId, near.unit, unit.id) &&
+          // 收斂閘（Prompt 9.5c）：追不上（更快＋遠程＋在動）的目標不追——
+          // 近身前它就會退開（風箏門檻 > 追擊半徑），前壓只是白挨射。
+          chaseConverges(world, unit, near.unit)
         if (supported) {
           const enemyTile = mirrorSafeTileOf(
             world.map.size,

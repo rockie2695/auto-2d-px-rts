@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import type { World } from './types.ts'
 import { addBuilding } from './economy.ts'
-import { applyArmor, effectiveHp, setAttackTarget } from './combat.ts'
+import { applyArmor, computeEngageLines, effectiveHp, setAttackTarget } from './combat.ts'
 import { createTestWorld, makeBuildingDef, makeUnitDef, putUnit } from './testFixtures.ts'
 import { stepWorld } from './world.ts'
 
@@ -94,6 +94,97 @@ describe('自動接戰（不呼叫任何 AI）', () => {
     expect(ticks).toBeLessThan(60)
     // 顯式目標在射程外：depot 完全沒被這條鏈打過。
     expect(depot.damageTaken).toBe(0)
+  })
+})
+
+describe('computeEngageLines（Prompt 9.5c：接戰線 = 實際攻擊計算）', () => {
+  const RANGED = makeUnitDef({
+    id: 'r',
+    role: 'ranged',
+    stats: { hp: 100, dmg: 10, range: 2.0, attackSpeed: 1.0, moveSpeed: 1.0 },
+  })
+
+  it('顯式目標在射程內 → 端點 = 顯式目標中心', () => {
+    const world = createTestWorld({ units: [RANGED], seed: 7 })
+    const blueId = putUnit(world, 'player', 'r', { x: 5, y: 5 })
+    const redId = putUnit(world, 'enemy', 'r', { x: 5, y: 7 }) // 距 2 格 = 射程內
+    setAttackTarget(world, blueId, redId)
+    const lines = computeEngageLines(world)
+    const endpoint = lines.units.get(blueId)
+    expect(endpoint?.targetUnitId).toBe(redId)
+    expect(endpoint?.x).toBe(5 * 200 + 100)
+    expect(endpoint?.y).toBe(7 * 200 + 100)
+  })
+
+  it('顯式目標在射程外 → 端點 = 射程內自動接戰目標（舊渲染近似會指錯的場景）', () => {
+    const world = createTestWorld({
+      units: [RANGED],
+      buildings: [makeBuildingDef({ id: 'depot' })],
+      seed: 7,
+    })
+    const depot = addBuilding(world, 'enemy', 'depot', { x: 0, y: 0 }, { built: true, nodeId: null })
+    const blueId = putUnit(world, 'player', 'r', { x: 5, y: 5 })
+    const redId = putUnit(world, 'enemy', 'r', { x: 5, y: 7 }) // 射程內近旁
+    const farId = putUnit(world, 'enemy', 'r', { x: 5, y: 12 }) // 距 7 格 = 射程外
+    setAttackTarget(world, blueId, farId)
+    const endpoint = computeEngageLines(world).units.get(blueId)
+    // 舊 victimOf 無射程檢查 → 線畫到 farId；sim 實際打的是射程內的 redId。
+    expect(endpoint?.targetUnitId).toBe(redId)
+    expect(endpoint?.targetUnitId).not.toBe(farId)
+    expect(depot.damageTaken).toBe(0)
+  })
+
+  it('打建築 → 端點 = 佔地外框最近點（固定點）', () => {
+    const world = createTestWorld({
+      units: [RANGED],
+      buildings: [makeBuildingDef({ id: 'depot', size: [2, 2] })],
+      seed: 7,
+    })
+    const depot = addBuilding(world, 'enemy', 'depot', { x: 6, y: 5 }, { built: true, nodeId: null })
+    const blueId = putUnit(world, 'player', 'r', { x: 5, y: 5 })
+    setAttackTarget(world, blueId, depot.id)
+    const endpoint = computeEngageLines(world).units.get(blueId)
+    // 單位中心 (1100, 1100)，外框 x0 = 1200 → 最近點 (1200, 1100)。
+    expect(endpoint?.targetBuildingId).toBe(depot.id)
+    expect(endpoint?.x).toBe(1200)
+    expect(endpoint?.y).toBe(5 * 200 + 100)
+  })
+
+  it('射程內無任何目標 → 不出現在 map', () => {
+    const world = createTestWorld({ units: [RANGED], seed: 7 })
+    putUnit(world, 'player', 'r', { x: 5, y: 5 })
+    putUnit(world, 'enemy', 'r', { x: 20, y: 20 }) // 15 格外
+    expect(computeEngageLines(world).units.size).toBe(0)
+  })
+
+  it('塔：防禦射程內最近敵方單位（外框量測）；無 defense 建築不畫', () => {
+    const world = createTestWorld({
+      units: [RANGED],
+      buildings: [
+        makeBuildingDef({
+          id: 'tower',
+          size: [2, 2],
+          defense: { dmg: 10, range: 4.0, attackSpeed: 0.5 },
+        }),
+        makeBuildingDef({ id: 'keep', size: [3, 3] }),
+      ],
+      seed: 7,
+    })
+    const tower = addBuilding(world, 'enemy', 'tower', { x: 10, y: 10 }, { built: true, nodeId: null })
+    addBuilding(world, 'enemy', 'keep', { x: 20, y: 20 }, { built: true, nodeId: null })
+    const nearId = putUnit(world, 'player', 'r', { x: 13, y: 11 }) // 距外框 300 ≤ 800
+    putUnit(world, 'player', 'r', { x: 16, y: 11 }) // 距外框 900 > 800
+    const lines = computeEngageLines(world)
+    expect(lines.towers.get(tower.id)?.targetUnitId).toBe(nearId)
+    expect(lines.towers.size).toBe(1) // keep 無 defense → 不畫
+  })
+
+  it('投降方不開火 → 不畫接戰線（與 stepCombat 同門檻）', () => {
+    const world = createTestWorld({ units: [RANGED], seed: 7 })
+    const blueId = putUnit(world, 'player', 'r', { x: 5, y: 5 })
+    putUnit(world, 'enemy', 'r', { x: 5, y: 7 })
+    world.surrender = { player: 'player', tick: world.tick, despairAtSurrender: 1, powerRatio: 0, incomeRatio: 0 }
+    expect(computeEngageLines(world).units.get(blueId)).toBeUndefined()
   })
 })
 

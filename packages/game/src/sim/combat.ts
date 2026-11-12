@@ -83,6 +83,12 @@ function explicitTargetInRange(world: World, unit: Unit, rangeFixed: number): Co
     : null
 }
 
+/** 單位本 tick 的實際攻擊目標（顯式射程內優先，否則自動接戰）——stepCombat 與
+ *  渲染層 `computeEngageLines` 共用同一解析，接戰線與實際傷害結構上不可能漂移。 */
+function resolveUnitTarget(world: World, unit: Unit, rangeFixed: number): CombatTarget | null {
+  return explicitTargetInRange(world, unit, rangeFixed) ?? acquireTarget(world, unit, rangeFixed)
+}
+
 /** 自動接戰目標：射程內最近敵方單位（平手取 id 小者），否則最近敵方建築。 */
 function acquireTarget(world: World, unit: Unit, rangeFixed: number): CombatTarget | null {
   const { unitIds, buildingIds } = queryNear(world, unit.x, unit.y, rangeFixed)
@@ -234,7 +240,7 @@ export function stepCombat(world: World): void {
     if (unit.attackAcc < 1) continue
 
     const rangeFixed = Math.round(def.stats.range * UNITS_PER_TILE)
-    const target = explicitTargetInRange(world, unit, rangeFixed) ?? acquireTarget(world, unit, rangeFixed)
+    const target = resolveUnitTarget(world, unit, rangeFixed)
 
     if (target === null) {
       // 射程內沒有目標：冷卻封頂在 1，開火當刻立即生效（SPEC §2.2）。
@@ -292,4 +298,102 @@ export function stepCombat(world: World): void {
   }
 
   removeDead(world)
+}
+
+/* ------------------------------------------------------------------ */
+/* 接戰線資料（Prompt 9.5c：渲染層用，與實際攻擊計算同一解析）           */
+/* ------------------------------------------------------------------ */
+
+/** 一條接戰線的受害者端點（固定點座標＋目標 id）。 */
+export interface EngageEndpoint {
+  /** 單位受害者 = 中心；建築受害者 = 佔地外框最近點。 */
+  x: number
+  y: number
+  targetUnitId: number | null
+  targetBuildingId: number | null
+}
+
+/** 本 tick 的接戰線資料（攻擊者 → 實際會被打到的受害者）。 */
+export interface EngageLines {
+  /** 單位攻擊者（key = 攻擊者單位 id）。 */
+  units: Map<number, EngageEndpoint>
+  /** 塔攻擊者（key = 塔建築 id；受害者恆為單位）。 */
+  towers: Map<number, EngageEndpoint>
+}
+
+/**
+ * 本 tick 的接戰線資料（Prompt 9.5c）：對每個存活單位／塔用**與 `stepCombat`
+ * 完全相同**的目標解析（`resolveUnitTarget`／`acquireBuildingTarget`）現算
+ * 「現在開火會打到誰」——無論冷卻是否到（接戰線語義是持續交戰，不只開火瞬間）。
+ *
+ * - 渲染層 250ms 快照近似的受害者**不含射程檢查**（追擊中把線畫到射程外目標）
+ *   ——本函式與 sim 同碼，結構上不可能漂移。
+ * - session onTick 每 tick 呼叫並推入場景（20Hz），線的延遲從 250ms → ≤50ms。
+ * - 純函式、零 sim 狀態污染（不寫 world；空間哈希由 stepWorld 戰鬥前重建，
+ *   此時仍新鮮）。投降方單位不開火 → 不畫（與 stepCombat 同門檻）。
+ */
+export function computeEngageLines(world: World): EngageLines {
+  const units = new Map<number, EngageEndpoint>()
+  const towers = new Map<number, EngageEndpoint>()
+  const surrenderedPlayer = world.surrender?.player ?? null
+
+  for (const unit of world.units) {
+    if (unit.hp <= 0 || unit.player === surrenderedPlayer) continue
+    const def = world.defs.units[unit.defId]
+    if (def === undefined) continue
+    const rangeFixed = Math.round(def.stats.range * UNITS_PER_TILE)
+    const target = resolveUnitTarget(world, unit, rangeFixed)
+    if (target === null) continue
+    if (target.kind === 'unit') {
+      units.set(unit.id, {
+        x: target.unit.x,
+        y: target.unit.y,
+        targetUnitId: target.unit.id,
+        targetBuildingId: null,
+      })
+    } else {
+      const point = closestBuildingPointFixed(unit, target.building)
+      units.set(unit.id, {
+        x: point.x,
+        y: point.y,
+        targetUnitId: null,
+        targetBuildingId: target.building.id,
+      })
+    }
+  }
+
+  for (const building of world.buildings) {
+    if (building.hp <= 0 || !isConstructed(building) || building.player === surrenderedPlayer) {
+      continue
+    }
+    const def = world.defs.buildings[building.defId]
+    const defense = def?.defense
+    if (def === undefined || defense === undefined) continue
+    const rangeFixed = Math.round(defense.range * UNITS_PER_TILE)
+    const victim = acquireBuildingTarget(world, building, rangeFixed)
+    if (victim === null) continue
+    towers.set(building.id, {
+      x: victim.x,
+      y: victim.y,
+      targetUnitId: victim.id,
+      targetBuildingId: null,
+    })
+  }
+
+  return { units, towers }
+}
+
+/** 建築佔地外框上離單位最近的點（固定點；點在框內回傳自身）。 */
+function closestBuildingPointFixed(
+  unit: { x: number; y: number },
+  building: Building,
+): { x: number; y: number } {
+  const x0 = building.x * UNITS_PER_TILE
+  const y0 = building.y * UNITS_PER_TILE
+  const x1 = (building.x + building.w) * UNITS_PER_TILE
+  const y1 = (building.y + building.h) * UNITS_PER_TILE
+  return {
+    x: Math.min(Math.max(unit.x, x0), x1),
+    y: Math.min(Math.max(unit.y, y0), y1),
+  }
 }

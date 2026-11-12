@@ -28,7 +28,8 @@ import {
 import { armorBarRatio, armorTierColorPixiOf, armorTierOf } from './armor.ts'
 import { influenceCellColor } from './overlay.ts'
 import { clamp01, fixedToPx, interpolateDisplay } from './interpolate.ts'
-import { firedThisTick, towerVictimOf } from './attackFx.ts'
+import { firedThisTick } from './attackFx.ts'
+import type { EngageLines } from '../sim/combat.ts'
 import {
   clampCamera,
   fitCamera,
@@ -64,6 +65,12 @@ export class GameScene {
   private readonly fogG = new Graphics()
   /** 最新視野 mask（Prompt 9.5b：`visibleTileMask`；null = 全可見不畫）。 */
   private fogMask: readonly boolean[] | null = null
+  /**
+   * 本 tick 接戰線資料（Prompt 9.5c：session 每 tick 推 `computeEngageLines`）。
+   * 與 sim 實際攻擊計算同一解析（`resolveUnitTarget`）——接戰線指誰、
+   * 傷害就打誰，且延遲 ≤ 一個 tick（50ms），不再用 250ms 快照近似。
+   */
+  private engageLines: EngageLines | null = null
   /** 路徑虛線（Prompt 9.5 完整版）：開關開啟時取代極淡意圖直線。 */
   private readonly pathsG = new Graphics()
   private readonly markersG = new Graphics()
@@ -133,6 +140,14 @@ export class GameScene {
   updateFogMask(mask: readonly boolean[] | null): void {
     this.fogMask = mask
     if (this.overlays.fog) this.redrawFog()
+  }
+
+  /**
+   * 接戰線資料推入（Prompt 9.5c）：session onTick 每 tick 呼叫。
+   * 只存資料——接戰線在每幀 fx 重畫時取用（20Hz 資料、60fps 呈現）。
+   */
+  setEngageLines(lines: EngageLines | null): void {
+    this.engageLines = lines
   }
 
   /** 依已存 mask 重繪迷霧暗罩（不可見格 = 半透明暗格）。 */
@@ -433,8 +448,10 @@ export class GameScene {
         if (!firedThisTick(before.attackAcc, after.attackAcc)) continue
         const def = this.defs.units[after.defId]
         if (def === undefined) continue
-        const victim = victimOf(this.defs, after, currById, buildingsById)
-        if (victim === null) continue
+        // 受害者端點（Prompt 9.5c）：查本 tick 接戰線 map（與 stepCombat 同解析
+        // 現算）——開火閃光與實際傷害落點一致，不再用快照近似。
+        const victim = this.engageLines?.units.get(after.id)
+        if (victim === undefined) continue
         this.effects.push({
           kind: def.role === 'ranged' ? 'shot' : 'melee',
           fromX: fixedToPx(after.x),
@@ -446,16 +463,16 @@ export class GameScene {
         })
       }
       // 塔的開火特效（Prompt 10.16，10.24 修）：快照 diff 偵測 `building.attackAcc`
-      // 掉落（同單位判據）；受害者由**渲染層現算**（`towerVictimOf`：射程內最近
-      // 敵方單位）——sim 的 `building.targetId` 恆為 null（無人設值），舊條件
-      // 讓塔的開火特效從未出現過。起點 = 建築**外框**最近受害者的點、終點 = 受害單位。
+      // 掉落（同單位判據）；受害者端點查本 tick 接戰線 map（Prompt 9.5c，
+      // `acquireBuildingTarget` 同解析）。起點 = 建築**外框**最近受害者的點、
+      // 終點 = 受害單位。
       for (const before of prev.buildings) {
         const after = buildingsById.get(before.id)
         if (after === undefined || after.hp <= 0) continue
         if (!firedThisTick(before.attackAcc, after.attackAcc)) continue
         if (this.defs.buildings[after.defId]?.defense === undefined) continue
-        const victim = towerVictimOf(this.defs, after, curr.units)
-        if (victim === null) continue
+        const victim = this.engageLines?.towers.get(after.id)
+        if (victim === undefined) continue
         const edge = closestPointOnBuilding(victim, after, this.defs)
         this.effects.push({
           kind: 'shot',
@@ -471,36 +488,36 @@ export class GameScene {
     this.effects = this.effects.filter((fx) => now - fx.born < ATTACK_FX_MS)
     this.fxG.clear()
 
-    // 持續接戰線（Prompt 10.13）：射程內有目標的單位畫淡色細線到目標——
-    // 一眼看出「誰在打誰」（不只開火那一瞬）。**受害者含建築**（Prompt 10.14）：
-    // 打建築同樣畫線（端點 = 建築外框最近點），之前打建築什麼都不畫。
-    const engageById = new Map<number, WorldSnapshot['units'][number]>()
-    for (const unit of curr.units) engageById.set(unit.id, unit)
-    const engageBuildingsById = new Map<number, WorldSnapshot['buildings'][number]>()
-    for (const building of curr.buildings) engageBuildingsById.set(building.id, building)
-    for (const unit of curr.units) {
-      if (unit.hp <= 0) continue
-      const victim = victimOf(this.defs, unit, engageById, engageBuildingsById)
-      if (victim === null) continue
-      const color = unit.player === 'player' ? COLOR_UNIT_PLAYER : COLOR_UNIT_ENEMY
-      this.fxG
-        .moveTo(fixedToPx(unit.x), fixedToPx(unit.y))
-        .lineTo(fixedToPx(victim.x), fixedToPx(victim.y))
-        .stroke({ width: 1, color, alpha: 0.28 })
-    }
-    // 塔的持續接戰線（Prompt 10.16，10.24 修）：受害者由 `towerVictimOf` 現算——
-    // 舊條件依賴 `building.targetId`（恆 null）→ 塔的接戰線從未畫過。
-    for (const building of curr.buildings) {
-      if (building.hp <= 0) continue
-      if (this.defs.buildings[building.defId]?.defense === undefined) continue
-      const victim = towerVictimOf(this.defs, building, curr.units)
-      if (victim === null) continue
-      const edge = closestPointOnBuilding(victim, building, this.defs)
-      const color = building.player === 'player' ? COLOR_BUILDING_PLAYER : COLOR_BUILDING_ENEMY
-      this.fxG
-        .moveTo(fixedToPx(edge.x), fixedToPx(edge.y))
-        .lineTo(fixedToPx(victim.x), fixedToPx(victim.y))
-        .stroke({ width: 1, color, alpha: 0.28 })
+    // 持續接戰線（Prompt 10.13；9.5c 改真資料）：畫淡色細線到**實際攻擊計算**
+    // 的受害者——一眼看出「誰在打誰」（不只開火那一瞬）。資料由 session 每 tick
+    // 推 `computeEngageLines`（與 `stepCombat` 同一解析：顯式射程內優先 →
+    // 自動接戰），線的端點與實際傷害落點結構上同源；延遲 ≤ 一個 tick。
+    // **受害者含建築**（端點 = 建築外框最近點，map 已現算）。
+    const lines = this.engageLines
+    if (lines !== null) {
+      for (const unit of curr.units) {
+        if (unit.hp <= 0) continue
+        const victim = lines.units.get(unit.id)
+        if (victim === undefined) continue
+        const color = unit.player === 'player' ? COLOR_UNIT_PLAYER : COLOR_UNIT_ENEMY
+        this.fxG
+          .moveTo(fixedToPx(unit.x), fixedToPx(unit.y))
+          .lineTo(fixedToPx(victim.x), fixedToPx(victim.y))
+          .stroke({ width: 1, color, alpha: 0.28 })
+      }
+      // 塔的持續接戰線（Prompt 10.16）：起點 = 建築外框最近受害者的點。
+      for (const building of curr.buildings) {
+        if (building.hp <= 0) continue
+        if (this.defs.buildings[building.defId]?.defense === undefined) continue
+        const victim = lines.towers.get(building.id)
+        if (victim === undefined) continue
+        const edge = closestPointOnBuilding(victim, building, this.defs)
+        const color = building.player === 'player' ? COLOR_BUILDING_PLAYER : COLOR_BUILDING_ENEMY
+        this.fxG
+          .moveTo(fixedToPx(edge.x), fixedToPx(edge.y))
+          .lineTo(fixedToPx(victim.x), fixedToPx(victim.y))
+          .stroke({ width: 1, color, alpha: 0.28 })
+      }
     }
 
     // 移動意圖線（Prompt 10.17）：有路徑的單位畫一條**極淡**的線到路徑終點格心——
@@ -653,15 +670,10 @@ interface AttackEffect {
 /** 特效壽命（ms）：開火線／閃光短暫存在，疊加不混亂。 */
 const ATTACK_FX_MS = 200
 
-/** 開火受害者位置（固定點座標）：單位 → 中心；建築 → 外框最近點。 */
-interface VictimPoint {
-  x: number
-  y: number
-}
-
-/** 固定點座標對建築（外框矩形）的最近點（點在框內回傳自身）。 */
+/** 固定點座標對建築（外框矩形）的最近點（點在框內回傳自身）。
+ *  9.5c：第一參數放寬為 `{x, y}`——接戰線 map 的受害者端點（僅座標）可直接傳入。 */
 function closestPointOnBuilding(
-  attacker: WorldSnapshot['units'][number],
+  attacker: { x: number; y: number },
   building: WorldSnapshot['buildings'][number],
   defs: WorldDefs,
 ): { x: number; y: number } {
@@ -674,67 +686,4 @@ function closestPointOnBuilding(
     x: Math.min(Math.max(attacker.x, x0), x1),
     y: Math.min(Math.max(attacker.y, y0), y1),
   }
-}
-
-/**
- * 開火受害者（Prompt 10.10；10.14 擴充建築）：
- * 顯式目標（敵方、存活）→ 單位中心／建築外框最近點；
- * 否則自動接戰近似：射程內最近敵人**單位**，射程內無單位 → 射程內最近敵方**建築**
- * （外框量測，與 `combat.ts` 相同的固定點算法）。
- * 回傳固定點座標；呼叫端轉像素。
- */
-function victimOf(
-  defs: WorldDefs,
-  attacker: WorldSnapshot['units'][number],
-  unitsById: Map<number, WorldSnapshot['units'][number]>,
-  buildingsById: Map<number, WorldSnapshot['buildings'][number]>,
-): VictimPoint | null {
-  const def = defs.units[attacker.defId]
-  if (def === undefined) return null
-  const rangeFixed = Math.round(def.stats.range * UNITS_PER_TILE)
-  const rangeSq = rangeFixed * rangeFixed
-
-  if (attacker.targetId !== null) {
-    const explicitUnit = unitsById.get(attacker.targetId)
-    if (explicitUnit !== undefined && explicitUnit.hp > 0 && explicitUnit.player !== attacker.player) {
-      return { x: explicitUnit.x, y: explicitUnit.y }
-    }
-    // 顯式目標是建築：仍在射程內 → 畫到外框最近點；超出射程 = 沒在打該建築。
-    const explicitBuilding = buildingsById.get(attacker.targetId)
-    if (explicitBuilding !== undefined && explicitBuilding.hp > 0 && explicitBuilding.player !== attacker.player) {
-      const point = closestPointOnBuilding(attacker, explicitBuilding, defs)
-      const dx = point.x - attacker.x
-      const dy = point.y - attacker.y
-      return dx * dx + dy * dy <= rangeSq ? point : null
-    }
-  }
-
-  let bestPoint: VictimPoint | null = null
-  let bestDist = rangeSq
-
-  for (const candidate of unitsById.values()) {
-    if (candidate.player === attacker.player || candidate.hp <= 0) continue
-    const dx = candidate.x - attacker.x
-    const dy = candidate.y - attacker.y
-    const distance = dx * dx + dy * dy
-    // unitIds 無序，≤ 保留先設值（快照順序確定，平手裁決穩定）。
-    if (distance <= bestDist) {
-      bestDist = distance
-      bestPoint = { x: candidate.x, y: candidate.y }
-    }
-  }
-  if (bestPoint !== null) return bestPoint
-
-  for (const candidate of buildingsById.values()) {
-    if (candidate.player === attacker.player || candidate.hp <= 0) continue
-    const point = closestPointOnBuilding(attacker, candidate, defs)
-    const dx = point.x - attacker.x
-    const dy = point.y - attacker.y
-    const distance = dx * dx + dy * dy
-    if (distance <= bestDist) {
-      bestDist = distance
-      bestPoint = point
-    }
-  }
-  return bestPoint
 }

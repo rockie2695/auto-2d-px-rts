@@ -11,6 +11,7 @@ import type { DecisionRecord } from './ai/strategy.ts'
 import { pickMostUrgentThreat, computeInfluenceMap } from './ai/influence.ts'
 import type { InfluenceMap } from './ai/influence.ts'
 import { visibleTileMask } from './ai/sight.ts'
+import { computeEngageLines } from './sim/combat.ts'
 import { armorTierOf } from './render/armor.ts'
 import {
   computeTacticalPlan,
@@ -598,6 +599,9 @@ export async function startGameSession(app: Application, scene: GameScene): Prom
     // 無記憶（純函式），敵人離開視野即同步從 AI 判知與迷霧消失；
     // 開關關閉時場景只存 mask 不重繪（零繪製成本）。
     scene.updateFogMask(visibleTileMask(w, 'player'))
+    // 接戰線資料（Prompt 9.5c）：每 tick 用與 stepCombat 同一解析現算
+    // 「現在開火會打到誰」推入場景——接戰線與實際傷害同源、延遲 250ms → ≤50ms。
+    scene.setEngageLines(computeEngageLines(w))
   }
 
   const onFrame = (ticker: Ticker): void => {

@@ -965,6 +965,24 @@ function tileOfMeanPx(
   return mirrorSafeTileOf(mapSize, mirrorOrder, avgX, avgY)
 }
 
+/**
+ * 把格座標夾回以 anchor 為心、radius 格為半徑的圓內（Euclidean、整數進位；
+ * 圓內原樣返回）。守備隊錨定（Prompt 9.5c）用：迎戰目標不得把守備隊拖離
+ * 受守建築的守備半徑——風箏型敵人（更快＋遠程）不構成把整隊拉走的理由。
+ */
+function clampTileWithinRadius(tile: TilePos, anchor: TilePos, radiusTiles: number): TilePos {
+  const dx = tile.x - anchor.x
+  const dy = tile.y - anchor.y
+  const distSq = dx * dx + dy * dy
+  const limit = radiusTiles * radiusTiles
+  if (distSq <= limit) return tile
+  const dist = Math.sqrt(distSq)
+  return {
+    x: anchor.x + Math.round((dx * radiusTiles) / dist),
+    y: anchor.y + Math.round((dy * radiusTiles) / dist),
+  }
+}
+
 export function computeTacticalPlan(
   world: World,
   playerId: PlayerId,
@@ -1524,6 +1542,13 @@ const replyLimit = PINCER_REPLY_RADIUS_TILES * UNITS_PER_TILE
       seen.length > 0
         ? tileOfMeanPx(world.map.size, playerId === 'enemy', sumX / seen.length, sumY / seen.length)
         : (towerTile ?? squad.centroid)
+    // 守備隊錨定（Prompt 9.5c）：defend 任務的迎戰目標夾回受守建築守備半徑內
+    // （DEFENSE_RADIUS_TILES = 視野/守備半徑）——風箏型敵人不把守備隊拖離建築；
+    // 個體追不追得上由微操收斂閘把關，這裡保證小隊目標不越出建築旁。
+    const engageTile =
+      squad.mission === 'defend' && threat !== null
+        ? clampTileWithinRadius(enemyTile, threat.buildingCenterTile, DEFENSE_RADIUS_TILES)
+        : enemyTile
     contact.known[squad.index] = [
       ...seen.map((enemy) => enemy.id),
       ...(towerKnownId !== null ? [towerKnownId] : []),
@@ -1540,7 +1565,7 @@ const replyLimit = PINCER_REPLY_RADIUS_TILES * UNITS_PER_TILE
             siegeApproachTile(world, playerId, towerContact, squad.centroid) ?? towerTile
           squad.targetBuildingId = towerContact.id
         } else {
-          squad.target = enemyTile
+          squad.target = engageTile
           squad.targetBuildingId = null
         }
       }
@@ -1569,7 +1594,7 @@ const replyLimit = PINCER_REPLY_RADIUS_TILES * UNITS_PER_TILE
           siegeApproachTile(world, playerId, towerContact, squad.centroid) ?? towerTile
         squad.targetBuildingId = towerContact.id
       } else {
-        squad.target = enemyTile
+        squad.target = engageTile
         squad.targetBuildingId = null
       }
       events.push({

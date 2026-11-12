@@ -62,13 +62,15 @@ function makeFakeScene() {
     setSelected: vi.fn(),
     setMarkers: vi.fn(),
     updateFogMask: vi.fn(),
+    setEngageLines: vi.fn(),
   }
 }
 
 describe('組合根 getUnitInfo / getBattleStats（Prompt 9.5）', () => {
   it('跑 240 tick：單位帶「當下決策」與小隊任務；戰況有日誌、小隊與戰力', async () => {
     const app = makeFakeApp()
-    const session: GameSession = await startGameSession(app as never, makeFakeScene() as never)
+    const scene = makeFakeScene()
+    const session: GameSession = await startGameSession(app as never, scene as never)
     expect(app.ticker.add).toHaveBeenCalledOnce()
 
     // 240 tick = 12 秒：戰略（40）/戰術（10）/微操（2）各跑多輪。
@@ -153,6 +155,13 @@ describe('組合根 getUnitInfo / getBattleStats（Prompt 9.5）', () => {
     await app.onFrame(1000)
     const map3 = session.getInfluence()
     expect(map3).not.toBe(map1)
+
+    // 接戰線資料（Prompt 9.5c）：每 tick 推入、結構正確（units/towers 兩張 map）。
+    expect(scene.setEngageLines).toHaveBeenCalled()
+    const lines = scene.setEngageLines.mock.lastCall?.[0] as { units: Map<number, unknown>; towers: Map<number, unknown> } | null
+    expect(lines).not.toBeNull()
+    expect(lines?.units).toBeInstanceOf(Map)
+    expect(lines?.towers).toBeInstanceOf(Map)
 
     session.stop()
     expect(app.ticker.remove).toHaveBeenCalledOnce()
