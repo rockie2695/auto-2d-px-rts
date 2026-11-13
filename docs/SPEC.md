@@ -1092,11 +1092,14 @@ AI 會**主動保護建築與水晶收入**，而不是窩在集結點被動挨�
 - 選取目標屬 **UI 狀態**（zustand，ui 層專屬）；命中的遊戲資料一律經組合根
   （`session.getUnitInfo` / `getBuildingInfo`）取得，面板不做任何遊戲計算。
 
-### 12.3 戰後復盤（Prompt 10.5，MVP）
+### 12.3 戰後復盤（Prompt 10.5，MVP → Prompt 10.5 完整版）
 
 對局結束後的**靜態資訊頁**：輸入只有一份 `ReplayRecord`（props 純渲染），
-**不依賴即時 sim、不 import session/pixi**。路由用 App 的 state 切換
-`/game ↔ /post-game`（MVP 不引入 react-router）。
+**不依賴即時 sim、不 import session/pixi**，可離線分析（`parseReplay` 的
+JSON 檔即完整輸入）。路由（Prompt 10.5 完整版）：**react-router-dom
+（HashRouter）**——`/pre-game`（默認首頁，戰前準備，見 §12.4）／`/game`
+（對局）／`/post-game`（復盤；replay 經 session 模組 `getLastReplay` 傳遞，
+無可復盤對局 → 導回 /pre-game）。
 
 - **結束條件**：一方主堡（keep）被毀 → 對方勝；同 tick 雙殺 → 平手；
   達 `match.maxTicks` 超時 → 總價值多者勝（水晶＋單位／建築殘值，Prompt 10.23）、
@@ -1110,17 +1113,57 @@ AI 會**主動保護建築與水晶收入**，而不是窩在集結點被動挨�
   Prompt 3.1 起有效當量；原 Prompt 10.10 版不含裝甲）、`policyEvents`（玩家每次改滑桿的 tick/key/from/to）。
   **Prompt 5 起另帶 `rubySeries`／`emeraldSeries`／`finalRuby`／`finalEmerald`**
   （舊 replay 檔缺欄 = undefined，`parseReplay` 驗證為可選、UI 顯示 --）。
+  **Prompt 10.5 完整版新增（全部可缺——舊檔缺欄 = undefined，UI 隱藏對應區塊）**：
+  - `deathEvents`：單位死亡事件（tick/受害方/defId/tier/role）——sim
+    `removeDead` 產出進 `world.recentDeaths` 環（cap 64），session 每 tick 抽取；
+  - `tierCountSeries`：tick × 雙方 small/medium/large 存活數（與主樣本同 tick 成對）；
+  - `tempoEvents`：節奏切換 tick/from/to（與 `policyEvents` 分離——後者僅記數值鍵）；
+  - `decisions`：戰略決策記錄（tick/actor/action/target/效用分/成本（藍水晶）/
+    一行解釋／`outcomeAlive`＝實際後果（該決策後出生的同 target 現存量，
+    finalize 按 `Unit.spawnTick`／`Building.spawnTick` 元數據計））；
+  - `armorStats`：裝甲量測（按受害方累計的原始/實際傷害——sim `World.metrics`
+    純累加器，單位受擊點記錄；建築無裝甲不計）。
   `parseReplay` 負責 replay 檔（JSON）驗證——MVP 以記憶體物件傳遞，
   測試以 JSON fixture 模擬檔案，日後要存檔／分享再擴充。
 - **復盤頁內容**：勝負結果（勝利綠／戰敗紅／平手黃）、對局時長、雙方最終資源、
-  完整**資源曲線、單位數量曲線與戰力曲線**（三張 canvas 自繪兩線、y 軸 3 格線標整數、
-  x 軸 `0:00`～總時長）、Policy 調整時間軸（0→時長水平軸、每次變更一個 ▼ 標記＋
-  下方 `m:ss key from→to` 明細）、「再來一場」按鈕重開對局。
-- **不做（延後）**：反事實建議、決策歸因表、戰鬥事件時間軸。
+  **資源曲線**（10.5 完整版：紅/綠曲線存在 → **uPlot 三線**我方三資源全程
+  （與遊戲內 ResourceChart 同款）；舊檔缺 → 回退 canvas 雙線）、單位數量曲線、
+  戰力曲線（canvas 自繪兩線、y 軸 3 格線標整數、x 軸 `0:00`～總時長）、
+  **單位數量堆疊圖（按 tier）**——6 層 stacked area（敵方紅系三層＋我方藍系
+  三層）＋圖例、**戰鬥事件時間軸**（單位陣亡 marker 按受害方著色、hover 詳情、
+  明細上限 30 筆）、**節奏預設切換時間軸**、Policy 調整時間軸（0→時長水平軸、
+  每次變更一個 ▼ 標記＋下方 `m:ss key from→to` 明細）、**決策歸因表**
+  （前 10 筆，影響力＝**資源成本為主、效用分為輔**；每筆：時間／陣營動作／
+  當時分數／實際後果／一行解釋）、**裝甲效益區塊**（我方累計減傷、若無裝甲
+  傷亡會增加 %、敵方原始 vs 減傷後傷害；「平均裝甲等級」欄待單位構成快照——
+  延後）、「再來一場」回 `/pre-game`。
+- **反事實建議**：佔位區塊（**待 Prompt 10.5b**——仍延後）。
   （Prompt 8.6 補 AI 投降橫幅：`surrender` 欄位有值時顯示投降方、時鐘與
   絕望／戰力比／收入比——見 §11 第 4 條；Prompt 10.6 補玩家手動投降：
   `type = 'player_surrender'` 顯示「玩家投降（手動）」、省略絕望值、
   保留戰力／收入比與時鐘——投降時間點——見 §11 第 5 條。）
+
+### 12.4 戰前準備頁（Prompt 10.5 完整版，路由 /pre-game）
+
+對局開始前的準備頁——**不依賴即時 sim**（地圖/雷達讀 content pack 靜態
+資料；預測是一次性 headless 計算）。結構沿用 PostGamePanel 慣例：
+`PreGameView` 純 props 渲染＋`PreGamePage` 載入/路由接線。
+
+- **地圖預覽**（canvas 自繪）：岩石地形、三資源點（按類型著色）、
+  雙方 keep 出生點標記（headless `createWorld` 純資料生成——開局佈局確定性）。
+- **勢力對比雷達**（自繪 canvas 六軸，`ui/factionStats.ts` 純函式）：
+  經濟（Σ 藍水晶收入/秒）／軍事（Σ 單位 DPS）／科技（高級收入建築×0.5
+  ＋高級資源消費單位佔比）／機動性（**成本加權**平均 moveSpeed）／
+  韌性（**成本加權**平均有效 HP）／**裝甲水平（成本加權平均 armor——
+  Prompt 10.5 完整版指定口徑）**；兩陣營按同軸最大值歸一 0..1
+  （MVP 單陣營鏡像 → 兩側同形）。
+- **60 秒開局預測**（`ai/opening.ts` `simulateOpening`）：headless 快照
+  模擬 1200 tick（**真 sim＋真戰略層**，與對局同源；固定預測種子 42——
+  地圖/佈局靜態，命運抽籤只影響同分候選次序），列出我方 AI 實際執行的
+  生產/建造動作時間線＋末點水晶＋生產統計。
+- **Policy 預設滑桿＋節奏下拉**：9 滑桿＋tempo 寫入**初始政策**
+  （`session.setInitialPolicies` 模組級 pending，下一次 `startGameSession`
+  消費後清空；未設定 = `DEFAULT_POLICIES`）；「開始對戰」→ `/game`。
 
 ---
 
@@ -1353,8 +1396,10 @@ public/data/
   視野過濾＋UI 迷霧層；無記憶語義、meta 全局量測例外見 §7）
 
 **視覺與圖表**
-- 四象限圖表、熱力圖、影響力地圖可視化、uPlot、像素風圖表
-  （**遊戲本體仍是像素風**，此處只禁止像素風的圖表元件）
+- 四象限圖表、熱力圖、影響力地圖可視化、像素風圖表
+  （**遊戲本體仍是像素風**，此處只禁止像素風的圖表元件；
+  uPlot 已隨**階段三 Prompt 9.5** 作為遊戲內資源圖表依賴移出此清單，
+  並隨 Prompt 10.5 完整版用於復盤頁全程資源三線）
 
 **工具與 meta**
 - 地圖編輯器、平衡工具、元 AI、反事實建議、統計檢定

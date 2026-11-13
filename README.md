@@ -727,3 +727,36 @@ JSON 結構會按最終 schema 設計，方便日後遷移到 DB。
      （small=0/medium=1/large=2）。
   **驗證**——492/492 測試全過（+4）；tsc×2＋oxlint 乾淨；**tally/公平門
   不重跑**（零 sim/AI 改動——打分公式未動，僅新增只讀行為的測試）。
+
+- [x] 階段三 Prompt 10.5（完整版）— 戰前頁與戰後復盤（三輪提交：
+  `c5c50f4` 資料層／`b5f56a7` 路由＋戰前頁／`bd08542` 復盤頁完整版）：
+  1. **資料層（Phase A）**：sim 元數據（`Unit/Building.spawnTick`、
+     `World.metrics` 裝甲量測純累加器、`recentDeaths` 死亡事件環 cap 64——
+     純記錄行為讀取點為零，鏡像探針通過）＋replay 五個可缺欄位
+     （`deathEvents`／`tierCountSeries`／`tempoEvents`／`decisions`（含
+     `outcomeAlive` 後果）／`armorStats`）＋session 接線（死亡抽取、tier
+     采样、tempo 記錄、決策成本/分數入冊、finalize 裝甲統計＋後果計算）。
+  2. **路由＋戰前頁（Phase B）**：`react-router-dom`（HashRouter）三路由
+     `/pre-game`（默認）／`/game`／`/post-game`；戰前頁＝**地圖預覽**（岩石/
+     三資源點/雙方 keep 標記）＋**六軸雷達**（自繪 canvas；經濟/軍事/科技/
+     機動性/韌性/**裝甲水平＝成本加權平均 armor**；`ui/factionStats.ts`
+     純函式）＋**60 秒開局預測**（`ai/opening.ts` headless 快照模擬——真
+     sim＋真戰略層、固定預測種子 42）＋**Policy 預設滑桿＋節奏下拉**
+     （`session.setInitialPolicies` 初始政策帶入對局）。
+  3. **復盤頁完整版（Phase C）**：資源曲線 **uPlot 三線**（我方三資源全程；
+     舊檔回退雙線 canvas）＋**tier 堆疊圖**（6 層 stacked area）＋**戰鬥
+     事件時間軸**（陣亡 marker 按受害方著色＋hover 詳情）＋**節奏切換
+     時間軸**＋**決策歸因表**（前 10 筆、成本為主分數為輔、顯示當時分數
+     與實際後果）＋**裝甲效益區塊**（累計減傷／若無裝甲傷亡增加 %／敵方
+     原始 vs 減傷後；「平均裝甲等級」待單位構成快照——延後）＋反事實
+     佔位（待 Prompt 10.5b）。整頁純 props 渲染、可離線分析；舊檔缺
+     新欄位 → 對應區塊隱藏。
+  4. **路由資料傳遞**：`session.getLastReplay()`（finalize 寫入模組級）——
+     /post-game 無可復盤對局 → 導回 /pre-game。
+  **驗證**——512/512 測試全過（+20：sim 元數據/裝甲量測/死亡事件、
+  recorder/parse 往返、session 端到端、opening 確定性/合法性、factionStats
+  加權錨點、PreGameView 交互、復盤新區塊/舊檔回退/歸因排序）；tsc×2＋
+  oxlint 乾淨（0 警告）；鏡像探針通過（元數據零行為）；**tally/公平門
+  不重跑**（metrics/spawnTick/事件環為純記錄，零 sim/AI 行為改動）；
+  Vite 轉譯冒煙 7 模組 200。SPEC §12.3 重寫＋新增 §12.4（戰前頁）＋
+  §15 修 uPlot 陳舊清單；README 本條目記錄。
