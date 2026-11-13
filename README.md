@@ -684,3 +684,25 @@ JSON 結構會按最終 schema 設計，方便日後遷移到 DB。
   （finalize 採樣路徑不變）。Vite 轉譯冒煙（SurrenderButton/BattleDashboard/
   session/sim/surrender/replay 200）代替目視。SPEC §11 第 5 條（玩家手動
   投降）＋§12.3 橫幅註記＋§15 待辦清單移除「投降按鈕」；README 本條目記錄。
+
+- [x] 階段三 Prompt 10.7 — 節奏預設與撤退閾值確認輪（**選項 A：純文檔確認，
+  零 code 改動**）：
+  1. **節奏預設全數確認已實裝**（Prompt 6 #3 ＋ Prompt 10 完整版 UI）——
+     5 枚舉／`TEMPO_PRESETS` 時間窗規則表／`effectivePolicies` 覆蓋優先級
+     高於滑桿／standard 恒等／玩家其餘滑桿可手調（覆蓋只蓋列出的鍵）／
+     UI 頂段下拉＋時段覆蓋預覽高亮；Vitest 驗收點（rush 前 2 分
+     econMilitary=0.1、standard 不覆蓋）已有 tempo.test 背書。
+  2. **撤退閾值維持乘法映射**（Prompt 6 勘誤語義，選項 A 決策）：個體 =
+     `JSON retreatHpPct × lerp(0.4, 1.6, t)`（保留每單位 JSON 分級、
+     0.5 錨定舊常數零偏移）、小隊 = `0.7 × (0.5 + t)`（0.35/0.7/1.05）；
+     基礎文本的絕對值公式（`0.05+0.35t`／`0.3+0.4t`）**不採用**——
+     會抹平 JSON 分級且改變默認行為（t=0.5 小隊比 0.7→0.5），
+     屬 sim/AI 行為改動不隨確認輪進行。Vitest 驗收點（t=0/1 行為差異）
+     已有 tactics.test L1229-1246 ＋ policyEffectiveness L191 背書。
+  3. **docs**：SPEC §8 引言補節奏預設 10.7 確認注記（枚舉/優先級/恒等/
+     UI/測試背書清單）；§8.4 勘誤段補「實裝乘法映射 vs 基礎文本絕對值」
+     對照表＋取捨理由；§15 待辦清單移出「節奏預設、可調撤退閾值」
+     （隨 Prompt 6 實裝、10.7 確認）。
+  **驗證**——488/488 測試全過（零新增：Vitest 四條驗收的等價斷言全部
+  已存在）；tsc×2＋oxlint 乾淨；**tally/公平門不重跑**（零 sim/AI 改動，
+  純文檔輪）。
