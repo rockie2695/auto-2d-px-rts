@@ -526,6 +526,45 @@ describe('unitRange 滑桿 → 射程選擇', () => {
   })
 })
 
+/** tier × range 正交的 2×2 roster（Prompt 10.8）：同費用同 hp/dmg/attackSpeed，只有 tier 與 range 不同。 */
+function crossUnits(): UnitDef[] {
+  return [
+    makeUnitDef({ id: 'smallMelee', tier: 'small', role: 'melee', stats: { hp: 100, dmg: 10, range: 0.8, attackSpeed: 1, moveSpeed: 1 } }),
+    makeUnitDef({ id: 'smallRanged', tier: 'small', role: 'ranged', stats: { hp: 100, dmg: 10, range: 3.0, attackSpeed: 1, moveSpeed: 1 } }),
+    makeUnitDef({ id: 'largeMelee', tier: 'large', role: 'melee', stats: { hp: 100, dmg: 10, range: 0.8, attackSpeed: 1, moveSpeed: 1 } }),
+    makeUnitDef({ id: 'largeRanged', tier: 'large', role: 'ranged', stats: { hp: 100, dmg: 10, range: 3.0, attackSpeed: 1, moveSpeed: 1 } }),
+  ]
+}
+
+describe('unitSize × unitRange 獨立性（Prompt 10.8：兩維正交、組合表達策略）', () => {
+  // 四個滑桿角點 → 對應組合的單位勝出：兩維各自貼合度相乘，互不干擾——
+  // 任一維固定時，另一維的極端值仍翻轉選擇（獨立性的行為定義）。
+  const cases: ReadonlyArray<{
+    label: string
+    unitSize: number
+    unitRange: number
+    winner: string
+    losers: readonly [string, string, string]
+  }> = [
+    { label: '小型近戰海', unitSize: 1, unitRange: 0, winner: 'smallMelee', losers: ['smallRanged', 'largeMelee', 'largeRanged'] },
+    { label: '小型遠程風箏', unitSize: 1, unitRange: 1, winner: 'smallRanged', losers: ['smallMelee', 'largeMelee', 'largeRanged'] },
+    { label: '大型近戰重裝', unitSize: 0, unitRange: 0, winner: 'largeMelee', losers: ['smallMelee', 'smallRanged', 'largeRanged'] },
+    { label: '大型遠程攻城', unitSize: 0, unitRange: 1, winner: 'largeRanged', losers: ['smallMelee', 'smallRanged', 'largeMelee'] },
+  ]
+  for (const { label, unitSize, unitRange, winner, losers } of cases) {
+    it(`unitSize=${unitSize}＋unitRange=${unitRange} → ${label}（${winner} 對其餘三方皆主導）`, () => {
+      const world = productionWorld(crossUnits())
+      runCycles(world, 'player', resolvePolicies({ unitSize, unitRange }), 12)
+
+      for (const loser of losers) {
+        expect(countUnits(world, 'player', winner)).toBeGreaterThan(
+          countUnits(world, 'player', loser),
+        )
+      }
+    })
+  }
+})
+
 describe('克制與稀缺性', () => {
   it('counterMatrix：敵方全近戰時，ranged→melee 高權重使遠程單位勝出', () => {
     const world = productionWorld(

@@ -706,3 +706,24 @@ JSON 結構會按最終 schema 設計，方便日後遷移到 DB。
   **驗證**——488/488 測試全過（零新增：Vitest 四條驗收的等價斷言全部
   已存在）；tsc×2＋oxlint 乾淨；**tally/公平門不重跑**（零 sim/AI 改動，
   純文檔輪）。
+
+- [x] 階段三 Prompt 10.8 — 單位偏好二維確認輪（unitSize × unitRange 已實裝；
+  **零 sim/UI 改動，僅 +4 獨立性測試與 docs**）：
+  1. **盤點**——滑桿（`ai/policy.ts`）、UI 兩滑桿並排＋指定文案
+     （Prompt 10 完整版）、`unitSpeed`/`smallLarge` 全倉 grep 為空（速度走
+     `stats.moveSpeed` 直讀）、單維主導測試（strategy.test unitSize/unitRange
+     各 describe＋policyEffectiveness）全部已有。
+  2. **公式對照**——乘法項與基礎文本逐字等價（tier
+     `1+3×(tierFit−0.5)`＝原文 `1+1.5×(tierFit−0.5)×2`；range
+     `1+2×(rangeFit−0.5)`＝原文 `1+1.0×(rangeFit−0.5)×2`）；兩處刻意泛化
+     已文檔化：tierFit 三檔序數距離（binary small/large 的超集、兩檔逐點
+     相等）、rangeFit roster 內歸一（不依賴固定 0..4 絕對標定、保持解析度）。
+  3. **新測試（+4）**——`strategy.test` 2×2 正交 roster（smallMelee/
+     smallRanged/largeMelee/largeRanged，同費用同 hp/dmg/attackSpeed）四滑桿
+     角點：小型近戰海／小型遠程風箏／大型近戰重裝／大型遠程攻城，
+     勝出單位對其餘三方皆主導——「兩維獨立、組合表達策略」的行為直測。
+  4. **docs**——SPEC §8.2/§8.3 補 Prompt 10.8 確認注記（unitSpeed 不設、
+     公式等價式、兩處泛化對照）；§8.2 補註序數映射表述修正
+     （small=0/medium=1/large=2）。
+  **驗證**——492/492 測試全過（+4）；tsc×2＋oxlint 乾淨；**tally/公平門
+  不重跑**（零 sim/AI 改動——打分公式未動，僅新增只讀行為的測試）。

@@ -266,9 +266,21 @@ U(生產單位) = (1 − econMilitary) × 進攻預算 + 防守預算
 中間值：`上限 = round(4 + unitSize × 4)`。
 
 **實作補註（Prompt 6）**：此滑桿**另**作用於戰略層的 tier 偏好（與編隊密度並存）：
-`目標 tier 序數 = round((1 − unitSize) × 2)`（0→small、1→large），
+`目標 tier 序數 = round((1 − unitSize) × 2)`（序數 small=0、medium=1、large=2
+——unitSize 0 → 序數 2 = large、1 → 序數 0 = small），
 候選單位與目標的差距越小分數越高（`1 − |差距| / 2`）。
 MVP 兩單位皆為 `small`，故此作用點在合成多 tier 測試中驗證。
+
+> **Prompt 10.8 確認**：`unitSize`（0 = 大型、1 = 小型）與 `unitRange` 已是兩個
+> **獨立維度**——原「單一 smallLarge 滑桿」自 Prompt 6 起即未實作，
+> **`unitSpeed` 滑桿不設**（全倉 `grep unitSpeed|smallLarge` 為空；單位移動速度
+> 由 `unit.stats.moveSpeed` 直讀，需要「快速大型／慢速小型」的異常單位直接改
+> JSON）。戰略層 tier 乘法項 `1 + 3×(tierFit − 0.5)`（= 基礎文本
+> `1 + 1.5×(tierFit − 0.5)×2`）：`tierFit = 1 − |tier 序數 − 目標序數| / 2`
+> ——small/large 兩檔時與基礎文本 `tier === 'small' ? unitSize : 1 − unitSize`
+> **逐點相等**，medium 線性插值（超集）。兩維正交、組合表達策略
+> （「小型近戰海」「大型遠程攻城」）由 `strategy.test` 2×2 正交 roster
+> 四角點測試背書；單維主導由 `unitSize`/`unitRange` 各 describe 背書。
 
 ### 8.3 `unitRange` — 0 = 近戰，1 = 遠程
 
@@ -284,6 +296,14 @@ P(生產 legionnaire) = 1 − unitRange
 **實作補註（Prompt 6）**：以「射程正規化接近度」實現等價配額 ——
 `range 分 = 1 − |roster 內正規化射程 − unitRange|`（roster 極小/極大值正規化到 0–1）。
 `0` 時近戰（正規化 0）得滿分、遠程得 0 分，反之亦然；中間值按距離線性插值。
+
+> **Prompt 10.8 確認**：range 乘法項 `1 + 2×(rangeFit − 0.5)`（= 基礎文本
+> `1 + 1.0×(rangeFit − 0.5)×2`）。`rangeFit` 用 **roster 內歸一化**而非
+> 基礎文本的固定 `normalize(range, 0, 4)`——不依賴絕對射程標定：roster
+> 跨 0.8–3.0 時固定 0..4 會把分辨訊號壓縮到 0.2–0.75（斜率減半），
+> roster 相對歸一保持全幅解析度；roster 全同射程時兩法皆對候選間
+> 無分辨力（不扭曲排序）。與 `unitSize` 兩維正交、互不干擾
+> （同一乘法合成，見 §8.2 Prompt 10.8 確認注記）。
 
 ### 8.4 `aggression` — 0 = 固守，1 = 強攻
 
