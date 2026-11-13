@@ -39,7 +39,7 @@ import { ResourcePanel } from './ResourcePanel.tsx'
 import { SquadPanel } from './SquadPanel.tsx'
 import { SurrenderButton } from './SurrenderButton.tsx'
 import type { DecisionLogEntry, PolicySnapshot, SquadInfo } from '../session.ts'
-import type { ReplayRecord } from '../replay.ts'
+import type { ReplayDecision, ReplayRecord } from '../replay.ts'
 
 /**
  * 四角 HUD 展示面板測試（Prompt 9.5 驗收）：
@@ -981,20 +981,63 @@ const replayFixture: ReplayRecord = {
     { tick: 600, key: 'aggression', from: 0.5, to: 1 },
     { tick: 1800, key: 'econMilitary', from: 0.5, to: 0 },
   ],
+  // Prompt 10.5 完整版欄位（舊檔缺欄 = undefined，UI 隱藏對應區塊）。
+  rubySeries: [
+    { tick: 0, player: 0, enemy: 0 },
+    { tick: 2400, player: 120, enemy: 40 },
+  ],
+  emeraldSeries: [
+    { tick: 0, player: 0, enemy: 0 },
+    { tick: 2400, player: 60, enemy: 0 },
+  ],
+  finalRuby: { player: 120, enemy: 40 },
+  finalEmerald: { player: 60, enemy: 0 },
+  tierCountSeries: [
+    {
+      tick: 0,
+      player: { small: 3, medium: 0, large: 0 },
+      enemy: { small: 3, medium: 0, large: 0 },
+    },
+    {
+      tick: 2400,
+      player: { small: 5, medium: 1, large: 1 },
+      enemy: { small: 2, medium: 0, large: 0 },
+    },
+  ],
+  deathEvents: [
+    { tick: 900, player: 'enemy', defId: 'legionnaire', tier: 'small', role: 'melee' },
+    { tick: 1500, player: 'player', defId: 'archer', tier: 'small', role: 'ranged' },
+    { tick: 2100, player: 'enemy', defId: 'ballista', tier: 'large', role: 'ranged' },
+  ],
+  tempoEvents: [{ tick: 1200, from: 'standard', to: 'rush' }],
+  decisions: [
+    { tick: 40, actor: 'player', action: 'train', target: 'legionnaire', score: 1.2, cost: 50, explanation: '生 legionnaire。理由：unitSize 偏小型', outcomeAlive: 4 },
+    { tick: 80, actor: 'player', action: 'build', target: 'crystal_mine', score: 2.0, cost: 150, explanation: '蓋 crystal_mine。理由：經濟不足', outcomeAlive: 1 },
+    { tick: 120, actor: 'enemy', action: 'train', target: 'archer', score: 1.5, cost: 50, explanation: '生 archer。理由：unitRange 偏遠程' },
+  ],
+  armorStats: {
+    takenRaw: { player: 200, enemy: 150 },
+    takenActual: { player: 120, enemy: 150 },
+  },
 }
 
 describe('PostGamePanel（/post-game，Prompt 10.5）', () => {
-  it('讀 replay：勝負＋時長＋最終資源＋三張曲線 canvas（資源／單位／戰力）', () => {
+  it('讀 replay：勝負＋時長＋最終資源＋圖表（三資源走 uPlot、單位/戰力 canvas、tier 堆疊）', () => {
     const container = render(<PostGamePanel replay={replayFixture} onRestart={() => {}} />)
     const result = container.querySelector('[data-testid="post-game-result"]')
     expect(result?.textContent).toBe('勝利')
     expect((result as HTMLElement).style.color).toBe('rgb(124, 227, 139)')
     expect(container.querySelector('[data-testid="post-game-duration"]')?.textContent).toBe('時長 2:00')
     expect(container.querySelector('[data-testid="post-game-final-crystal"]')?.textContent).toContain('830')
-    expect(container.querySelectorAll('canvas').length).toBe(3)
-    expect(container.querySelector('[data-testid="post-game-resource-chart"]')).not.toBeNull()
+    // 資源曲線：fixture 帶 ruby/emerald → uPlot 三線（單一 FakeUPlot 實例）。
+    expect(container.querySelector('[data-testid="post-game-resource-uplot"]')).not.toBeNull()
+    // 單位數／戰力／tier 堆疊：canvas 自繪。
     expect(container.querySelector('[data-testid="post-game-unitcount-chart"]')).not.toBeNull()
     expect(container.querySelector('[data-testid="post-game-power-chart"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="post-game-tierstack-chart"]')).not.toBeNull()
+    // uPlot 收到三線資料（x + 我方藍/紅/綠）。
+    const plotted = uplotInstances[uplotInstances.length - 1]?.data as number[][] | undefined
+    expect(plotted?.length).toBe(4)
   })
 
   it('Policy 時間軸：標記數與明細（tick → 時鐘、key from→to）', () => {
@@ -1093,5 +1136,89 @@ describe('PostGamePanel（/post-game，Prompt 10.5）', () => {
     expect(banner?.textContent).not.toContain('絕望') // 手動不適用絕望指數
     expect(banner?.textContent).toContain('0.55')
     expect(banner?.textContent).toContain('0.6')
+  })
+
+  /* ---------- Prompt 10.5 完整版：新區塊 ---------- */
+
+  it('完整版區塊（有新欄位）：uPlot 三線資源＋tier 堆疊＋戰鬥/節奏時間軸＋歸因表＋裝甲效益', () => {
+    const container = render(<PostGamePanel replay={replayFixture} onRestart={() => {}} />)
+    // 資源曲線走 uPlot 三線（rubySeries/emeraldSeries 存在）。
+    expect(uplotInstances.length).toBeGreaterThan(0)
+    // tier 堆疊 canvas。
+    expect(container.querySelector('[data-testid="post-game-tierstack-chart"]')).not.toBeNull()
+    // 戰鬥事件時間軸：3 marker＋列表（敵方/我方著色由 marker style 判斷）。
+    const combat = container.querySelector('[data-testid="combat-timeline"]')
+    expect(combat).not.toBeNull()
+    expect(combat?.querySelectorAll('.policy-timeline-marker')).toHaveLength(3)
+    const combatList = container.querySelector('[data-testid="combat-timeline-list"]')
+    expect(combatList?.children.length).toBe(3)
+    expect(combatList?.textContent).toContain('敵方 legionnaire（small/melee）陣亡')
+    expect(combatList?.textContent).toContain('我方 archer（small/ranged）陣亡')
+    // 節奏切換時間軸。
+    expect(container.querySelector('[data-testid="tempo-timeline-list"]')?.textContent).toContain(
+      '節奏 standard → rush',
+    )
+    // 決策歸因表：全部 3 筆（< 10 上限）、按成本排序（crystal_mine 150 首位）、
+    // 顯示分數/成本/後果（outcomeAlive 缺 → --）。
+    const attribution = container.querySelector('[data-testid="decision-attribution-list"]')
+    expect(attribution?.children.length).toBe(3)
+    expect(attribution?.textContent).toContain('蓋 crystal_mine')
+    expect(attribution?.textContent?.indexOf('crystal_mine')).toBeGreaterThan(-1)
+    expect(attribution?.textContent).toContain('成本 150')
+    expect(attribution?.textContent).toContain('分數 2.00')
+    expect(attribution?.textContent).toContain('現存 4')
+    expect(attribution?.textContent).toContain('後果 --') // enemy archer 未 finalize 填值
+    // 裝甲效益：累計減傷 80（200−120）、傷亡增幅 (200−120)/120 = 66.7%。
+    expect(container.querySelector('[data-testid="armor-mitigated-player"]')?.textContent).toBe('80')
+    expect(container.querySelector('[data-testid="armor-casualty-increase"]')?.textContent).toBe('66.7%')
+    expect(container.querySelector('[data-testid="armor-raw-player"]')?.textContent).toBe('200')
+    expect(container.querySelector('[data-testid="armor-actual-player"]')?.textContent).toBe('120')
+    // 反事實佔位。
+    expect(container.querySelector('[data-testid="counterfactual-placeholder"]')?.textContent).toContain(
+      '待 Prompt 10.5b',
+    )
+  })
+
+  it('完整版區塊（舊檔缺新欄位）：uPlot 不啟用（雙線 canvas）、新區塊全部隱藏', () => {
+    const bare: ReplayRecord = {
+      ...replayFixture,
+      rubySeries: undefined,
+      emeraldSeries: undefined,
+      tierCountSeries: undefined,
+      deathEvents: undefined,
+      tempoEvents: undefined,
+      decisions: undefined,
+      armorStats: undefined,
+    }
+    const container = render(<PostGamePanel replay={bare} onRestart={() => {}} />)
+    expect(container.querySelector('[data-testid="post-game-resource-chart"]')).not.toBeNull() // 雙線 canvas 回退
+    expect(container.querySelector('[data-testid="post-game-resource-uplot"]')).toBeNull()
+    expect(container.querySelector('[data-testid="post-game-tierstack-chart"]')).toBeNull()
+    expect(container.querySelector('[data-testid="combat-timeline"]')).toBeNull()
+    expect(container.querySelector('[data-testid="tempo-timeline"]')).toBeNull()
+    expect(container.querySelector('[data-testid="decision-attribution"]')).toBeNull()
+    expect(container.querySelector('[data-testid="post-game-armor"]')).toBeNull()
+  })
+
+  it('決策歸因排序：成本為主、效用分為輔；超過 10 筆只取前 10', () => {
+    const many: ReplayDecision[] = []
+    for (let index = 0; index < 15; index++) {
+      many.push({
+        tick: 40 * index,
+        actor: 'player',
+        action: 'train',
+        target: 'legionnaire',
+        score: 1 + index * 0.1,
+        cost: 50 + (index % 3) * 10,
+        explanation: `決策 ${index}`,
+        outcomeAlive: index,
+      })
+    }
+    const container = render(<PostGamePanel replay={{ ...replayFixture, decisions: many }} onRestart={() => {}} />)
+    const list = container.querySelector('[data-testid="decision-attribution-list"]')
+    expect(list?.children.length).toBe(10)
+    // 成本 70 的三筆（index 2/5/8…）在前——首位是成本最大且分數較高者（分數為輔）。
+    const first = list?.children[0]?.textContent ?? ''
+    expect(first).toContain('成本 70')
   })
 })

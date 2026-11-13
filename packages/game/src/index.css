@@ -749,6 +749,24 @@ body,
   font-variant-numeric: tabular-nums;
 }
 
+/* 復盤頁 10.5 完整版：uPlot 宿主、裝甲效益、決策歸因明細 */
+.post-chart-host {
+  background: #2a2f38;
+}
+
+.post-game-armor {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.post-game-armor strong {
+  color: #7ce38b;
+  font-variant-numeric: tabular-nums;
+}
+
 
 .hud-panel-title button {
   background: transparent;
