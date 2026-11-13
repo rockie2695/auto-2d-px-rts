@@ -112,7 +112,8 @@ function TwoLineChart({
   return <canvas ref={canvasRef} width={width} height={height} data-testid={testId} className="post-game-chart" />
 }
 
-/** uPlot 選項（全程資源三線；無互動、mono、常規線色——與遊戲內 ResourceChart 同款）。 */
+/** uPlot 選項（全程資源三線；無互動、mono、常規線色——與遊戲內 ResourceChart 同款；
+ *  x 值是「秒」——顯式關閉時間軸並格式化為 m:ss，避免 uPlot 預設把它當 1970 時間戳）。 */
 function resourceUplotOptions(width: number, height: number): uPlot.Options {
   return {
     width,
@@ -121,7 +122,13 @@ function resourceUplotOptions(width: number, height: number): uPlot.Options {
     cursor: { show: false },
     legend: { show: false },
     axes: [
-      { stroke: '#5a6472', grid: { show: true, width: 1, stroke: '#242a33' }, ticks: { show: false }, font: '9px monospace' },
+      {
+        stroke: '#5a6472',
+        grid: { show: true, width: 1, stroke: '#242a33' },
+        ticks: { show: false },
+        font: '9px monospace',
+        values: (_self, ticks) => ticks.map((seconds) => formatClock(seconds * 20)),
+      },
       { stroke: '#5a6472', grid: { show: true, width: 1, stroke: '#242a33' }, ticks: { show: false }, font: '9px monospace' },
     ],
     series: [

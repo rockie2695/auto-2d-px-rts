@@ -751,7 +751,8 @@ body,
 
 /* 復盤頁 10.5 完整版：uPlot 宿主、裝甲效益、決策歸因明細 */
 .post-chart-host {
-  background: #2a2f38;
+  width: fit-content;
+  line-height: 0; /* inline canvas 的 baseline 空隙 */
 }
 
 .post-game-armor {

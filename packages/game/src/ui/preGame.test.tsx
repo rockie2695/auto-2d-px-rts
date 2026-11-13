@@ -5,6 +5,7 @@
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 
+
 import { StrictMode, act } from 'react'
 import type { ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'

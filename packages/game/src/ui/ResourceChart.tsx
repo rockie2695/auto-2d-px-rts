@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import uPlot from 'uplot'
 
-import { chartDomain, chartPoints, uplotTripleData } from './collector.ts'
+import { chartDomain, chartPoints, formatClock, uplotTripleData } from './collector.ts'
 import type { SamplePoint } from './collector.ts'
 import {
   drawEndDot,
@@ -47,6 +47,8 @@ function uplotOptions(width: number, height: number): uPlot.Options {
         grid: { show: true, width: 1, stroke: '#242a33' },
         ticks: { show: false },
         font: '9px monospace',
+        // x 值是「秒」——格式化為 m:ss（uPlot 預設把數值 x 當 1970 時間戳）。
+        values: (_self, ticks) => ticks.map((seconds) => formatClock(seconds * 20)),
       },
       {
         stroke: '#5a6472',
