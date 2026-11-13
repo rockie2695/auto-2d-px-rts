@@ -25,14 +25,16 @@ export interface ReplayPolicyEvent {
   readonly to: number
 }
 
-/** AI 投降事件（Prompt 8.6；舊 replay 檔缺欄 = undefined，UI 顯示 --）。 */
+/** 投降事件（Prompt 8.6 AI / Prompt 10.6 玩家手動；舊 replay 檔缺欄 = undefined，UI 顯示 --）。 */
 export interface ReplaySurrenderEvent {
   readonly tick: number
   readonly player: string
-  readonly type: 'ai_surrender'
+  readonly type: 'ai_surrender' | 'player_surrender'
   readonly despairAtSurrender: number
   readonly powerRatio: number
   readonly incomeRatio: number
+  /** 牆鐘時間戳 ms（Prompt 10.6 玩家投降；AI 投降/舊檔 undefined）。 */
+  readonly timestamp?: number
 }
 
 export interface ReplayRecord {
@@ -102,7 +104,7 @@ export class ReplayRecorder {
     this.policies.push(event)
   }
 
-  /** 記錄 AI 投降事件（Prompt 8.6；後投方不覆蓋先投方）。 */
+  /** 記錄投降事件（Prompt 8.6 AI／Prompt 10.6 玩家手動；後投方不覆蓋先投方）。 */
   recordSurrender(event: ReplaySurrenderEvent): void {
     if (this.surrender === null) this.surrender = event
   }
@@ -216,7 +218,7 @@ export function parseReplay(json: unknown): ReplayRecord {
   }
 }
 
-/** 投降事件欄位驗證（可缺；型別壞擲錯）。 */
+/** 投降事件欄位驗證（可缺；型別壞擲錯）。timestamp 可缺（舊檔/AI 投降）。 */
 function requireSurrender(value: unknown): ReplaySurrenderEvent {
   if (typeof value !== 'object' || value === null) {
     throw new Error('replay 欄位 surrender 必須是物件')
@@ -225,8 +227,8 @@ function requireSurrender(value: unknown): ReplaySurrenderEvent {
   if (raw.player !== 'player' && raw.player !== 'enemy') {
     throw new Error('replay 欄位 surrender.player 必須是 player / enemy')
   }
-  if (raw.type !== 'ai_surrender') {
-    throw new Error('replay 欄位 surrender.type 必須是 ai_surrender')
+  if (raw.type !== 'ai_surrender' && raw.type !== 'player_surrender') {
+    throw new Error('replay 欄位 surrender.type 必須是 ai_surrender / player_surrender')
   }
   return {
     tick: requireFiniteNumber(raw.tick, 'surrender.tick'),
@@ -235,5 +237,8 @@ function requireSurrender(value: unknown): ReplaySurrenderEvent {
     despairAtSurrender: requireFiniteNumber(raw.despairAtSurrender, 'surrender.despairAtSurrender'),
     powerRatio: requireFiniteNumber(raw.powerRatio, 'surrender.powerRatio'),
     incomeRatio: requireFiniteNumber(raw.incomeRatio, 'surrender.incomeRatio'),
+    ...(raw.timestamp === undefined
+      ? {}
+      : { timestamp: requireFiniteNumber(raw.timestamp, 'surrender.timestamp') }),
   }
 }

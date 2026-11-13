@@ -11,13 +11,17 @@
  * （都是 sim 狀態，確定性受 seed 保證）；行為閘門（停火／停生產）在 sim 層。
  */
 
-import { DEFAULT_AI_SURRENDER_CONFIG, RESOURCE_IDS, TICK_RATE_HZ } from '@auto-2d-px-rts/shared'
+import { DEFAULT_AI_SURRENDER_CONFIG, TICK_RATE_HZ } from '@auto-2d-px-rts/shared'
 import type { AiSurrenderConfig } from '@auto-2d-px-rts/shared'
 import type { PolicyValues } from './policy.ts'
 
-import { getIncome, producedResourceOf } from '../sim/economy.ts'
-import { effectiveHp } from '../sim/combat.ts'
+import { producedResourceOf } from '../sim/economy.ts'
+import { applySurrender, surrenderIncomeOf, surrenderPowerOf } from '../sim/surrender.ts'
 import type { PlayerId, World } from '../sim/types.ts'
+
+// Prompt 10.6：`surrenderPowerOf` 下移到 sim 層（玩家/AI 投降同口徑）；此處 re-export
+// 保持既有公開 API（surrender.test 從本模組匯入）。
+export { surrenderPowerOf } from '../sim/surrender.ts'
 
 /** 陣營投降配置（缺省 → 默認值）。 */
 export function surrenderConfigOf(world: World): AiSurrenderConfig {
@@ -29,19 +33,11 @@ function secToTicks(sec: number): number {
   return Math.round(sec * TICK_RATE_HZ)
 }
 
-/** 有效當量戰力（Prompt 3.1）：Σ 現值 hp 換算 hp/(1−armor) × dmg × attackSpeed。 */
-export function surrenderPowerOf(world: World, playerId: PlayerId): number {
-  return world.units.reduce((total, unit) => {
-    if (unit.player !== playerId || unit.hp <= 0) return total
-    const def = world.defs.units[unit.defId]
-    if (def === undefined) return total
-    return total + (unit.hp / effectiveHp(def)) * def.stats.dmg * def.stats.attackSpeed
-  }, 0)
-}
+/** 有效當量戰力（Prompt 3.1）：已下移至 sim/surrender.ts（本模組 re-export）。 */
 
-/** 最近窗口的三資源收入總和（Prompt 5 指定 API 的逐資源加總）。 */
+/** 最近窗口的三資源收入總和（Prompt 5 指定 API 的逐資源加總；Prompt 10.6 起走 sim 同函式）。 */
 function incomeOf(world: World, playerId: PlayerId): number {
-  return RESOURCE_IDS.reduce((total, id) => total + getIncome(world, playerId, id), 0)
+  return surrenderIncomeOf(world, playerId)
 }
 
 /** 綠翡翠生產建築數（聖所數＝科技等級；techGap 標尺 /3）。 */
@@ -168,30 +164,8 @@ export function checkSurrender(
     return check // 持續中但未滿 sustainSec
   }
 
-  // ---- 投降定案 ----
-  const playerIdOther = playerId === 'player' ? 'enemy' : 'player'
-  const myPower = surrenderPowerOf(world, playerId)
-  const enemyPower = surrenderPowerOf(world, playerIdOther)
-  const myIncome = Math.max(0.01, incomeOf(world, playerId))
-  const enemyIncome = Math.max(0.01, incomeOf(world, playerIdOther))
-  world.surrender = {
-    player: playerId,
-    tick: world.tick,
-    despairAtSurrender: despair,
-    powerRatio: myPower / Math.max(1, enemyPower),
-    incomeRatio: myIncome / enemyIncome,
-  }
+  // ---- 投降定案（Prompt 10.6 起與玩家手動投降共用 sim 定案）----
+  applySurrender(world, playerId, despair)
   check.surrendered = true
-
-  // 停止一切行動（Prompt 8.6）：清生產隊列、斷單位移動與攻擊目標。
-  for (const building of world.buildings) {
-    if (building.player === playerId) building.queue = []
-  }
-  for (const unit of world.units) {
-    if (unit.player !== playerId) continue
-    unit.path = null
-    unit.dest = null
-    unit.targetId = null
-  }
   return check
 }

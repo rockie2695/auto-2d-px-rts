@@ -511,6 +511,104 @@ body,
   user-select: none;
 }
 
+/* ---- 投降按鈕（Prompt 10.6：右上角、像素風格外框、hover 變紅）＋確認對話框 ---- */
+.surrender-button {
+  align-self: flex-end;
+  padding: 3px 10px;
+  font-family: 'Courier New', monospace;
+  font-size: 11px;
+  color: #dfe5ec;
+  background: rgba(16, 18, 22, 0.88);
+  border: 2px solid #4a5568;
+  box-shadow:
+    inset -1px -1px 0 rgba(0, 0, 0, 0.6),
+    inset 1px 1px 0 rgba(255, 255, 255, 0.08);
+  cursor: pointer;
+  user-select: none;
+}
+
+.surrender-button:hover {
+  color: #ff8080;
+  border-color: #e05252;
+  box-shadow:
+    inset -1px -1px 0 rgba(0, 0, 0, 0.6),
+    inset 1px 1px 0 rgba(224, 82, 82, 0.25);
+}
+
+.surrender-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(6, 8, 10, 0.62);
+}
+
+.surrender-dialog {
+  min-width: 280px;
+  max-width: 360px;
+  padding: 12px 14px;
+  font-family: 'Courier New', monospace;
+  color: #dfe5ec;
+  background: #1b2028;
+  border: 2px solid #4a5568;
+  box-shadow:
+    inset -2px -2px 0 rgba(0, 0, 0, 0.55),
+    inset 2px 2px 0 rgba(255, 255, 255, 0.06),
+    0 6px 24px rgba(0, 0, 0, 0.5);
+}
+
+.surrender-dialog-title {
+  font-size: 13px;
+  margin-bottom: 6px;
+  color: #ff9f7a;
+}
+
+.surrender-dialog-body {
+  font-size: 12px;
+  line-height: 1.5;
+  margin-bottom: 10px;
+}
+
+.surrender-dialog-note {
+  display: block;
+  font-size: 10px;
+  color: #8d9aa8;
+  margin-top: 2px;
+}
+
+.surrender-dialog-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.surrender-dialog-actions button {
+  padding: 3px 10px;
+  font: inherit;
+  font-size: 11px;
+  background: #232936;
+  color: #dfe5ec;
+  border: 1px solid #4a5568;
+  cursor: pointer;
+}
+
+.surrender-dialog-actions button:hover {
+  border-color: #6f8ecf;
+}
+
+.surrender-dialog-confirm {
+  color: #ff8080 !important;
+  border-color: #e05252 !important;
+}
+
+.surrender-dialog-confirm:hover {
+  background: rgba(224, 82, 82, 0.18) !important;
+  border-color: #ff8080 !important;
+}
+
+
 .hud-panel-title button {
   background: transparent;
   color: #9aa5b1;

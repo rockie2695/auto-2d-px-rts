@@ -176,4 +176,37 @@ describe('parseReplay（replay 檔驗證）', () => {
       parseReplay({ ...FIXTURE, surrender: { ...event, despairAtSurrender: 'high' } }),
     ).toThrow(/despairAtSurrender/)
   })
+
+  it('surrender（Prompt 10.6 player_surrender）：type 合法；timestamp 可缺可帶；壞 timestamp 擲錯', () => {
+    // 玩家手動投降：type = player_surrender（含 timestamp）。
+    const playerEvent = {
+      tick: 1500,
+      player: 'player',
+      type: 'player_surrender',
+      despairAtSurrender: 0,
+      powerRatio: 0.55,
+      incomeRatio: 0.6,
+      timestamp: 1760000000000,
+    }
+    const record = parseReplay({ ...FIXTURE, surrender: playerEvent })
+    expect(record.surrender).toEqual(playerEvent)
+
+    // AI 投降/舊檔可缺 timestamp（undefined 原樣省略）。
+    const aiEvent = {
+      tick: 2400,
+      player: 'enemy',
+      type: 'player_surrender',
+      despairAtSurrender: 0,
+      powerRatio: 0.3,
+      incomeRatio: 0.4,
+    }
+    expect(parseReplay({ ...FIXTURE, surrender: aiEvent }).surrender).not.toHaveProperty(
+      'timestamp',
+    )
+
+    // 壞 timestamp 擲錯。
+    expect(() =>
+      parseReplay({ ...FIXTURE, surrender: { ...playerEvent, timestamp: 'now' } }),
+    ).toThrow(/surrender\.timestamp/)
+  })
 })

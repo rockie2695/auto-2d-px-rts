@@ -828,6 +828,21 @@ A\* 路徑未變更且非重算點時沿用，`tick % 10 === 0`（500ms）定期
    開發驗收可加 `SURRENDER_DEMO=1`（CLI-only 手柄：2 分 1 秒強制極端劣勢＋
    閾值暫降 0.5）。
 
+5. **玩家手動投降**（Prompt 10.6）：對戰畫面**右上角**（戰力面板上方）一顆
+   像素風格「投降」按鈕（hover 變紅）；點擊彈確認對話框（標題「確定投降？」、
+   內容「本局將立即結束，AI 對戰結果計為失敗。」＋小字「敵方 AI 繼續行動
+   3 秒後定局」、按鈕「確認投降」／「取消」——取消即對局繼續）；**Esc** toggle
+   開關確認框。確認 → `session.surrender(playerId)` → sim 定案
+   （`sim/surrender.ts` 與 AI 投降共用：`applySurrender` 停一切行動＋寬限
+   3 秒 → 投降方判負、winner = 敵方）；replay `surrender.type =
+   'player_surrender'`（AI 投降為 `'ai_surrender'`）＋牆鐘 `timestamp`（ms，
+   AI 投降/舊檔缺）；欄位名保持 `player`（不破壞舊檔）。`despairAtSurrender
+   = 0`（手動不適用絕望指數），`powerRatio`／`incomeRatio` 照 AI 口徑現算。
+   邊緣情況：**投降後政策鎖定**（`applyPolicies` 拒絕含 tempo；面板顯示
+   「已投降：政策已鎖定」）、按鈕隱藏、幂等（已投降／已結束 → false）、
+   投降局**不計入**平衡測試統計（CLI 無 UI 天然不觸發）、metrics 照常記錄
+   （finalize 既有採樣路徑不變）、投降後 replay 可正常播放。
+
 > 「當前庫存」代表手上還剩多少，因此囤積不花並非無敵策略。
 >
 > **實作補註（Prompt 10.5）**：結束偵測在 session 每幀檢查（`matchEnded`），
@@ -1057,7 +1072,9 @@ AI 會**主動保護建築與水晶收入**，而不是窩在集結點被動挨�
   下方 `m:ss key from→to` 明細）、「再來一場」按鈕重開對局。
 - **不做（延後）**：反事實建議、決策歸因表、戰鬥事件時間軸。
   （Prompt 8.6 補 AI 投降橫幅：`surrender` 欄位有值時顯示投降方、時鐘與
-  絕望／戰力比／收入比——見 §11 第 4 條。）
+  絕望／戰力比／收入比——見 §11 第 4 條；Prompt 10.6 補玩家手動投降：
+  `type = 'player_surrender'` 顯示「玩家投降（手動）」、省略絕望值、
+  保留戰力／收入比與時鐘——投降時間點——見 §11 第 5 條。）
 
 ---
 
@@ -1279,8 +1296,9 @@ public/data/
 以下**全部延後到 MVP 驗證通過之後**，在實作中出現即為範圍膨脹：
 
 **遊戲系統**
-- 傷害類型（counterMatrix 相剋）、節奏預設、可調撤退閾值、投降按鈕、維修
-  （裝甲已隨**階段三 Prompt 3.1**、三資源已隨**階段三 Prompt 5** 移出此清單；
+- 傷害類型（counterMatrix 相剋）、節奏預設、可調撤退閾值、維修
+  （裝甲已隨**階段三 Prompt 3.1**、三資源已隨**階段三 Prompt 5**、
+  投降按鈕已隨**階段三 Prompt 10.6** 移出此清單；
   counterMatrix 相剋與科技消費者仍延後）
 - 單位體積碰撞
   （戰爭迷霧、視野已隨**階段三 Prompt 9.5b** 移出此清單——`ai/sight.ts`

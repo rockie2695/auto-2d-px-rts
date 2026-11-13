@@ -649,3 +649,38 @@ JSON 結構會按最終 schema 設計，方便日後遷移到 DB。
   乾淨；**tally/公平門不重跑**（零 sim/AI 改動；UI 層 jsdom 測試＋Vite 轉譯
   冒煙代替目視——本環境無內嵌瀏覽器工具）。SPEC §8.6 已更新為三段式/simplex
   語義；README 本條目記錄。
+
+- [x] 階段三 Prompt 10.6 — 投降按鈕（右上角＋確認框＋Esc＋政策鎖定＋replay 記錄）：
+  1. **UI**：新 `ui/SurrenderButton.tsx` 掛在 `.hud-top-right` 首位——像素風格
+     外框、hover 變紅；點擊彈確認對話框（標題「確定投降？」、內容原文
+     「本局將立即結束，AI 對戰結果計為失敗。」＋小字注記「（敵方 AI 繼續行動
+     3 秒後定局）」、按鈕「確認投降」／「取消」）；**Esc** toggle 開關（無其他
+     對話框——目前遊戲內僅此一個 modal，守衛結構條件＋註釋）。
+  2. **sim 定案共用**：新 `sim/surrender.ts`——`surrenderPowerOf`/
+     `surrenderIncomeOf` 自 ai 層**下移**（ai 反向 re-export 保持既有 API）、
+     `applySurrender(world, playerId, despair)`（寫 `world.surrender`＋清生產
+     隊列＋斷 path/dest/targetId；AI 8.6 與玩家 10.6 同碼）、
+     `surrenderPlayer(world, playerId)`（幂等：已投降/`matchEnded` → false；
+     手動 `despairAtSurrender = 0`；powerRatio/incomeRatio 照 AI 口徑現算）。
+     行為閘門（停火/停走/停產/AI 不決策）與 3 秒寬限判負全部復用 8.6 既有
+     基礎設施——**零新 sim 行為**。
+  3. **replay**：`ReplaySurrenderEvent.type` 擴為 `'ai_surrender' |
+     'player_surrender'`＋可選 `timestamp`（牆鐘 ms；AI/舊檔缺）；
+     **欄位名保持 `player`**（不破壞舊檔）。
+  4. **session**：`surrender(playerId): boolean`（雙側通用——player/enemy
+     皆可，UI 只暴露 player）＋日誌「玩家投降：手動觸發」＋`recordSurrender`
+     type `player_surrender`；`applyPolicies` 頂部閘投降後**政策鎖定**（含
+     tempo）；`PolicySnapshot.surrendered` 驅動 UI（按鈕隱藏＋面板提示
+     「已投降：政策已鎖定」）。
+  5. **復盤**：投降橫幅支持 `player_surrender`——「玩家投降（手動）」、
+     省略絕望值、保留戰力／收入比與投降時間點（時鐘）。
+  **驗證**——488/488 測試全過（+12：session 投降→寬限後判負/replay 事件
+  含 timestamp/幂等/敵方投降判我勝/政策鎖定、SurrenderButton 確認框開關/
+  Esc toggle/hidden 不渲染、simplex 無關的 PolicyPanel 鎖定、replay
+  player_surrender 解析＋timestamp 可缺＋壞型別擲錯、sim 定案單元 4 例、
+  橫幅手動格式）；tsc×2＋oxlint 乾淨（set-state-in-effect 警告已修）；
+  **tally/公平門不重跑**——投降局本就不進統計（CLI 無 UI 天然不觸發），
+  sim 定案邏輯與 AI 8.6 路徑共用且行為閘門為既有程式碼；metrics 照常記錄
+  （finalize 採樣路徑不變）。Vite 轉譯冒煙（SurrenderButton/BattleDashboard/
+  session/sim/surrender/replay 200）代替目視。SPEC §11 第 5 條（玩家手動
+  投降）＋§12.3 橫幅註記＋§15 待辦清單移除「投降按鈕」；README 本條目記錄。

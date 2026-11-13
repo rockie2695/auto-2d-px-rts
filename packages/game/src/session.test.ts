@@ -603,6 +603,72 @@ describe('手動結束與 replay 產出（Prompt 10.5）', () => {
   })
 })
 
+describe('投降按鈕（Prompt 10.6：玩家手動投降）', () => {
+  it('投降 → 3 秒寬限後結束、投降方判負、replay 記 player_surrender（含 timestamp）', async () => {
+    const app = makeFakeApp()
+    const session: GameSession = await startGameSession(app as never, makeFakeScene() as never)
+    expect(session.getOutcome().ended).toBe(false)
+
+    await app.onFrame(1000) // 推進約 20 tick，確認投降時對局進行中
+    expect(session.surrender('player')).toBe(true)
+    // 立即反映（不等輪詢）：政策快照投降標記。
+    expect(session.getPolicies('player').surrendered).toBe(true)
+    expect(session.getPolicies('enemy').surrendered).toBe(false)
+
+    // 投降後不能再調 Policy（Prompt 10.6 邊緣情況）：滑桿與 tempo 都拒絕。
+    expect(session.applyPolicies('player', { aggression: 1 })).toBe(false)
+    expect(session.applyPolicies('player', { tempoPreset: 'rush' })).toBe(false)
+
+    // 寬限 3 秒（60 tick）內：對局繼續（敵方 AI 照常）。
+    await app.onFrame(2500) // 50 tick < 60
+    expect(session.getOutcome().ended).toBe(false)
+
+    // 寬限過後：matchEnded → finalize。
+    await app.onFrame(1000) // 再 20 tick，共 ≥ 60
+    const outcome = session.getOutcome()
+    expect(outcome.ended).toBe(true)
+    if (outcome.replay === null) throw new Error('結束後 replay 不應為 null')
+    // 我方投降 → 敵方勝。
+    expect(outcome.replay.result).toBe('enemy')
+    // replay 有 surrender 欄位：type 為 player_surrender、tick 為投降當下、含牆鐘 timestamp。
+    const surrender = outcome.replay.surrender
+    expect(surrender?.type).toBe('player_surrender')
+    expect(surrender?.player).toBe('player')
+    expect(surrender?.tick).toBeGreaterThan(0)
+    expect(surrender?.tick).toBeLessThanOrEqual(outcome.replay.durationTicks)
+    expect(typeof surrender?.timestamp).toBe('number')
+    // 手動投降不適用絕望指數（定為 0）；戰力／收入比照 AI 口徑現算（非負）。
+    expect(surrender?.despairAtSurrender).toBe(0)
+    expect(surrender?.powerRatio).toBeGreaterThan(0)
+    expect(surrender?.incomeRatio).toBeGreaterThan(0)
+
+    expect(app.ticker.remove).toHaveBeenCalled()
+    session.stop()
+  })
+
+  it('幂等：重複投降回 false；對局結束後投降回 false；敵方投降 → 我方勝', async () => {
+    const app = makeFakeApp()
+    const session: GameSession = await startGameSession(app as never, makeFakeScene() as never)
+    await app.onFrame(1000)
+
+    expect(session.surrender('enemy')).toBe(true)
+    // 先投方定案：重複（同側或異側）都拒絕。
+    expect(session.surrender('enemy')).toBe(false)
+    expect(session.surrender('player')).toBe(false)
+
+    await app.onFrame(3500) // 越過寬限
+    expect(session.getOutcome().ended).toBe(true)
+    // 敵方投降 → 我方勝。
+    expect(session.getOutcome().replay?.result).toBe('player')
+    expect(session.getOutcome().replay?.surrender?.player).toBe('enemy')
+    expect(session.getOutcome().replay?.surrender?.type).toBe('player_surrender')
+
+    // 對局已結束：再投回 false（surrenderPlayer 的 matchEnded 閘）。
+    expect(session.surrender('player')).toBe(false)
+    session.stop()
+  })
+})
+
 /* ------------------------------------------------------------------ */
 /* 鏡像對稱（藍方無結構性優勢，Prompt 10.9）                             */
 /* ------------------------------------------------------------------ */

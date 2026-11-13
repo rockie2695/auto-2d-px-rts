@@ -194,6 +194,7 @@ export const POLICY_COOLDOWN_TICKS = 600
 export { matchEnded, matchSideValue, resolveMatchResult } from './sim/matchResult.ts'
 
 import { matchEnded, resolveMatchResult } from './sim/matchResult.ts'
+import { surrenderPlayer } from './sim/surrender.ts'
 
 /**
  * 突變期敘事文字（Prompt 10.23）：只在突變期起點／硬期限的**那一 tick** 回傳
@@ -215,6 +216,8 @@ export interface PolicySnapshot {
   readonly summary: string | null
   /** 當前世界 tick（Prompt 10 完整版）：節奏覆蓋預覽高亮「當前所處時間窗」用。 */
   readonly tick: number
+  /** 本方是否已投降（Prompt 10.6）：投降後政策鎖定、投降按鈕隱藏。 */
+  readonly surrendered: boolean
 }
 
 export interface GameSession {
@@ -256,6 +259,12 @@ export interface GameSession {
   /** 復盤（Prompt 10.5）：手動提前結束（以當下狀態判勝負、停迴圈、產出 replay）。
    *  已結束時回傳 false。 */
   endMatch(): boolean
+  /**
+   * 投降（Prompt 10.6）：該方立即定案投降——停止一切行動，敵方 AI 照常運作
+   * 3 秒（寬限）後對局結束、投降方判負；replay 記 `player_surrender` 事件
+   * （含牆鐘 timestamp）。已投降／已結束回 false（幂等）。
+   */
+  surrender(playerId: PlayerId): boolean
   /** 停止 ticker 迴圈（卸載 PixiCanvas 前呼叫）。 */
   stop(): void
 }
@@ -806,6 +815,7 @@ export async function startGameSession(app: Application, scene: GameScene): Prom
         ),
         summary,
         tick: world.tick,
+        surrendered: world.surrender?.player === playerId,
       }
     },
     applyPolicies: (
@@ -814,6 +824,8 @@ export async function startGameSession(app: Application, scene: GameScene): Prom
         resourceBias?: Partial<PolicyValues['resourceBias']>
       },
     ): boolean => {
+      // 投降後不能再調 Policy（Prompt 10.6）：投降方政策鎖定（含 tempo）。
+      if (world.surrender?.player === playerId) return false
       // 節奏預設（Prompt 6）不受冷卻約束——它是戰略模板不是即時干預；
       // 只改 tempo 時不走冷卻、不開冷卻。
       const touchesSliders = (Object.keys(values) as Array<keyof PolicyValues>).some(
@@ -882,6 +894,29 @@ export async function startGameSession(app: Application, scene: GameScene): Prom
     endMatch: (): boolean => {
       if (outcome !== null) return false
       finalize()
+      return true
+    },
+    surrender: (playerId: PlayerId): boolean => {
+      // 投降（Prompt 10.6）：sim 定案（幂等：已投降／已結束條件成立 → false）。
+      if (!surrenderPlayer(world, playerId)) return false
+      const event = world.surrender
+      pushLog({
+        tick: world.tick,
+        layer: 'strategic',
+        actor: playerId,
+        text: '玩家投降：手動觸發（敵方 AI 繼續行動 3 秒後結束對局）',
+      })
+      if (event !== null) {
+        recorder.recordSurrender({
+          tick: event.tick,
+          player: event.player,
+          type: 'player_surrender',
+          despairAtSurrender: event.despairAtSurrender,
+          powerRatio: event.powerRatio,
+          incomeRatio: event.incomeRatio,
+          timestamp: Date.now(),
+        })
+      }
       return true
     },
     stop: (): void => {

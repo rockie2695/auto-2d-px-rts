@@ -13,6 +13,7 @@ import { PowerStack } from './PowerStack.tsx'
 import { ResourceChart } from './ResourceChart.tsx'
 import { ResourcePanel } from './ResourcePanel.tsx'
 import { SquadPanel } from './SquadPanel.tsx'
+import { SurrenderButton } from './SurrenderButton.tsx'
 
 /** 圖表取樣前的空堆疊表（未掛 session 時的占位）。 */
 const EMPTY_TIERS: TierHpTable = {
@@ -123,6 +124,16 @@ export function BattleDashboard({ children }: { children?: ReactNode }) {
     active.endMatch() // App 的輪詢偵測 ended → 切換復盤頁
   }
 
+  const surrender = (): void => {
+    const active = getActiveSession()
+    if (active === null) return
+    active.surrender('player') // 3 秒寬限後 matchEnded → App 的輪詢切換復盤頁
+    // 立即反映：投降按鈕隱藏、政策鎖定（不等下一次輪詢）。
+    setPolicy(active.getPolicies('player'))
+  }
+
+  const surrendered = policy?.surrendered ?? false
+
   const ratio = powerRatio(stats?.playerPower ?? 0, stats?.enemyPower ?? 0)
 
   return (
@@ -142,6 +153,7 @@ export function BattleDashboard({ children }: { children?: ReactNode }) {
         playerIncomes={stats?.playerIncomes}
       />
       <div className="hud-top-right">
+        <SurrenderButton hidden={surrendered} onConfirm={surrender} />
         <ResourcePanel
           playerResources={
             stats?.playerResources ?? { blue_crystal: 0, red_ruby: 0, green_emerald: 0 }

@@ -37,6 +37,7 @@ import { PostGamePanel } from './PostGamePanel.tsx'
 import { ResourceChart } from './ResourceChart.tsx'
 import { ResourcePanel } from './ResourcePanel.tsx'
 import { SquadPanel } from './SquadPanel.tsx'
+import { SurrenderButton } from './SurrenderButton.tsx'
 import type { DecisionLogEntry, PolicySnapshot, SquadInfo } from '../session.ts'
 import type { ReplayRecord } from '../replay.ts'
 
@@ -107,6 +108,7 @@ const policyOf = (
     cooldownRemainingTicks: 0,
     summary: null,
     tick: 0,
+    surrendered: false,
     ...rest,
   }
 }
@@ -837,6 +839,120 @@ describe('PolicyPanel（底部中央；Prompt 10 完整版：三段式 12+1 維�
     })
     expect(ended).toBe(1)
   })
+
+  it('已投降（Prompt 10.6 邊緣情況）→ 政策鎖定：拖動無效、套用禁用、提示文字', () => {
+    const applied: PolicyApplyPayload[] = []
+    const container = render(
+      <PolicyPanel
+        policy={policyOf({ surrendered: true })}
+        onApply={(values) => applied.push(values)}
+        onEndMatch={() => {}}
+      />,
+    )
+    // 套用禁用（session 端也拒絕：雙保險）。
+    const apply = container.querySelector('[data-testid="policy-apply"]') as HTMLButtonElement
+    expect(apply.disabled).toBe(true)
+    // 提示文字。
+    expect(container.querySelector('[data-testid="policy-cooldown"]')?.textContent).toContain(
+      '已投降：政策已鎖定',
+    )
+    // 拖動滑桿 → 套用仍禁用（投降優先於草稿差異）。
+    const slider = container.querySelector('[data-testid="slider-aggression"]') as HTMLInputElement
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+    act(() => {
+      setter?.call(slider, '0.9')
+      slider.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    expect(apply.disabled).toBe(true)
+    act(() => {
+      apply.click()
+    })
+    expect(applied).toHaveLength(0)
+  })
+})
+
+/* ---------- 投降按鈕（Prompt 10.6：右上角＋確認對話框＋Esc） ---------- */
+
+describe('SurrenderButton（Prompt 10.6）', () => {
+  it('點擊 → 確認對話框（標題／內容／兩鈕）；確認 → onConfirm 一次＋框關', () => {
+    let confirmed = 0
+    const container = render(<SurrenderButton onConfirm={() => { confirmed += 1 }} />)
+    // 初始只有按鈕，無對話框。
+    expect(container.querySelector('[data-testid="surrender-button"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="surrender-dialog"]')).toBeNull()
+
+    const button = container.querySelector('[data-testid="surrender-button"]') as HTMLButtonElement
+    act(() => {
+      button.click()
+    })
+    // 對話框出現：標題、內容、確認／取消兩鈕。
+    const dialog = container.querySelector('[data-testid="surrender-dialog"]')
+    expect(dialog).not.toBeNull()
+    expect(dialog?.getAttribute('aria-label')).toBe('確定投降？')
+    expect(container.querySelector('.surrender-dialog-title')?.textContent).toBe('確定投降？')
+    expect(container.querySelector('.surrender-dialog-body')?.textContent).toContain(
+      '本局將立即結束，AI 對戰結果計為失敗。',
+    )
+    expect(container.querySelector('[data-testid="surrender-confirm"]')?.textContent).toBe('確認投降')
+    expect(container.querySelector('[data-testid="surrender-cancel"]')?.textContent).toBe('取消')
+
+    // 確認 → onConfirm 恰一次、框關閉。
+    act(() => {
+      ;(container.querySelector('[data-testid="surrender-confirm"]') as HTMLButtonElement).click()
+    })
+    expect(confirmed).toBe(1)
+    expect(container.querySelector('[data-testid="surrender-dialog"]')).toBeNull()
+  })
+
+  it('取消 → onConfirm 不觸發、對局繼續（框關閉、按鈕仍在）', () => {
+    let confirmed = 0
+    const container = render(<SurrenderButton onConfirm={() => { confirmed += 1 }} />)
+    act(() => {
+      ;(container.querySelector('[data-testid="surrender-button"]') as HTMLButtonElement).click()
+    })
+    act(() => {
+      ;(container.querySelector('[data-testid="surrender-cancel"]') as HTMLButtonElement).click()
+    })
+    expect(confirmed).toBe(0)
+    expect(container.querySelector('[data-testid="surrender-dialog"]')).toBeNull()
+    expect(container.querySelector('[data-testid="surrender-button"]')).not.toBeNull()
+  })
+
+  it('Esc 快捷鍵：框關 → 開啟確認框；框開 → 取消（toggle）；hidden 時不響應', () => {
+    let confirmed = 0
+    const container = render(<SurrenderButton onConfirm={() => { confirmed += 1 }} />)
+    const esc = (): void => {
+      act(() => {
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+      })
+    }
+    // 框關 → Esc 開框。
+    esc()
+    expect(container.querySelector('[data-testid="surrender-dialog"]')).not.toBeNull()
+    // 框開 → Esc 取消（onConfirm 不觸發）。
+    esc()
+    expect(container.querySelector('[data-testid="surrender-dialog"]')).toBeNull()
+    expect(confirmed).toBe(0)
+    // 其他鍵不觸發。
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))
+    })
+    expect(container.querySelector('[data-testid="surrender-dialog"]')).toBeNull()
+    // 確認框走 Esc 開 → 確認，驗證 toggle 流程完整可用。
+    esc()
+    act(() => {
+      ;(container.querySelector('[data-testid="surrender-confirm"]') as HTMLButtonElement).click()
+    })
+    expect(confirmed).toBe(1)
+
+    // hidden（已投降／已結束）→ 不渲染，Esc 也不開框。
+    const hiddenContainer = render(<SurrenderButton onConfirm={() => {}} hidden />)
+    expect(hiddenContainer.querySelector('[data-testid="surrender-button"]')).toBeNull()
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    })
+    expect(hiddenContainer.querySelector('[data-testid="surrender-dialog"]')).toBeNull()
+  })
 })
 
 /* ---------- 戰後復盤（Prompt 10.5） ---------- */
@@ -949,5 +1065,33 @@ describe('PostGamePanel（/post-game，Prompt 10.5）', () => {
     // 舊 replay（無投降欄）→ 不渲染橫幅。
     const without = render(<PostGamePanel replay={replayFixture} onRestart={() => {}} />)
     expect(without.querySelector('[data-testid="post-game-surrender"]')).toBeNull()
+  })
+
+  it('投降橫幅（Prompt 10.6 玩家手動）：「玩家投降（手動）」＋省略絕望值＋保留戰力／收入比', () => {
+    const container = render(
+      <PostGamePanel
+        replay={{
+          ...replayFixture,
+          surrender: {
+            tick: 1500,
+            player: 'player',
+            type: 'player_surrender',
+            despairAtSurrender: 0,
+            powerRatio: 0.55,
+            incomeRatio: 0.6,
+            timestamp: 1760000000000,
+          },
+        }}
+        onRestart={() => {}}
+      />,
+    )
+    const banner = container.querySelector('[data-testid="post-game-surrender"]')
+    expect(banner).not.toBeNull()
+    expect(banner?.textContent).toContain('1:15') // tick 1500 = 75 秒（投降時間點）
+    expect(banner?.textContent).toContain('我方')
+    expect(banner?.textContent).toContain('玩家投降（手動）')
+    expect(banner?.textContent).not.toContain('絕望') // 手動不適用絕望指數
+    expect(banner?.textContent).toContain('0.55')
+    expect(banner?.textContent).toContain('0.6')
   })
 })

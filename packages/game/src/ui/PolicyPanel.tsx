@@ -236,10 +236,12 @@ export function PolicyPanel({
 
   const cooling = (policy?.cooldownRemainingTicks ?? 0) > 0
   const countdownSec = Math.ceil((policy?.cooldownRemainingTicks ?? 0) / 20)
+  // 投降後不能再調 Policy（Prompt 10.6）：投降方政策鎖定（session 也拒絕）。
+  const surrendered = policy?.surrendered ?? false
   const base = draft ?? committed
   const changed =
     base !== undefined && committed !== undefined ? hasDiff(base, committed) : false
-  const applyDisabled = policy === null || !changed
+  const applyDisabled = policy === null || !changed || surrendered
   const displayBias = base === undefined ? null : normalizeBias(base.resourceBias)
 
   const setSlider = (key: NumericPolicyKey, value: number): void => {
@@ -415,7 +417,11 @@ export function PolicyPanel({
         </button>
       </div>
       <div className="policy-cooldown" data-testid="policy-cooldown">
-        {cooling ? `冷卻中 ${countdownSec}s（30 秒可改一次；節奏預設不受限）` : '可調整（30 秒可改一次；節奏預設不受限）'}
+        {surrendered
+          ? '已投降：政策已鎖定（本局不可再調整）'
+          : cooling
+            ? `冷卻中 ${countdownSec}s（30 秒可改一次；節奏預設不受限）`
+            : '可調整（30 秒可改一次；節奏預設不受限）'}
       </div>
       <button type="button" className="policy-end" data-testid="policy-end-match" onClick={onEndMatch}>
         結束並復盤

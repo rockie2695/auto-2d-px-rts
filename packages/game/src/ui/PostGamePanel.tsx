@@ -26,13 +26,17 @@ function resultDisplay(result: ReplayRecord['result']): { text: string; color: s
   return { text: '平手', color: '#ffd866' }
 }
 
-/** AI 投降標記（Prompt 8.6）：誰投了、絕望指數與戰力／收入比。 */
+/** 投降標記（Prompt 8.6 AI／Prompt 10.6 玩家手動）：誰投了、投降時間點與戰力／收入比；
+ *  AI 投降附絕望指數，玩家手動投降顯示「手動」。 */
 function SurrenderBanner({ surrender }: { surrender: ReplayRecord['surrender'] }) {
   if (surrender === undefined) return null
   const side = surrender.player === 'player' ? '我方' : '敵方'
+  const kind = surrender.type === 'player_surrender' ? '玩家投降（手動）' : 'AI 投降'
   return (
     <div className="post-game-surrender" data-testid="post-game-surrender">
-      {formatClock(surrender.tick)} {side} AI 投降（絕望 {surrender.despairAtSurrender.toFixed(2)}、
+      {formatClock(surrender.tick)} {side}
+      {kind}（
+      {surrender.type === 'ai_surrender' ? `絕望 ${surrender.despairAtSurrender.toFixed(2)}、` : ''}
       戰力比 {surrender.powerRatio.toFixed(2)}、收入比 {surrender.incomeRatio.toFixed(2)}）
     </div>
   )
