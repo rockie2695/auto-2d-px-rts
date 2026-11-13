@@ -1,20 +1,32 @@
 import { useState } from 'react'
 
+import { TICK_RATE_HZ } from '@auto-2d-px-rts/shared'
 import type { TempoPreset } from '@auto-2d-px-rts/shared'
 
-import type { PolicyValues } from '../ai/policy.ts'
+import type { PolicyValues, ResourceBias } from '../ai/policy.ts'
+import { TEMPO_PRESETS } from '../ai/tempo.ts'
 import type { PolicySnapshot } from '../session.ts'
 import { useDraggable } from './useDraggable.ts'
 
 /**
- * 底部中央：AI 政策面板（規則 10，階段三 Prompt 6：9 數值滑桿＋三資源偏重＋節奏預設）。
- * - **草稿模型**：拖動只改本地草稿（數值即時顯示、不觸發 session）；
- *   「套用變更」整包送出（session 對實際變更的鍵記日誌；滑桿變更開 30 秒冷卻，
- *   **節奏預設免冷卻**）；「還原」把草稿回復為最後生效值。
- * - 頂部節奏預設下拉（rush / early_pressure / standard / late_game / turtle）；
- *   9 滑杆兩列網格；三資源偏重三滑杆。
+ * 底部中央：AI 政策面板（規則 10；Prompt 10 完整版：三段式 12+1 維度）。
+ * - **三段式佈局**：頂部「節奏」（預設下拉＋**時段覆蓋預覽**——選中預設即列出
+ *   各時間窗的覆蓋值，當前所處時間窗高亮，`PolicySnapshot.tick` 提供遊戲時刻）；
+ *   中段「方針」（9 支**方向式**滑桿＋tooltip，unitSize 文案含勢力例外聲明）；
+ *   底段「資源比例」（三滑桿 **simplex**：總和恆為 1、百分比顯示）。
+ * - **simplex 資源比例**：拖任一支，另兩支按剩餘比例重分（另兩支和為 0 → 均分）；
+ *   套用送**歸一化**草稿——AI 消費點 max 歸一（`resourceBias` 相對權重），行為等價；
+ *   歸一後與生效值相等時 payload **不帶** `resourceBias`（不吃冷卻、不記無意義日誌）；
+ *   存量全 0（CLI 邊界）僅顯示為均分，不改存儲。
+ * - **草稿模型**：拖動只改本地草稿（數值即時顯示、不觸發 session）；「套用變更」
+ *   整包送出（30 秒冷卻，**節奏預設免冷卻**）；「還原」回復最後生效值。
  * - 可收合；底部「結束並復盤」手動結束對局（Prompt 10.5）。
  */
+
+/** 套用 payload（Prompt 10 完整版）：resourceBias 為歸一化後的完整三鍵（或省略）。 */
+export type PolicyApplyPayload = Partial<Omit<PolicyValues, 'resourceBias'>> & {
+  resourceBias?: ResourceBias
+}
 
 const TEMPO_OPTIONS: ReadonlyArray<{ value: TempoPreset; label: string }> = [
   { value: 'rush', label: '快攻 rush' },
@@ -22,24 +34,6 @@ const TEMPO_OPTIONS: ReadonlyArray<{ value: TempoPreset; label: string }> = [
   { value: 'standard', label: '標準' },
   { value: 'late_game', label: '後期決戰' },
   { value: 'turtle', label: '龜縮' },
-]
-
-const SLIDERS: ReadonlyArray<{ key: NumericPolicyKey; label: string }> = [
-  { key: 'econMilitary', label: '經濟↔軍事' },
-  { key: 'aggression', label: '侵略性' },
-  { key: 'unitSize', label: '單位規模' },
-  { key: 'unitRange', label: '單位射程' },
-  { key: 'clusterSpread', label: '集結密度' },
-  { key: 'expansion', label: '擴張' },
-  { key: 'techRush', label: '科技' },
-  { key: 'reserve', label: '留守' },
-  { key: 'retreatThreshold', label: '撤退閾' },
-]
-
-const BIAS_SLIDERS: ReadonlyArray<{ key: BiasKey; label: string }> = [
-  { key: 'blue', label: '偏藍礦' },
-  { key: 'red', label: '偏紅礦' },
-  { key: 'green', label: '偏綠礦' },
 ]
 
 type NumericPolicyKey =
@@ -55,15 +49,158 @@ type NumericPolicyKey =
 
 type BiasKey = 'blue' | 'red' | 'green'
 
-/** 草稿與生效值是否有差異（滑桿逐鍵、bias 逐子鍵、tempo 逐值）。 */
+const BIAS_KEYS: readonly BiasKey[] = ['blue', 'red', 'green']
+
+const BIAS_LABELS: Record<BiasKey, string> = {
+  blue: '藍水晶',
+  red: '紅寶石',
+  green: '綠翡翠',
+}
+
+/** 9 支方向式滑桿（Prompt 10 完整版文案）：標籤標明兩端語義，tooltip 補充效果。 */
+const SLIDERS: ReadonlyArray<{ key: NumericPolicyKey; label: string; tooltip: string }> = [
+  {
+    key: 'econMilitary',
+    label: '經濟 ← → 軍事',
+    tooltip: '0 = 全力軍事；1 = 全力經濟。建築與生兵的資源分配重心。',
+  },
+  {
+    key: 'unitSize',
+    label: '單位體型（大型 ← → 小型）',
+    tooltip:
+      '大型單位：通常高 HP、高 DPS、低速度。\n' +
+      '小型單位：通常低 HP、低 DPS、高速度、數量多。\n' +
+      '但具體屬性取決於勢力設計，可能存在例外（例如小型高裝甲單位）。',
+  },
+  {
+    key: 'unitRange',
+    label: '近戰 ← → 遠程',
+    tooltip: '0 = 偏好近戰單位（貼身輸出）；1 = 偏好遠程單位（風箏點射，但脆）。',
+  },
+  {
+    key: 'clusterSpread',
+    label: '分散 ← → 集群',
+    tooltip: '0 = 小隊分散走位；1 = 集群推進。',
+  },
+  {
+    key: 'aggression',
+    label: '固守 ← → 強攻',
+    tooltip: '0 = 固守；1 = 強攻（更早出擊、更激進迎戰）。',
+  },
+  {
+    key: 'expansion',
+    label: '龜縮 ← → 擴張',
+    tooltip: '0 = 龜縮既有礦場；1 = 提前解鎖紅／綠礦擴張。',
+  },
+  {
+    key: 'techRush',
+    label: '數量海 ← → 科技優先',
+    tooltip: '0 = 數量海；1 = 科技優先（綠礦投入＋單位技術加成）。',
+  },
+  {
+    key: 'reserve',
+    label: '全軍出擊 ← → 重兵留守',
+    tooltip: '0 = 全軍出擊；1 = 重兵留守（留守戰力比例）。',
+  },
+  {
+    key: 'retreatThreshold',
+    label: '死戰不退 ← → 一有劣勢就撤',
+    tooltip: '0 = 死戰不退；1 = 一有劣勢就撤（撤退閾值乘數）。',
+  },
+]
+
+/** 節奏覆蓋預覽的鍵名（Prompt 10 完整版）：覆蓋規則裡只會出現這些滑桿鍵。 */
+const OVERRIDE_LABELS: Record<string, string> = {
+  econMilitary: '經濟',
+  unitSize: '體型',
+  unitRange: '射程',
+  clusterSpread: '集群',
+  aggression: '侵略',
+  expansion: '擴張',
+  techRush: '科技',
+  reserve: '留守',
+  retreatThreshold: '撤退閾',
+}
+
+/** 時間窗文字：有限 → 「起–迄s」；無限 → 「起s 之後」。 */
+function windowText(start: number, end: number): string {
+  return end === Number.POSITIVE_INFINITY
+    ? `${Math.round(start)}s 之後`
+    : `${Math.round(start)}–${Math.round(end)}s`
+}
+
+/**
+ * 資源比例歸一（Prompt 10 完整版 simplex）：三鍵總和 = 1；總和為 0 → 均分。
+ * 顯示與套用一律走歸一值——AI 消費點（max 歸一）只看相對比例，行為等價。
+ */
+function normalizeBias(bias: ResourceBias): ResourceBias {
+  const sum = bias.blue + bias.red + bias.green
+  if (sum <= 0) return { blue: 1 / 3, red: 1 / 3, green: 1 / 3 }
+  return { blue: bias.blue / sum, red: bias.red / sum, green: bias.green / sum }
+}
+
+/** 兩組歸一比例是否語義相等（誤差 < 0.005 = 半格滑桿步進）。 */
+function biasEquals(a: ResourceBias, b: ResourceBias): boolean {
+  return (
+    Math.abs(a.blue - b.blue) < 0.005 &&
+    Math.abs(a.red - b.red) < 0.005 &&
+    Math.abs(a.green - b.green) < 0.005
+  )
+}
+
+/**
+ * 拖動一支滑桿後重分另兩支（Prompt 10 完整版）：總和恆為 1。
+ * 另兩支按原比例縮放到剩餘額度；另兩支和為 0 → 均分剩餘；拖滿 1 → 另兩支歸 0。
+ */
+function renormalizeBias(bias: ResourceBias, key: BiasKey, value: number): ResourceBias {
+  const v = Math.min(1, Math.max(0, value))
+  const rest = 1 - v
+  const others = BIAS_KEYS.filter((candidate) => candidate !== key)
+  const first = others[0]
+  const second = others[1]
+  if (first === undefined || second === undefined) {
+    return { blue: 1 / 3, red: 1 / 3, green: 1 / 3 } // 不可達（BIAS_KEYS 恆三鍵）
+  }
+  const otherSum = bias[first] + bias[second]
+  const firstShare = otherSum <= 0 ? rest / 2 : bias[first] * (rest / otherSum)
+  const secondShare = otherSum <= 0 ? rest / 2 : bias[second] * (rest / otherSum)
+  if (key === 'blue') return { blue: v, red: firstShare, green: secondShare }
+  if (key === 'red') return { blue: firstShare, red: v, green: secondShare }
+  return { blue: firstShare, red: secondShare, green: v }
+}
+
+/** 草稿與生效值是否有差異（滑桿逐鍵、bias 比歸一值、tempo 逐值）。 */
 function hasDiff(draft: PolicyValues, committed: PolicyValues): boolean {
   for (const { key } of SLIDERS) {
     if (draft[key] !== committed[key]) return true
   }
-  for (const { key } of BIAS_SLIDERS) {
-    if (draft.resourceBias[key] !== committed.resourceBias[key]) return true
+  if (!biasEquals(normalizeBias(draft.resourceBias), normalizeBias(committed.resourceBias))) {
+    return true
   }
   return draft.tempoPreset !== committed.tempoPreset
+}
+
+/**
+ * 套用 payload（Prompt 10 完整版）：resourceBias 送**歸一化**完整三鍵；
+ * 歸一後與生效值相等 → 整個鍵省略（不吃冷卻、不記無意義的 `政策變更` 日誌）。
+ */
+function applyPayloadOf(draft: PolicyValues, committed: PolicyValues): PolicyApplyPayload {
+  const payload: PolicyApplyPayload = {
+    econMilitary: draft.econMilitary,
+    unitSize: draft.unitSize,
+    unitRange: draft.unitRange,
+    clusterSpread: draft.clusterSpread,
+    aggression: draft.aggression,
+    expansion: draft.expansion,
+    techRush: draft.techRush,
+    reserve: draft.reserve,
+    retreatThreshold: draft.retreatThreshold,
+    tempoPreset: draft.tempoPreset,
+  }
+  if (!biasEquals(normalizeBias(draft.resourceBias), normalizeBias(committed.resourceBias))) {
+    payload.resourceBias = normalizeBias(draft.resourceBias)
+  }
+  return payload
 }
 
 export function PolicyPanel({
@@ -74,7 +211,7 @@ export function PolicyPanel({
   /** 目前政策快照（輪詢取得）；尚未有對局為 null。 */
   policy: PolicySnapshot | null
   /** 按下「套用變更」：呼叫端負責 `applyPolicies`（冷卻中按鈕已禁用）。 */
-  onApply: (values: PolicyValues) => void
+  onApply: (values: PolicyApplyPayload) => void
   /** 按下「結束並復盤」：手動結束對局（Prompt 10.5）。 */
   onEndMatch: () => void
 }) {
@@ -103,6 +240,7 @@ export function PolicyPanel({
   const changed =
     base !== undefined && committed !== undefined ? hasDiff(base, committed) : false
   const applyDisabled = policy === null || !changed
+  const displayBias = base === undefined ? null : normalizeBias(base.resourceBias)
 
   const setSlider = (key: NumericPolicyKey, value: number): void => {
     const source = draft ?? committed
@@ -112,12 +250,21 @@ export function PolicyPanel({
   const setBias = (key: BiasKey, value: number): void => {
     const source = draft ?? committed
     if (source === undefined) return
-    setDraft({ ...source, resourceBias: { ...source.resourceBias, [key]: value } })
+    // simplex（Prompt 10 完整版）：從歸一值出發重分——生效值可能是未歸一的相對權重。
+    const norm = normalizeBias(source.resourceBias)
+    setDraft({ ...source, resourceBias: renormalizeBias(norm, key, value) })
   }
   const setTempo = (value: TempoPreset): void => {
     const source = draft ?? committed
     if (source === undefined) return
     setDraft({ ...source, tempoPreset: value })
+  }
+
+  const apply = (): void => {
+    if (draft !== null && committed !== undefined) {
+      onApply(applyPayloadOf(draft, committed))
+      setDraft(null) // 已送出：草稿歸零（生效值由輪詢/立即讀取更新）
+    }
   }
 
   return (
@@ -140,73 +287,121 @@ export function PolicyPanel({
       <div className="policy-summary" data-testid="policy-summary">
         {policy?.summary ?? '尚未有戰略決策'}
       </div>
-      <label className="policy-slider policy-tempo">
-        <span className="policy-slider-label">節奏預設</span>
-        <select
-          data-testid="policy-tempo"
-          aria-label="節奏預設"
-          value={base === undefined ? 'standard' : base.tempoPreset}
-          disabled={base === undefined}
-          onChange={(event) => setTempo(event.target.value as TempoPreset)}
-        >
-          {TEMPO_OPTIONS.map((option) => (
-            <option key={option.value} value={option.value}>
-              {option.label}
-            </option>
-          ))}
-        </select>
-      </label>
-      <div className="policy-sliders-grid">
-        {SLIDERS.map(({ key, label }) => (
-          <label className="policy-slider" key={key}>
-            <span className="policy-slider-label">{label}</span>
-            <input
-              type="range"
-              min={0}
-              max={1}
-              step={0.05}
-              value={base === undefined ? 0.5 : base[key]}
-              disabled={base === undefined}
-              data-testid={`slider-${key}`}
-              aria-label={label}
-              onChange={(event) => setSlider(key, Number(event.target.value))}
-            />
-            <output className="policy-slider-value">
-              {base === undefined ? '—' : base[key].toFixed(2)}
-            </output>
-          </label>
-        ))}
-        {BIAS_SLIDERS.map(({ key, label }) => (
-          <label className="policy-slider" key={`bias-${key}`}>
-            <span className="policy-slider-label">{label}</span>
-            <input
-              type="range"
-              min={0}
-              max={1}
-              step={0.05}
-              value={base === undefined ? 0.5 : base.resourceBias[key]}
-              disabled={base === undefined}
-              data-testid={`slider-resourceBias-${key}`}
-              aria-label={label}
-              onChange={(event) => setBias(key, Number(event.target.value))}
-            />
-            <output className="policy-slider-value">
-              {base === undefined ? '—' : base.resourceBias[key].toFixed(2)}
-            </output>
-          </label>
-        ))}
+
+      {/* 頂段：節奏（Prompt 10 完整版：下拉＋時段覆蓋預覽） */}
+      <div className="policy-section" data-testid="policy-section-tempo">
+        <div className="policy-section-title">節奏</div>
+        <label className="policy-slider policy-tempo">
+          <span className="policy-slider-label">節奏預設</span>
+          <select
+            data-testid="policy-tempo"
+            aria-label="節奏預設"
+            value={base === undefined ? 'standard' : base.tempoPreset}
+            disabled={base === undefined}
+            onChange={(event) => setTempo(event.target.value as TempoPreset)}
+          >
+            {TEMPO_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        {base !== undefined && (
+          <div className="policy-tempo-preview" data-testid="policy-tempo-preview">
+            {TEMPO_PRESETS[base.tempoPreset].length === 0 ? (
+              <span className="policy-tempo-none" data-testid="policy-tempo-none">
+                無時段覆蓋：玩家滑桿全場生效
+              </span>
+            ) : (
+              TEMPO_PRESETS[base.tempoPreset].map((rule, index) => {
+                const [start, end] = rule.timeRange
+                const nowSec = (policy?.tick ?? 0) / TICK_RATE_HZ
+                const active = nowSec >= start && nowSec < end
+                const overrides = Object.entries(rule.policyOverrides)
+                  .map(([key, value]) => `${OVERRIDE_LABELS[key] ?? key}→${value.toFixed(2)}`)
+                  .join('、')
+                return (
+                  <div
+                    key={index}
+                    className={active ? 'policy-tempo-rule is-active' : 'policy-tempo-rule'}
+                    data-testid="policy-tempo-rule"
+                  >
+                    <span className="policy-tempo-window">{windowText(start, end)}</span>
+                    <span className="policy-tempo-overrides">{overrides}</span>
+                  </div>
+                )
+              })
+            )}
+          </div>
+        )}
       </div>
+
+      {/* 中段：方針（9 支方向式滑桿） */}
+      <div className="policy-section" data-testid="policy-section-sliders">
+        <div className="policy-section-title">方針</div>
+        <div className="policy-sliders-grid">
+          {SLIDERS.map(({ key, label, tooltip }) => (
+            <label className="policy-slider" key={key}>
+              <span className="policy-slider-label" title={tooltip}>
+                {label}
+              </span>
+              <input
+                type="range"
+                min={0}
+                max={1}
+                step={0.05}
+                value={base === undefined ? 0.5 : base[key]}
+                disabled={base === undefined}
+                data-testid={`slider-${key}`}
+                aria-label={label}
+                title={tooltip}
+                onChange={(event) => setSlider(key, Number(event.target.value))}
+              />
+              <output className="policy-slider-value">
+                {base === undefined ? '—' : base[key].toFixed(2)}
+              </output>
+            </label>
+          ))}
+        </div>
+      </div>
+
+      {/* 底段：資源比例（simplex：總和恆為 1、百分比顯示） */}
+      <div className="policy-section" data-testid="policy-section-bias">
+        <div className="policy-section-title">資源比例（總和 100%）</div>
+        <div className="policy-bias-grid">
+          {BIAS_KEYS.map((key) => (
+            <label className="policy-slider" key={`bias-${key}`}>
+              <span className="policy-slider-label">{BIAS_LABELS[key]}礦</span>
+              <input
+                type="range"
+                min={0}
+                max={1}
+                step={0.05}
+                value={displayBias === null ? 0.5 : displayBias[key]}
+                disabled={displayBias === null}
+                data-testid={`slider-resourceBias-${key}`}
+                aria-label={`資源比例：${BIAS_LABELS[key]}`}
+                onChange={(event) => setBias(key, Number(event.target.value))}
+              />
+              <output
+                className="policy-slider-value"
+                data-testid={`bias-pct-${key}`}
+              >
+                {displayBias === null ? '—' : `${Math.round(displayBias[key] * 100)}%`}
+              </output>
+            </label>
+          ))}
+        </div>
+        <div className="policy-bias-note">百分比四捨五入，拖任一支自動重分另兩支</div>
+      </div>
+
       <div className="policy-actions">
         <button
           type="button"
           data-testid="policy-apply"
           disabled={applyDisabled}
-          onClick={() => {
-            if (draft !== null) {
-              onApply(draft)
-              setDraft(null) // 已送出：草稿歸零（生效值由輪詢/立即讀取更新）
-            }
-          }}
+          onClick={apply}
         >
           套用變更
         </button>

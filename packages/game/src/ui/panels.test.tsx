@@ -31,6 +31,7 @@ vi.mock('uplot', () => ({
 import { DecisionLogPanel } from './DecisionLogPanel.tsx'
 import { formatClock, layerLabel } from './collector.ts'
 import { PolicyPanel } from './PolicyPanel.tsx'
+import type { PolicyApplyPayload } from './PolicyPanel.tsx'
 import type { PolicyValues } from '../ai/policy.ts'
 import { PostGamePanel } from './PostGamePanel.tsx'
 import { ResourceChart } from './ResourceChart.tsx'
@@ -105,6 +106,7 @@ const policyOf = (
     },
     cooldownRemainingTicks: 0,
     summary: null,
+    tick: 0,
     ...rest,
   }
 }
@@ -541,12 +543,12 @@ function renderAndRerender(first: ReactNode, second: ReactNode): { rerender: (no
 
 /* ---------- AI 政策滑桿（Prompt 10：草稿＋套用/還原） ---------- */
 
-describe('PolicyPanel（底部中央；Prompt 6：9+3 滑桿＋節奏預設）', () => {
-  it('顯示 12 個滑桿（9 維度＋3 資源偏重）＋節奏下拉＋決策摘要＋可調整狀態', () => {
+describe('PolicyPanel（底部中央；Prompt 10 完整版：三段式 12+1 維度）', () => {
+  it('顯示 12 個滑桿（9 方向式＋3 資源比例）＋節奏下拉＋覆蓋預覽＋決策摘要＋可調整狀態', () => {
     const container = render(
       <PolicyPanel policy={policyOf({ summary: 'build mine（收入不足）' })} onApply={() => {}} onEndMatch={() => {}} />,
     )
-    // 12 個滑桿（9 維度 + 3 資源偏重）、範圍 0–1。
+    // 12 個滑桿（9 維度 + 3 資源比例）、範圍 0–1。
     const sliders = container.querySelectorAll('input[type="range"]')
     expect(sliders.length).toBe(12)
     for (const slider of sliders) {
@@ -559,21 +561,38 @@ describe('PolicyPanel（底部中央；Prompt 6：9+3 滑桿＋節奏預設）',
     expect(tempo).not.toBeNull()
     expect(tempo.value).toBe('standard')
     expect(tempo.querySelectorAll('option').length).toBe(5)
-    // 名稱（舊 5 ＋新 4 ＋資源偏重 3）。
-    expect(textOf(container)).toContain('經濟↔軍事')
-    expect(textOf(container)).toContain('單位規模')
-    expect(textOf(container)).toContain('單位射程')
-    expect(textOf(container)).toContain('侵略性')
-    expect(textOf(container)).toContain('集結密度')
-    expect(textOf(container)).toContain('擴張')
-    expect(textOf(container)).toContain('科技')
-    expect(textOf(container)).toContain('留守')
-    expect(textOf(container)).toContain('撤退閾')
-    expect(textOf(container)).toContain('偏藍礦')
-    expect(textOf(container)).toContain('偏紅礦')
-    expect(textOf(container)).toContain('偏綠礦')
-    expect(container.querySelector('[data-testid="slider-aggression"]')?.getAttribute('value')).toBe('0.5')
-    expect(container.querySelector('[data-testid="slider-resourceBias-red"]')?.getAttribute('value')).toBe('0.5')
+    // 三段式佈局（Prompt 10 完整版）。
+    expect(container.querySelector('[data-testid="policy-section-tempo"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="policy-section-sliders"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="policy-section-bias"]')).not.toBeNull()
+    // 方向式標籤（Prompt 10 完整版文案）。
+    expect(textOf(container)).toContain('經濟 ← → 軍事')
+    expect(textOf(container)).toContain('單位體型（大型 ← → 小型）')
+    expect(textOf(container)).toContain('近戰 ← → 遠程')
+    expect(textOf(container)).toContain('分散 ← → 集群')
+    expect(textOf(container)).toContain('固守 ← → 強攻')
+    expect(textOf(container)).toContain('龜縮 ← → 擴張')
+    expect(textOf(container)).toContain('數量海 ← → 科技優先')
+    expect(textOf(container)).toContain('全軍出擊 ← → 重兵留守')
+    expect(textOf(container)).toContain('死戰不退 ← → 一有劣勢就撤')
+    expect(textOf(container)).toContain('藍水晶礦')
+    expect(textOf(container)).toContain('紅寶石礦')
+    expect(textOf(container)).toContain('綠翡翠礦')
+    // unitSize tooltip（Prompt 10 完整版指定文案，含勢力例外聲明）。
+    const unitSize = container.querySelector('[data-testid="slider-unitSize"]') as HTMLInputElement
+    expect(unitSize.title).toContain('大型單位：通常高 HP、高 DPS、低速度')
+    expect(unitSize.title).toContain('但具體屬性取決於勢力設計，可能存在例外（例如小型高裝甲單位）')
+    // simplex 資源比例：0.5/0.5/0.5 → 歸一各 1/3（百分比四捨五入 33%）。
+    const redValue = Number(
+      (container.querySelector('[data-testid="slider-resourceBias-red"]') as HTMLInputElement)
+        .getAttribute('value'),
+    )
+    expect(Math.abs(redValue - 1 / 3)).toBeLessThan(1e-9)
+    expect(container.querySelector('[data-testid="bias-pct-blue"]')?.textContent).toBe('33%')
+    expect(container.querySelector('[data-testid="bias-pct-red"]')?.textContent).toBe('33%')
+    expect(container.querySelector('[data-testid="bias-pct-green"]')?.textContent).toBe('33%')
+    // standard 無時段覆蓋提示。
+    expect(container.querySelector('[data-testid="policy-tempo-none"]')?.textContent).toContain('無時段覆蓋')
     // 決策摘要與冷卻狀態。
     expect(container.querySelector('[data-testid="policy-summary"]')?.textContent).toBe(
       'build mine（收入不足）',
@@ -594,7 +613,7 @@ describe('PolicyPanel（底部中央；Prompt 6：9+3 滑桿＋節奏預設）',
   })
 
   it('拖動滑桿只改草稿（不觸發 onApply）；按套用 → 整包 draft（12+1 維）呼叫一次', () => {
-    const applied: PolicyValues[] = []
+    const applied: PolicyApplyPayload[] = []
     const container = render(
       <PolicyPanel policy={policyOf()} onApply={(values) => applied.push(values)} onEndMatch={() => {}} />,
     )
@@ -626,13 +645,123 @@ describe('PolicyPanel（底部中央；Prompt 6：9+3 滑桿＋節奏預設）',
       techRush: 0.5,
       reserve: 0.5,
       retreatThreshold: 0.5,
-      resourceBias: { blue: 0.5, red: 0.5, green: 0.5 },
+      // 資源比例語義未變（歸一後相等）→ payload 不帶 resourceBias（Prompt 10 完整版）。
       tempoPreset: 'standard',
     })
   })
 
+  it('節奏覆蓋預覽（Prompt 10 完整版）：rush 列出各時間窗覆蓋值；PolicySnapshot.tick 高亮當前窗口', () => {
+    // tick 4000 = 200 秒 → 落在 rush 第二窗（120–300s）。
+    const container = render(
+      <PolicyPanel
+        policy={policyOf({ tick: 4000, values: { tempoPreset: 'rush' } })}
+        onApply={() => {}}
+        onEndMatch={() => {}}
+      />,
+    )
+    const rules = container.querySelectorAll('[data-testid="policy-tempo-rule"]')
+    expect(rules.length).toBe(3)
+    const texts = Array.from(rules).map((rule) => rule.textContent ?? '')
+    expect(texts[0]).toContain('0–120s')
+    expect(texts[0]).toContain('經濟→0.10')
+    expect(texts[0]).toContain('侵略→1.00')
+    expect(texts[1]).toContain('120–300s')
+    expect(texts[1]).toContain('經濟→0.60')
+    expect(texts[2]).toContain('300s 之後')
+    // 當前所處時間窗（第二窗）高亮、其餘不高亮。
+    expect(rules[1]?.className).toContain('is-active')
+    expect(rules[0]?.className).not.toContain('is-active')
+    expect(rules[2]?.className).not.toContain('is-active')
+  })
+
+  it('拖動下拉即預覽（草稿 tempo 未套用也更新覆蓋預覽；tempo 變更算差異）', () => {
+    const container = render(
+      <PolicyPanel policy={policyOf()} onApply={() => {}} onEndMatch={() => {}} />,
+    )
+    // 預設 standard：無覆蓋提示。
+    expect(container.querySelector('[data-testid="policy-tempo-none"]')).not.toBeNull()
+    const tempo = container.querySelector('[data-testid="policy-tempo"]') as HTMLSelectElement
+    const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set
+    act(() => {
+      setter?.call(tempo, 'rush')
+      tempo.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    // 草稿切到 rush → 預覽立即列出 3 個時間窗（未套用也生效）。
+    expect(container.querySelectorAll('[data-testid="policy-tempo-rule"]').length).toBe(3)
+    expect(container.querySelector('[data-testid="policy-tempo-none"]')).toBeNull()
+    const apply = container.querySelector('[data-testid="policy-apply"]') as HTMLButtonElement
+    expect(apply.disabled).toBe(false)
+  })
+
+  it('simplex 資源比例（Prompt 10 完整版）：拖一支按比例重分另兩支；套用送歸一化三鍵', () => {
+    const applied: PolicyApplyPayload[] = []
+    const container = render(
+      <PolicyPanel policy={policyOf()} onApply={(values) => applied.push(values)} onEndMatch={() => {}} />,
+    )
+    const red = container.querySelector('[data-testid="slider-resourceBias-red"]') as HTMLInputElement
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+    act(() => {
+      setter?.call(red, '0.9')
+      red.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    // 1/3,1/3,1/3 → 拖紅到 0.9：剩餘 0.1 對半 → 藍 5%、綠 5%（總和恆 1）。
+    expect(container.querySelector('[data-testid="bias-pct-red"]')?.textContent).toBe('90%')
+    expect(container.querySelector('[data-testid="bias-pct-blue"]')?.textContent).toBe('5%')
+    expect(container.querySelector('[data-testid="bias-pct-green"]')?.textContent).toBe('5%')
+    act(() => {
+      ;(container.querySelector('[data-testid="policy-apply"]') as HTMLButtonElement).click()
+    })
+    expect(applied).toHaveLength(1)
+    const bias = applied[0]?.resourceBias
+    expect(bias?.red).toBeCloseTo(0.9, 12)
+    expect(bias?.blue).toBeCloseTo(0.05, 12)
+    expect(bias?.green).toBeCloseTo(0.05, 12)
+  })
+
+  it('資源比例語義等價（歸一後相等）→ payload 不帶 resourceBias（不吃冷卻、不記假日誌）', () => {
+    const applied: PolicyApplyPayload[] = []
+    // 生效值 {1, 0.5, 0.5} 歸一 = {0.5, 0.25, 0.25}；只拖 aggression。
+    const container = render(
+      <PolicyPanel
+        policy={policyOf({ values: { resourceBias: { blue: 1, red: 0.5, green: 0.5 } } })}
+        onApply={(values) => applied.push(values)}
+        onEndMatch={() => {}}
+      />,
+    )
+    // 顯示走歸一值：藍 50%、紅 25%、綠 25%。
+    expect(container.querySelector('[data-testid="bias-pct-blue"]')?.textContent).toBe('50%')
+    expect(container.querySelector('[data-testid="bias-pct-red"]')?.textContent).toBe('25%')
+    const slider = container.querySelector('[data-testid="slider-aggression"]') as HTMLInputElement
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+    act(() => {
+      setter?.call(slider, '0.9')
+      slider.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    act(() => {
+      ;(container.querySelector('[data-testid="policy-apply"]') as HTMLButtonElement).click()
+    })
+    expect(applied).toHaveLength(1)
+    expect(applied[0]?.resourceBias).toBeUndefined()
+  })
+
+  it('資源比例存量全 0（CLI 邊界）→ 顯示為均分，不產生假變更', () => {
+    const container = render(
+      <PolicyPanel
+        policy={policyOf({ values: { resourceBias: { blue: 0, red: 0, green: 0 } } })}
+        onApply={() => {}}
+        onEndMatch={() => {}}
+      />,
+    )
+    expect(container.querySelector('[data-testid="bias-pct-blue"]')?.textContent).toBe('33%')
+    expect(container.querySelector('[data-testid="bias-pct-red"]')?.textContent).toBe('33%')
+    expect(container.querySelector('[data-testid="bias-pct-green"]')?.textContent).toBe('33%')
+    // 歸一值等價 → 無差異：套用鈕禁用（不記無意義日誌）。
+    const apply = container.querySelector('[data-testid="policy-apply"]') as HTMLButtonElement
+    expect(apply.disabled).toBe(true)
+  })
+
   it('還原：草稿回復為生效值（變更前）；無差異時兩鈕禁用', () => {
-    const applied: PolicyValues[] = []
+    const applied: PolicyApplyPayload[] = []
     const container = render(
       <PolicyPanel
         policy={policyOf({ values: { unitRange: 0.25 } })}

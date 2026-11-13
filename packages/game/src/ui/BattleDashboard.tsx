@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 
-import type { PolicyValues } from '../ai/policy.ts'
 import { getActiveSession } from '../session.ts'
 import type { BattleStats, PolicySnapshot, TierHpTable } from '../session.ts'
 import { formatClock, ResourceSeries } from './collector.ts'
@@ -9,6 +8,7 @@ import type { SamplePoint } from './collector.ts'
 import { DecisionLogPanel } from './DecisionLogPanel.tsx'
 import { OverlayControls } from './OverlayControls.tsx'
 import { PolicyPanel } from './PolicyPanel.tsx'
+import type { PolicyApplyPayload } from './PolicyPanel.tsx'
 import { PowerStack } from './PowerStack.tsx'
 import { ResourceChart } from './ResourceChart.tsx'
 import { ResourcePanel } from './ResourcePanel.tsx'
@@ -109,7 +109,7 @@ export function BattleDashboard({ children }: { children?: ReactNode }) {
     }
   }, [])
 
-  const applyPolicy = (values: PolicyValues): void => {
+  const applyPolicy = (values: PolicyApplyPayload): void => {
     const active = getActiveSession()
     if (active === null) return
     active.applyPolicies('player', values)

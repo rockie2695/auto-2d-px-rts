@@ -344,16 +344,75 @@ body,
   gap: 6px;
 }
 
-/* Prompt 6：12+1 維度——9+3 滑杆兩列網格，面板加寬不無限拉高。 */
+/* Prompt 6：12+1 維度——9+3 滑杆網格，面板加寬不無限拉高。 */
 .policy-panel-grid {
   max-height: 70vh;
   overflow-y: auto;
 }
 
+/* Prompt 10 完整版：三段式佈局（節奏／方針／資源比例）。 */
+.policy-section {
+  margin-bottom: 6px;
+}
+
+.policy-section-title {
+  color: #7f8ea0;
+  font-size: 11px;
+  letter-spacing: 1px;
+  border-bottom: 1px solid #333a46;
+  margin-bottom: 3px;
+  padding-bottom: 1px;
+}
+
+/* 節奏時段覆蓋預覽：選中預設即列出各時間窗覆蓋值；當前窗口高亮。 */
+.policy-tempo-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin-top: 3px;
+  font-size: 11px;
+}
+
+.policy-tempo-rule {
+  display: flex;
+  gap: 8px;
+  color: #8d9aa8;
+  padding: 1px 3px;
+}
+
+.policy-tempo-rule.is-active {
+  color: #dfe5ec;
+  background: rgba(111, 142, 207, 0.18);
+}
+
+.policy-tempo-window {
+  flex: none;
+  min-width: 74px;
+  font-variant-numeric: tabular-nums;
+}
+
+.policy-tempo-none {
+  color: #8d9aa8;
+  padding: 1px 3px;
+}
+
 .policy-sliders-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(190px, 1fr));
+  grid-template-columns: repeat(2, minmax(235px, 1fr));
   gap: 2px 14px;
+}
+
+/* simplex 資源比例：三滑桿總和 = 1，右端顯示百分比。 */
+.policy-bias-grid {
+  display: grid;
+  grid-template-columns: repeat(1, minmax(235px, 1fr));
+  gap: 2px 14px;
+}
+
+.policy-bias-note {
+  color: #67748a;
+  font-size: 10px;
+  margin-top: 2px;
 }
 
 .policy-tempo select {
@@ -365,9 +424,11 @@ body,
 }
 
 .policy-slider-label {
-  width: 74px;
+  width: 128px;
   flex: none;
   color: #9aa5b1;
+  font-size: 11px;
+  line-height: 1.25;
 }
 
 .policy-slider input[type='range'] {

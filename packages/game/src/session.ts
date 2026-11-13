@@ -213,6 +213,8 @@ export interface PolicySnapshot {
   readonly cooldownRemainingTicks: number
   /** 目前 AI 決策摘要：該玩家最後一條戰略日誌文字；尚無為 null。 */
   readonly summary: string | null
+  /** 當前世界 tick（Prompt 10 完整版）：節奏覆蓋預覽高亮「當前所處時間窗」用。 */
+  readonly tick: number
 }
 
 export interface GameSession {
@@ -803,6 +805,7 @@ export async function startGameSession(app: Application, scene: GameScene): Prom
           lastPolicyChange[playerId] + POLICY_COOLDOWN_TICKS - world.tick,
         ),
         summary,
+        tick: world.tick,
       }
     },
     applyPolicies: (
