@@ -608,6 +608,147 @@ body,
   border-color: #ff8080 !important;
 }
 
+/* ---- 戰前準備頁（Prompt 10.5 完整版：/pre-game，react-router）---- */
+.pre-game {
+  position: relative;
+  width: 100%;
+  min-height: 100vh;
+  box-sizing: border-box;
+  padding: 24px;
+  color: #dfe5ec;
+  background: #14171c;
+  font-family: 'Courier New', monospace;
+  overflow-y: auto;
+}
+
+.pre-game-title {
+  margin: 0 0 12px;
+  font-size: 20px;
+  color: #dfe5ec;
+}
+
+.pre-game-columns {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 20px;
+  align-items: flex-start;
+  margin-bottom: 16px;
+}
+
+.pre-game-section {
+  flex: none;
+  min-width: 300px;
+  padding: 12px 14px;
+  background: #1b2028;
+  border: 1px solid #4a5568;
+  box-sizing: border-box;
+}
+
+.pre-game-section h2 {
+  margin: 0 0 8px;
+  font-size: 14px;
+  color: #9aa5b1;
+}
+
+.pre-game-map,
+.pre-game-radar {
+  display: block;
+  image-rendering: pixelated;
+}
+
+.pre-game-note {
+  margin-top: 6px;
+  font-size: 10px;
+  color: #67748a;
+}
+
+.pre-game-loading {
+  color: #8d9aa8;
+  padding: 12px 0;
+}
+
+.pre-game-tempo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 12px;
+}
+
+.pre-game-tempo select {
+  flex: 1;
+  background: #232936;
+  color: #d5dbe2;
+  border: 1px solid #4a5568;
+  font-size: 12px;
+}
+
+.pre-game-sliders {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.pre-game-slider {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: #9aa5b1;
+}
+
+.pre-game-slider span {
+  width: 150px;
+  flex: none;
+  line-height: 1.25;
+}
+
+.pre-game-slider input[type='range'] {
+  flex: 1;
+  min-width: 80px;
+  accent-color: #6f8ecf;
+}
+
+.pre-game-slider output {
+  width: 36px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.pre-game-start {
+  width: 100%;
+  margin-top: 10px;
+  padding: 6px 10px;
+  font: inherit;
+  font-size: 13px;
+  color: #dfe5ec;
+  background: #232936;
+  border: 2px solid #6f8ecf;
+  cursor: pointer;
+}
+
+.pre-game-start:hover {
+  background: rgba(111, 142, 207, 0.2);
+}
+
+.pre-game-prediction {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  font-size: 12px;
+  line-height: 1.7;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.pre-game-prediction .decision-log-time {
+  display: inline-block;
+  width: 42px;
+  color: #8d9aa8;
+  font-variant-numeric: tabular-nums;
+}
+
 
 .hud-panel-title button {
   background: transparent;

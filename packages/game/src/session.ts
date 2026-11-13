@@ -35,6 +35,34 @@ import { getIncome } from './sim/economy.ts'
 /** 對局預設種子（CLI 對照用；瀏覽器對局每場隨機取種，見 `matchSeed`）。 */
 export const SEED = 42
 
+/**
+ * 戰前頁選定的初始政策（Prompt 10.5 完整版）：模組級 pending——
+ * `setInitialPolicies` 由戰前頁寫入，下一次 `startGameSession` 消費後清空。
+ * 未設定 → `DEFAULT_POLICIES`（與既有行為一致）。
+ */
+let pendingInitialPolicies: Partial<PolicyValues> | null = null
+
+export function setInitialPolicies(values: Partial<PolicyValues>): void {
+  pendingInitialPolicies = values
+}
+
+function consumeInitialPolicies(): PolicyValues {
+  const pending = pendingInitialPolicies
+  pendingInitialPolicies = null
+  return pending === null ? DEFAULT_POLICIES : resolvePolicies(pending)
+}
+
+/**
+ * 最近一次結束對局的 replay（Prompt 10.5 完整版路由傳遞）：`/post-game` 頁
+ * mount 時讀取；null = 沒有可復盤的對局（導回 /pre-game）。模組級——
+ * 不進 render state，頁面重新掛載（react-router 切換）也不丟。
+ */
+let lastReplay: ReplayRecord | null = null
+
+export function getLastReplay(): ReplayRecord | null {
+  return lastReplay
+}
+
 /** 本場對局的種子：每場隨機（同一場內確定性不變，種子記錄進 replay 可重播）。 */
 function matchSeed(): number {
   return Math.floor(Math.random() * 2 ** 31)
@@ -288,7 +316,8 @@ export async function startGameSession(app: Application, scene: GameScene): Prom
 
   const loop = new GameLoop(world)
   const policies: Record<PlayerId, PolicyValues> = {
-    player: DEFAULT_POLICIES,
+    // 戰前頁初始政策（Prompt 10.5 完整版）：戰前頁有設定 → 帶入；否則預設值。
+    player: consumeInitialPolicies(),
     enemy: DEFAULT_POLICIES,
   }
   const plans: Record<PlayerId, TacticalPlan | null> = { player: null, enemy: null }
@@ -454,6 +483,7 @@ export async function startGameSession(app: Application, scene: GameScene): Prom
       },
     }
     outcome = { result, replay: withArmor }
+    lastReplay = withArmor // 路由傳遞（Prompt 10.5 完整版）：/post-game 讀取。
     app.ticker.remove(onFrame) // 對局結束：不再推進（復盤頁不依賴即時 sim）
   }
 
