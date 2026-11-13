@@ -37,6 +37,53 @@ export interface ReplaySurrenderEvent {
   readonly timestamp?: number
 }
 
+/** 單位死亡事件（Prompt 10.5 完整版：戰鬥時間軸資料源；player = 受害方）。 */
+export interface ReplayDeathEvent {
+  readonly tick: number
+  readonly player: string
+  readonly defId: string
+  readonly tier: string
+  readonly role: string
+}
+
+/** tier 級存活數樣本（Prompt 10.5 完整版：單位數量堆疊圖資料源）。 */
+export interface ReplayTierSample {
+  readonly tick: number
+  readonly player: { readonly small: number; readonly medium: number; readonly large: number }
+  readonly enemy: { readonly small: number; readonly medium: number; readonly large: number }
+}
+
+/** 節奏預設切換事件（Prompt 10.5 完整版：節奏時間軸資料源）。 */
+export interface ReplayTempoEvent {
+  readonly tick: number
+  readonly from: string
+  readonly to: string
+}
+
+/** 戰略決策記錄（Prompt 10.5 完整版：決策歸因表資料源；每個實際執行的動作一筆）。 */
+export interface ReplayDecision {
+  readonly tick: number
+  readonly actor: string
+  readonly action: 'build' | 'train'
+  readonly target: string
+  /** 執行當下候選排序第一名的效用分（DecisionRecord.reason.candidates[0].score）。 */
+  readonly score: number
+  /** 動作資源成本（藍水晶；影響力排序主鍵）。 */
+  readonly cost: number
+  /** 一行中文解釋（explain.ts 模板）。 */
+  readonly explanation: string
+  /** 實際後果（Prompt 10.5 完整版）：此決策之後出生的同 target 現存量（session finalize 時算）。 */
+  readonly outcomeAlive?: number
+}
+
+/** 裝甲效益統計（Prompt 10.5 完整版；按受害方累計——單位受害者才計，建築無裝甲）。 */
+export interface ReplayArmorStats {
+  /** 受擊原始傷害總量（未套裝甲的帳面傷害）。 */
+  readonly takenRaw: { readonly player: number; readonly enemy: number }
+  /** 受擊實際傷害總量（套裝甲與 1 點地板後）。 */
+  readonly takenActual: { readonly player: number; readonly enemy: number }
+}
+
 export interface ReplayRecord {
   /** 對局種子（同一種子 + 同一滑桿序列 → 可逐 tick 重播）。 */
   readonly seed: number
@@ -59,6 +106,16 @@ export interface ReplayRecord {
   readonly emeraldSeries?: readonly ReplaySample[]
   readonly finalRuby?: { readonly player: number; readonly enemy: number }
   readonly finalEmerald?: { readonly player: number; readonly enemy: number }
+  /** 單位死亡事件（Prompt 10.5 完整版；舊檔缺欄 = undefined，UI 隱藏時間軸）。 */
+  readonly deathEvents?: readonly ReplayDeathEvent[]
+  /** tier 級存活數曲線（Prompt 10.5 完整版；舊檔缺欄 = undefined，UI 顯示 --）。 */
+  readonly tierCountSeries?: readonly ReplayTierSample[]
+  /** 節奏預設切換事件（Prompt 10.5 完整版；舊檔缺欄 = undefined）。 */
+  readonly tempoEvents?: readonly ReplayTempoEvent[]
+  /** 戰略決策記錄（Prompt 10.5 完整版；舊檔缺欄 = undefined，UI 隱藏歸因表）。 */
+  readonly decisions?: readonly ReplayDecision[]
+  /** 裝甲效益統計（Prompt 10.5 完整版；舊檔缺欄 = undefined，UI 顯示 --）。 */
+  readonly armorStats?: ReplayArmorStats
 }
 
 /** 取樣間隔：20 tick（1 秒）。 */
@@ -75,6 +132,10 @@ export class ReplayRecorder {
   private readonly policies: ReplayPolicyEvent[] = []
   private readonly ruby: ReplaySample[] = []
   private readonly emerald: ReplaySample[] = []
+  private readonly tierCounts: ReplayTierSample[] = []
+  private readonly deaths: ReplayDeathEvent[] = []
+  private readonly tempos: ReplayTempoEvent[] = []
+  private readonly decisions: ReplayDecision[] = []
   private surrender: ReplaySurrenderEvent | null = null
 
   /** 對局中取一個雙陣營樣本（三資源、存活單位數、戰力，同一時刻成對）。 */
@@ -104,6 +165,38 @@ export class ReplayRecorder {
     this.policies.push(event)
   }
 
+  /**
+   * 記錄一次 tier 級存活數樣本（Prompt 10.5 完整版）：與 `sample` 同 tick 成對呼叫——
+   * 主樣本被 MAX_SAMPLES 截斷時同步跳過，維持兩陣列等長。
+   */
+  sampleTiers(
+    tick: number,
+    player: { small: number; medium: number; large: number },
+    enemy: { small: number; medium: number; large: number },
+  ): void {
+    if (this.resource.length >= MAX_SAMPLES) return
+    this.tierCounts.push({
+      tick,
+      player: { ...player },
+      enemy: { ...enemy },
+    })
+  }
+
+  /** 批次記錄單位死亡事件（Prompt 10.5 完整版；session 每 tick 從 sim 環抽取）。 */
+  recordDeaths(events: readonly ReplayDeathEvent[]): void {
+    for (const event of events) this.deaths.push({ ...event })
+  }
+
+  /** 記錄節奏預設切換（Prompt 10.5 完整版；實際變更才記）。 */
+  recordTempo(event: ReplayTempoEvent): void {
+    this.tempos.push({ ...event })
+  }
+
+  /** 批次記錄戰略決策（Prompt 10.5 完整版；每個實際執行的動作一筆）。 */
+  recordDecisions(events: readonly ReplayDecision[]): void {
+    for (const event of events) this.decisions.push({ ...event })
+  }
+
   /** 記錄投降事件（Prompt 8.6 AI／Prompt 10.6 玩家手動；後投方不覆蓋先投方）。 */
   recordSurrender(event: ReplaySurrenderEvent): void {
     if (this.surrender === null) this.surrender = event
@@ -131,6 +224,11 @@ export class ReplayRecorder {
       emeraldSeries: [...this.emerald],
       finalRuby: { player: finalRuby.player, enemy: finalRuby.enemy },
       finalEmerald: { player: finalEmerald.player, enemy: finalEmerald.enemy },
+      // Prompt 10.5 完整版：空陣列省略（與舊檔同形——缺欄 = undefined）。
+      ...(this.tierCounts.length === 0 ? {} : { tierCountSeries: [...this.tierCounts] }),
+      ...(this.deaths.length === 0 ? {} : { deathEvents: [...this.deaths] }),
+      ...(this.tempos.length === 0 ? {} : { tempoEvents: [...this.tempos] }),
+      ...(this.decisions.length === 0 ? {} : { decisions: [...this.decisions] }),
       ...(this.surrender === null ? {} : { surrender: this.surrender }),
     }
   }
@@ -215,6 +313,153 @@ export function parseReplay(json: unknown): ReplayRecord {
         : requireSamples(raw.emeraldSeries, 'emeraldSeries'),
     // Prompt 8.6：投降事件可缺（舊 replay 檔）。
     surrender: raw.surrender === undefined ? undefined : requireSurrender(raw.surrender),
+    // Prompt 10.5 完整版：全部可缺（舊 replay 檔）。
+    deathEvents:
+      raw.deathEvents === undefined ? undefined : requireDeaths(raw.deathEvents),
+    tierCountSeries:
+      raw.tierCountSeries === undefined
+        ? undefined
+        : requireTierSamples(raw.tierCountSeries),
+    tempoEvents:
+      raw.tempoEvents === undefined ? undefined : requireTempoEvents(raw.tempoEvents),
+    decisions:
+      raw.decisions === undefined ? undefined : requireDecisions(raw.decisions),
+    armorStats: raw.armorStats === undefined ? undefined : requireArmorStats(raw.armorStats),
+  }
+}
+
+/** 死亡事件陣列驗證（可缺；型別壞擲錯）。 */
+function requireDeaths(value: unknown): ReplayDeathEvent[] {
+  if (!Array.isArray(value)) throw new Error('replay 欄位 deathEvents 必須是陣列')
+  return value.map((item, index) => {
+    if (typeof item !== 'object' || item === null) {
+      throw new Error(`replay 欄位 deathEvents[${index}] 必須是物件`)
+    }
+    const event = item as Record<string, unknown>
+    if (
+      event.player !== 'player' &&
+      event.player !== 'enemy'
+    ) {
+      throw new Error(`replay 欄位 deathEvents[${index}].player 必須是 player / enemy`)
+    }
+    if (typeof event.defId !== 'string' || typeof event.tier !== 'string' || typeof event.role !== 'string') {
+      throw new Error(`replay 欄位 deathEvents[${index}].defId/tier/role 必須是字串`)
+    }
+    return {
+      tick: requireFiniteNumber(event.tick, `deathEvents[${index}].tick`),
+      player: event.player,
+      defId: event.defId,
+      tier: event.tier,
+      role: event.role,
+    }
+  })
+}
+
+/** tier 級樣本陣列驗證（可缺；型別壞擲錯）。 */
+function requireTierSamples(value: unknown): ReplayTierSample[] {
+  if (!Array.isArray(value)) throw new Error('replay 欄位 tierCountSeries 必須是陣列')
+  return value.map((item, index) => {
+    if (typeof item !== 'object' || item === null) {
+      throw new Error(`replay 欄位 tierCountSeries[${index}] 必須是物件`)
+    }
+    const raw = item as Record<string, unknown>
+    return {
+      tick: requireFiniteNumber(raw.tick, `tierCountSeries[${index}].tick`),
+      player: requireTierCounts(raw.player, `tierCountSeries[${index}].player`),
+      enemy: requireTierCounts(raw.enemy, `tierCountSeries[${index}].enemy`),
+    }
+  })
+}
+
+function requireTierCounts(
+  value: unknown,
+  field: string,
+): { small: number; medium: number; large: number } {
+  if (typeof value !== 'object' || value === null) {
+    throw new Error(`replay 欄位 ${field} 必須是物件`)
+  }
+  const raw = value as Record<string, unknown>
+  return {
+    small: requireFiniteNumber(raw.small, `${field}.small`),
+    medium: requireFiniteNumber(raw.medium, `${field}.medium`),
+    large: requireFiniteNumber(raw.large, `${field}.large`),
+  }
+}
+
+/** 節奏切換事件陣列驗證（可缺；型別壞擲錯）。 */
+function requireTempoEvents(value: unknown): ReplayTempoEvent[] {
+  if (!Array.isArray(value)) throw new Error('replay 欄位 tempoEvents 必須是陣列')
+  return value.map((item, index) => {
+    if (typeof item !== 'object' || item === null) {
+      throw new Error(`replay 欄位 tempoEvents[${index}] 必須是物件`)
+    }
+    const event = item as Record<string, unknown>
+    if (typeof event.from !== 'string' || typeof event.to !== 'string') {
+      throw new Error(`replay 欄位 tempoEvents[${index}].from/to 必須是字串`)
+    }
+    return {
+      tick: requireFiniteNumber(event.tick, `tempoEvents[${index}].tick`),
+      from: event.from,
+      to: event.to,
+    }
+  })
+}
+
+/** 戰略決策陣列驗證（可缺；型別壞擲錯）。 */
+function requireDecisions(value: unknown): ReplayDecision[] {
+  if (!Array.isArray(value)) throw new Error('replay 欄位 decisions 必須是陣列')
+  return value.map((item, index) => {
+    if (typeof item !== 'object' || item === null) {
+      throw new Error(`replay 欄位 decisions[${index}] 必須是物件`)
+    }
+    const event = item as Record<string, unknown>
+    if (event.actor !== 'player' && event.actor !== 'enemy') {
+      throw new Error(`replay 欄位 decisions[${index}].actor 必須是 player / enemy`)
+    }
+    if (event.action !== 'build' && event.action !== 'train') {
+      throw new Error(`replay 欄位 decisions[${index}].action 必須是 build / train`)
+    }
+    if (typeof event.target !== 'string' || typeof event.explanation !== 'string') {
+      throw new Error(`replay 欄位 decisions[${index}].target/explanation 必須是字串`)
+    }
+    return {
+      tick: requireFiniteNumber(event.tick, `decisions[${index}].tick`),
+      actor: event.actor,
+      action: event.action,
+      target: event.target,
+      score: requireFiniteNumber(event.score, `decisions[${index}].score`),
+      cost: requireFiniteNumber(event.cost, `decisions[${index}].cost`),
+      explanation: event.explanation,
+      ...(event.outcomeAlive === undefined
+        ? {}
+        : { outcomeAlive: requireFiniteNumber(event.outcomeAlive, `decisions[${index}].outcomeAlive`) }),
+    }
+  })
+}
+
+/** 裝甲效益統計驗證（可缺；型別壞擲錯）。 */
+function requireArmorStats(value: unknown): ReplayArmorStats {
+  if (typeof value !== 'object' || value === null) {
+    throw new Error('replay 欄位 armorStats 必須是物件')
+  }
+  const raw = value as Record<string, unknown>
+  return {
+    takenRaw: requireSidePair(raw.takenRaw, 'armorStats.takenRaw'),
+    takenActual: requireSidePair(raw.takenActual, 'armorStats.takenActual'),
+  }
+}
+
+function requireSidePair(
+  value: unknown,
+  field: string,
+): { player: number; enemy: number } {
+  if (typeof value !== 'object' || value === null) {
+    throw new Error(`replay 欄位 ${field} 必須是物件`)
+  }
+  const raw = value as Record<string, unknown>
+  return {
+    player: requireFiniteNumber(raw.player, `${field}.player`),
+    enemy: requireFiniteNumber(raw.enemy, `${field}.enemy`),
   }
 }
 

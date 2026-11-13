@@ -279,4 +279,60 @@ describe('裝甲（Prompt 3.1：傷害 ×(1−armor)、最少 1 點；建築不�
     })
     expect(effectiveHp(def)).toBe(240)
   })
+
+  /* ---- Prompt 10.5 完整版：裝甲量測與死亡事件（純記錄，行為讀取點為零） ---- */
+
+  it('裝甲量測：單位受擊按受害方累計 raw/actual（mitigated = raw − actual）', () => {
+    const VICTIM = makeUnitDef({
+      id: 'vic',
+      stats: { hp: 1000, dmg: 1, range: 0.1, attackSpeed: 1.0, moveSpeed: 0.5, armor: 0.5 },
+    })
+    const world = createTestWorld({ units: [ATTACKER, VICTIM], seed: 11 })
+    putUnit(world, 'player', 'atk', { x: 4, y: 4 })
+    putUnit(world, 'enemy', 'vic', { x: 4, y: 5 })
+    expect(world.metrics.damageTakenRaw.enemy).toBe(0)
+    expect(world.metrics.damageTakenActual.enemy).toBe(0)
+
+    // 打到至少一輪：victim armor 0.5、dmg 10 → raw +10、actual +5。
+    stepUntil(world, 30, () => world.metrics.damageTakenRaw.enemy > 0)
+    expect(world.metrics.damageTakenRaw.enemy).toBe(10)
+    expect(world.metrics.damageTakenActual.enemy).toBe(5)
+    // 打擊方的計數器不動（按受害方累計）。
+    expect(world.metrics.damageTakenRaw.player).toBe(0)
+    expect(world.metrics.damageTakenActual.player).toBe(0)
+  })
+
+  it('死亡事件：陣亡單位進 recentDeaths（tick/受害方/defId/tier），未被抽取前保留', () => {
+    const TANK = makeUnitDef({
+      id: 'tank',
+      role: 'melee',
+      stats: { hp: 10, dmg: 0, range: 0.1, attackSpeed: 1.0, moveSpeed: 0.1, armor: 0 },
+    })
+    const KILLER = makeUnitDef({
+      id: 'killer',
+      role: 'ranged',
+      stats: { hp: 100, dmg: 10, range: 2.0, attackSpeed: 1.0, moveSpeed: 0.1 },
+    })
+    const world = createTestWorld({ units: [KILLER, TANK], seed: 3 })
+    putUnit(world, 'player', 'killer', { x: 4, y: 4 })
+    putUnit(world, 'enemy', 'tank', { x: 4, y: 5 })
+
+    stepUntil(world, 60, () => world.recentDeaths.length > 0)
+    expect(world.recentDeaths).toHaveLength(1)
+    const death = world.recentDeaths[0]
+    expect(death?.player).toBe('enemy')
+    expect(death?.defId).toBe('tank')
+    expect(death?.tick).toBeGreaterThan(0)
+    expect(world.units.some((unit) => unit.defId === 'tank')).toBe(false)
+  })
+
+  it('spawnTick 元數據：spawnUnit/addBuilding 記當前 tick（行為讀取點為零）', () => {
+    const world = createTestWorld({ units: [makeUnitDef({ id: 'u' })], buildings: [makeBuildingDef({ id: 'b' })] })
+    world.tick = 777
+    const unit = putUnit(world, 'player', 'u', { x: 2, y: 2 })
+    const found = world.units.find((candidate) => candidate.id === unit)
+    expect(found?.spawnTick).toBe(777)
+    const building = addBuilding(world, 'player', 'b', { x: 8, y: 8 }, { built: true, nodeId: null })
+    expect(building.spawnTick).toBe(777)
+  })
 })

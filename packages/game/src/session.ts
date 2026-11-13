@@ -362,6 +362,18 @@ export async function startGameSession(app: Application, scene: GameScene): Prom
   const crystalOf = (playerId: PlayerId): number => resourcesOf(playerId).blue_crystal
   const aliveUnitCount = (playerId: PlayerId): number =>
     world.units.filter((unit) => unit.player === playerId && unit.hp > 0).length
+  /** tier 級存活數（Prompt 10.5 完整版：堆疊圖資料源）。 */
+  const tierCountOf = (
+    playerId: PlayerId,
+  ): { small: number; medium: number; large: number } => {
+    const counts = { small: 0, medium: 0, large: 0 }
+    for (const unit of world.units) {
+      if (unit.player !== playerId || unit.hp <= 0) continue
+      const tier = world.defs.units[unit.defId]?.tier ?? 'small'
+      counts[tier] += 1
+    }
+    return counts
+  }
   const powerOf = (playerId: PlayerId): number =>
     world.units.reduce((total, unit) => {
       if (unit.player !== playerId || unit.hp <= 0) return total
@@ -384,6 +396,8 @@ export async function startGameSession(app: Application, scene: GameScene): Prom
     resourcesOf('player').green_emerald,
     resourcesOf('enemy').green_emerald,
   )
+  // tier 級開局樣本（Prompt 10.5 完整版）：與 tick 0 主樣本成對。
+  recorder.sampleTiers(0, tierCountOf('player'), tierCountOf('enemy'))
 
   // 對局結果（Prompt 10.5）：結束時填入；之前為 null。
   let outcome: { result: MatchResult; replay: ReplayRecord } | null = null
@@ -393,24 +407,60 @@ export async function startGameSession(app: Application, scene: GameScene): Prom
     const result = resolveMatchResult(world)
     const playerResources = resourcesOf('player')
     const enemyResources = resourcesOf('enemy')
-    outcome = {
+    const replay = recorder.finish(
+      seed,
       result,
-      replay: recorder.finish(
-        seed,
-        result,
-        { player: playerResources.blue_crystal, enemy: enemyResources.blue_crystal },
-        world.tick,
-        { player: playerResources.red_ruby, enemy: enemyResources.red_ruby },
-        { player: playerResources.green_emerald, enemy: enemyResources.green_emerald },
-      ),
+      { player: playerResources.blue_crystal, enemy: enemyResources.blue_crystal },
+      world.tick,
+      { player: playerResources.red_ruby, enemy: enemyResources.red_ruby },
+      { player: playerResources.green_emerald, enemy: enemyResources.green_emerald },
+    )
+    // 決策後果（Prompt 10.5 完整版）：此決策之後出生的同 target 現存量（元數據 spawnTick）。
+    const withOutcomes =
+      replay.decisions === undefined
+        ? replay
+        : {
+            ...replay,
+            decisions: replay.decisions.map((decision) => ({
+              ...decision,
+              outcomeAlive:
+                decision.action === 'train'
+                  ? world.units.filter(
+                      (unit) =>
+                        unit.player === decision.actor &&
+                        unit.defId === decision.target &&
+                        unit.spawnTick >= decision.tick,
+                    ).length
+                  : world.buildings.filter(
+                      (building) =>
+                        building.player === decision.actor &&
+                        building.defId === decision.target &&
+                        building.spawnTick >= decision.tick,
+                    ).length,
+            })),
+          }
+    // 裝甲效益（Prompt 10.5 完整版）：sim 純累加器 → replay（累計減傷 = raw − actual）。
+    const withArmor: ReplayRecord = {
+      ...withOutcomes,
+      armorStats: {
+        takenRaw: {
+          player: world.metrics.damageTakenRaw.player,
+          enemy: world.metrics.damageTakenRaw.enemy,
+        },
+        takenActual: {
+          player: world.metrics.damageTakenActual.player,
+          enemy: world.metrics.damageTakenActual.enemy,
+        },
+      },
     }
+    outcome = { result, replay: withArmor }
     app.ticker.remove(onFrame) // 對局結束：不再推進（復盤頁不依賴即時 sim）
   }
 
   let prev: WorldSnapshot = snapshotWorld(world)
   let curr: WorldSnapshot = prev
 
-  /** 戰略紀錄 → 日誌一行（動作＋一行中文原因）＋候選快照（Prompt 9.5 完整版）。 */
+  /** 戰略紀錄 → 日誌一行（動作＋一行中文原因）＋候選快照（Prompt 9.5 完整版）＋replay 決策歸因（Prompt 10.5 完整版）。 */
   const logDecisionRecords = (records: readonly DecisionRecord[]): void => {
     for (const record of records) {
       // 裝甲分檔：train 條目 target 即 defId；build 條目 target 為 `defId@(x,y)`
@@ -426,6 +476,25 @@ export async function startGameSession(app: Application, scene: GameScene): Prom
         topFactor: record.reason.topFactor,
         armorTier: unitDef === undefined ? 'none' : armorTierOf(unitDef.stats.armor),
       })
+      // 決策歸因（Prompt 10.5 完整版）：效用分＝候選第一名；成本＝藍水晶（影響力排序主鍵）。
+      const buildDef = record.action === 'build' ? world.defs.buildings[targetDefId] : undefined
+      const cost =
+        unitDef !== undefined
+          ? (unitDef.cost.blue_crystal ?? 0)
+          : buildDef !== undefined
+            ? (buildDef.cost.blue_crystal ?? 0)
+            : 0
+      recorder.recordDecisions([
+        {
+          tick: record.tick,
+          actor: record.actor,
+          action: record.action,
+          target: targetDefId,
+          score: record.reason.candidates[0]?.score ?? 0,
+          cost,
+          explanation: record.reason.explanation,
+        },
+      ])
     }
   }
 
@@ -603,6 +672,13 @@ export async function startGameSession(app: Application, scene: GameScene): Prom
         powerOf('player'),
         powerOf('enemy'),
       )
+      // tier 級存活數（Prompt 10.5 完整版）：與主樣本同 tick 成對（堆疊圖資料源）。
+      recorder.sampleTiers(w.tick, tierCountOf('player'), tierCountOf('enemy'))
+    }
+    // 死亡事件抽取（Prompt 10.5 完整版）：sim 事件環 → replay；抽取即清空。
+    if (w.recentDeaths.length > 0) {
+      recorder.recordDeaths(w.recentDeaths)
+      w.recentDeaths = []
     }
     prev = curr
     curr = snapshotWorld(w)
@@ -863,6 +939,8 @@ export async function startGameSession(app: Application, scene: GameScene): Prom
           actor: playerId,
           text: `節奏預設 → ${next.tempoPreset}（時段覆蓋生效，見戰略決策）`,
         })
+        // 節奏切換時間軸（Prompt 10.5 完整版）：獨立於 policyEvents（後者僅記數值鍵）。
+        recorder.recordTempo({ tick: world.tick, from: current.tempoPreset, to: next.tempoPreset })
       }
       if (changes.length === 0 && next.tempoPreset === current.tempoPreset) {
         return true // 無實際變更：不消耗冷卻、不記日誌

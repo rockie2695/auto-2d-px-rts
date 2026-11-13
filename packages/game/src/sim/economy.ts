@@ -213,6 +213,8 @@ export function spawnUnit(
     dest: null,
     // tick 0 = 對局開始視為未交戰（單位滿血出生，回血計時從此起算也無妨）。
     lastCombatTick: 0,
+    // 出生 tick（Prompt 10.5 完整版元數據：決策歸因後果欄；行為讀取點為零）。
+    spawnTick: world.tick,
   }
   world.nextUnitId += 1
   world.units.push(unit)
@@ -312,6 +314,8 @@ export function addBuilding(
     incomeAccMilli: 0,
     attackAcc: 0,
     targetId: null,
+    // 進場 tick（Prompt 10.5 完整版元數據；開局建築由 createWorld 在 tick 0 加 → 0）。
+    spawnTick: world.tick,
   }
   world.nextBuildingId += 1
   world.buildings.push(building)

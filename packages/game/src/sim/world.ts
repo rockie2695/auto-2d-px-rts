@@ -191,6 +191,11 @@ export function createWorld(content: ContentPack, seed: number): World {
     surrender: null,
     initialBuildingCount: { player: 0, enemy: 0 },
     despairBreachSince: { player: null, enemy: null },
+    metrics: {
+      damageTakenRaw: { player: 0, enemy: 0 },
+      damageTakenActual: { player: 0, enemy: 0 },
+    },
+    recentDeaths: [],
   }
 
   const spawnA = content.map.spawnPoints[0]

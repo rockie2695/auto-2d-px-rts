@@ -61,6 +61,9 @@ export interface Unit {
   dest: TilePos | null
   /** 最後一次出手或受傷的 tick（脫戰回血判定用；初始 −∞ 視為從未交戰）。 */
   lastCombatTick: number
+  /** 出生 tick（Prompt 10.5 完整版元數據：決策歸因「實際後果＝該決策後出生的現存量」）。
+   *  純記錄欄位——行為讀取點為零。 */
+  spawnTick: number
 }
 
 /** 生產佇列的工作。 */
@@ -100,6 +103,8 @@ export interface Building {
   attackAcc: number
   /** 防禦攻擊目標（敵方單位 id）；null = 無顯式目標（自動取射程內最近者）。 */
   targetId: number | null
+  /** 進場 tick（Prompt 10.5 完整版元數據：開局建築 = 0；行為讀取點為零）。 */
+  spawnTick: number
 }
 
 /** 單一資源的礦點（Prompt 5：節點帶資源類型）。 */
@@ -173,6 +178,27 @@ export interface SurrenderEvent {
   readonly incomeRatio: number
 }
 
+/** 單位死亡事件（Prompt 10.5 完整版：戰後復盤的戰鬥時間軸資料源；純記錄）。 */
+export interface CombatDeathEvent {
+  readonly tick: number
+  /** 受害方（陣亡單位所屬陣營）。 */
+  readonly player: PlayerId
+  readonly defId: string
+  readonly tier: string
+  readonly role: Role
+}
+
+/**
+ * 全程戰鬥量測（Prompt 10.5 完整版：裝甲效益量化；純累加器，行為讀取點為零）。
+ * 按受害方累計——單位受害者才計（建築無裝甲，SPEC §10）。
+ */
+export interface CombatMetrics {
+  /** 受擊原始傷害總量（未套裝甲的帳面傷害）。 */
+  damageTakenRaw: { player: number; enemy: number }
+  /** 受擊實際傷害總量（套裝甲與地板後）。 */
+  damageTakenActual: { player: number; enemy: number }
+}
+
 export interface World {
   tick: number
   /** 比賽種子：命運雜湊（hashFate）輸入之一，讓每場對局的抽籤真正隨種子改變。 */
@@ -201,6 +227,10 @@ export interface World {
    * `playerId → 起始 tick`；喪失持續性（回到閾下）即清除。
    */
   despairBreachSince: { player: number | null; enemy: number | null }
+  /** 全程戰鬥量測（Prompt 10.5 完整版；裝甲效益量化——見 CombatMetrics）。 */
+  metrics: CombatMetrics
+  /** 死亡事件環（Prompt 10.5 完整版；session 每 tick 抽取進 replay，cap 防爆——見 combat.ts）。 */
+  recentDeaths: CombatDeathEvent[]
 }
 
 /** 戰鬥目標：單位或建築。 */

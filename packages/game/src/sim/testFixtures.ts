@@ -264,6 +264,11 @@ export function createTestWorld(options: TestWorldOptions = {}): World {
     surrender: null,
     initialBuildingCount: { player: 0, enemy: 0 },
     despairBreachSince: { player: null, enemy: null },
+    metrics: {
+      damageTakenRaw: { player: 0, enemy: 0 },
+      damageTakenActual: { player: 0, enemy: 0 },
+    },
+    recentDeaths: [],
   }
   rebuildSpatialHash(world)
   return world

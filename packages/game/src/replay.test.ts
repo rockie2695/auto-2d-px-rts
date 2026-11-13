@@ -210,3 +210,96 @@ describe('parseReplay（replay 檔驗證）', () => {
     ).toThrow(/surrender\.timestamp/)
   })
 })
+
+describe('Prompt 10.5 完整版欄位（可缺；型別壞擲錯；recorder 往返）', () => {
+  it('recorder：sampleTiers/recordDeaths/recordTempo/recordDecisions → finish 帶出；空陣列省略', () => {
+    const recorder = new ReplayRecorder()
+    recorder.sample(0, 600, 600, 3, 3, 100, 100)
+    recorder.sampleTiers(0, { small: 2, medium: 1, large: 0 }, { small: 3, medium: 0, large: 0 })
+    recorder.recordDeaths([{ tick: 40, player: 'enemy', defId: 'archer', tier: 'small', role: 'ranged' }])
+    recorder.recordTempo({ tick: 100, from: 'standard', to: 'rush' })
+    recorder.recordDecisions([
+      { tick: 40, actor: 'player', action: 'train', target: 'archer', score: 1.8, cost: 50, explanation: '生 archer。理由：unitRange 偏遠程' },
+    ])
+    const record = recorder.finish(42, 'player', { player: 600, enemy: 600 }, 100)
+    expect(record.tierCountSeries).toEqual([
+      { tick: 0, player: { small: 2, medium: 1, large: 0 }, enemy: { small: 3, medium: 0, large: 0 } },
+    ])
+    expect(record.deathEvents).toEqual([
+      { tick: 40, player: 'enemy', defId: 'archer', tier: 'small', role: 'ranged' },
+    ])
+    expect(record.tempoEvents).toEqual([{ tick: 100, from: 'standard', to: 'rush' }])
+    expect(record.decisions?.[0]?.score).toBe(1.8)
+    expect(record.decisions?.[0]?.outcomeAlive).toBeUndefined() // finalize 前未填
+
+    // 空陣列省略：finish 後欄位 undefined（與舊檔同形）。
+    const empty = new ReplayRecorder().finish(42, 'draw', { player: 0, enemy: 0 }, 0)
+    expect(empty.deathEvents).toBeUndefined()
+    expect(empty.tierCountSeries).toBeUndefined()
+    expect(empty.tempoEvents).toBeUndefined()
+    expect(empty.decisions).toBeUndefined()
+    expect(empty.armorStats).toBeUndefined()
+  })
+
+  it('parseReplay：新欄位合法往返＋可缺＋壞型別擲錯', () => {
+    // 缺欄（舊檔）→ undefined。
+    const bare = parseReplay(FIXTURE)
+    expect(bare.deathEvents).toBeUndefined()
+    expect(bare.tierCountSeries).toBeUndefined()
+    expect(bare.tempoEvents).toBeUndefined()
+    expect(bare.decisions).toBeUndefined()
+    expect(bare.armorStats).toBeUndefined()
+
+    // 合法 → 原樣往返（含 outcomeAlive 可選）。
+    const full = parseReplay({
+      ...FIXTURE,
+      deathEvents: [{ tick: 40, player: 'enemy', defId: 'archer', tier: 'small', role: 'ranged' }],
+      tierCountSeries: [
+        { tick: 0, player: { small: 2, medium: 1, large: 0 }, enemy: { small: 3, medium: 0, large: 0 } },
+      ],
+      tempoEvents: [{ tick: 100, from: 'standard', to: 'rush' }],
+      decisions: [
+        {
+          tick: 40,
+          actor: 'player',
+          action: 'train',
+          target: 'archer',
+          score: 1.8,
+          cost: 50,
+          explanation: '生 archer',
+          outcomeAlive: 3,
+        },
+      ],
+      armorStats: { takenRaw: { player: 100, enemy: 60 }, takenActual: { player: 55, enemy: 60 } },
+    })
+    expect(full.deathEvents).toEqual([
+      { tick: 40, player: 'enemy', defId: 'archer', tier: 'small', role: 'ranged' },
+    ])
+    expect(full.tierCountSeries?.[0]?.player.small).toBe(2)
+    expect(full.tempoEvents).toEqual([{ tick: 100, from: 'standard', to: 'rush' }])
+    expect(full.decisions?.[0]?.outcomeAlive).toBe(3)
+    expect(full.armorStats?.takenRaw.player).toBe(100)
+
+    // 壞型別擲錯。
+    expect(() =>
+      parseReplay({ ...FIXTURE, deathEvents: [{ tick: 1, player: 'nobody', defId: 'u', tier: 'small', role: 'melee' }] }),
+    ).toThrow(/deathEvents\[0\]\.player/)
+    expect(() => parseReplay({ ...FIXTURE, deathEvents: 'nope' })).toThrow(/deathEvents/)
+    expect(() =>
+      parseReplay({ ...FIXTURE, tierCountSeries: [{ tick: 0, player: { small: 'x', medium: 0, large: 0 }, enemy: { small: 0, medium: 0, large: 0 } }] }),
+    ).toThrow(/tierCountSeries\[0\]\.player\.small/)
+    expect(() =>
+      parseReplay({ ...FIXTURE, tempoEvents: [{ tick: 1, from: 1, to: 'rush' }] }),
+    ).toThrow(/tempoEvents\[0\]\.from/)
+    expect(() =>
+      parseReplay({ ...FIXTURE, decisions: [{ tick: 1, actor: 'nobody', action: 'train', target: 'u', score: 1, cost: 1, explanation: 'x' }] }),
+    ).toThrow(/decisions\[0\]\.actor/)
+    expect(() =>
+      parseReplay({ ...FIXTURE, decisions: [{ tick: 1, actor: 'player', action: 'scout', target: 'u', score: 1, cost: 1, explanation: 'x' }] }),
+    ).toThrow(/decisions\[0\]\.action/)
+    expect(() =>
+      parseReplay({ ...FIXTURE, armorStats: { takenRaw: { player: 'x', enemy: 1 }, takenActual: { player: 1, enemy: 1 } } }),
+    ).toThrow(/armorStats\.takenRaw\.player/)
+    expect(() => parseReplay({ ...FIXTURE, armorStats: 'nope' })).toThrow(/armorStats/)
+  })
+})

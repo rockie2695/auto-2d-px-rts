@@ -537,6 +537,54 @@ describe('手動結束與 replay 產出（Prompt 10.5）', () => {
     session.stop()
   })
 
+  it('完整版欄位（Prompt 10.5）：戰後 replay 帶 armorStats／決策記錄（含後果）／tier 曲線', async () => {
+    const app = makeFakeApp()
+    const session: GameSession = await startGameSession(app as never, makeFakeScene() as never)
+    await app.onFrame(3000) // 推進 60 tick：戰略循環 ≥1 輪（tick 0＋40）
+
+    expect(session.applyPolicies('player', { tempoPreset: 'rush' })).toBe(true)
+    session.endMatch()
+    const outcome = session.getOutcome()
+    expect(outcome.ended).toBe(true)
+    if (outcome.replay === null) throw new Error('結束後 replay 不應為 null')
+    const replay = outcome.replay
+
+    // 裝甲效益：結構齊、raw ≥ actual（地板只會再多減）。
+    const armor = replay.armorStats
+    if (armor === undefined) throw new Error('armorStats 應存在')
+    expect(armor.takenRaw.player).toBeGreaterThanOrEqual(armor.takenActual.player)
+    expect(armor.takenRaw.enemy).toBeGreaterThanOrEqual(armor.takenActual.enemy)
+
+    // 決策記錄：開局即有戰略循環 → 至少一筆；欄位齊、後果已填（≥0）、行動與 target 一致。
+    const decisions = replay.decisions
+    if (decisions === undefined || decisions.length === 0) throw new Error('decisions 應存在')
+    for (const decision of decisions) {
+      expect(decision.action === 'build' || decision.action === 'train').toBe(true)
+      expect(decision.outcomeAlive).toBeGreaterThanOrEqual(0)
+      expect(decision.cost).toBeGreaterThanOrEqual(0)
+      expect(decision.explanation.length).toBeGreaterThan(0)
+    }
+    // 我方首筆 train 決策：開局後 60 tick 內生產未完成（trainTime 5s）→ 後果 0 是合理值；
+    // build 決策（若有）現存量 ≥ 1（開局建築）。
+    const playerBuild = decisions.find((d) => d.actor === 'player' && d.action === 'build')
+    if (playerBuild !== undefined) expect(playerBuild.outcomeAlive).toBeGreaterThanOrEqual(1)
+
+    // tier 曲線：與主樣本同長、開局我方 3 小型。
+    const tiers = replay.tierCountSeries
+    if (tiers === undefined) throw new Error('tierCountSeries 應存在')
+    expect(tiers.length).toBe(replay.resourceSeries.length)
+    expect(tiers[0]?.player).toEqual({ small: 3, medium: 0, large: 0 })
+    expect(tiers[0]?.enemy).toEqual({ small: 3, medium: 0, large: 0 })
+
+    // 節奏切換：tempo 只改 → tempoEvents 恰一筆、policyEvents 無數值鍵。
+    expect(replay.tempoEvents).toEqual([
+      { tick: expect.any(Number), from: 'standard', to: 'rush' },
+    ])
+    expect(replay.policyEvents).toEqual([])
+
+    session.stop()
+  })
+
   it('出廠集合格標記推入 render（Prompt 10.19：每間生產建築一個；集結點不再顯示）', async () => {
     const app = makeFakeApp()
     const scene = makeFakeScene()

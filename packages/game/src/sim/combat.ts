@@ -28,6 +28,9 @@ export function applyArmor(defender: Pick<UnitDef, 'stats'>, baseDamage: number)
   return Math.max(1, Math.round(baseDamage * (1 - defender.stats.armor)))
 }
 
+/** 死亡事件環容量（Prompt 10.5 完整版）：session 每 tick 抽取進 replay；溢出丟最舊。 */
+export const COMBAT_EVENT_CAP = 64
+
 /** 平方距離是否在射程內（含等於）。 */
 export function inRangeSquared(
   ax: number,
@@ -181,6 +184,22 @@ function removeDead(world: World): void {
     if (unit.hp <= 0) deadUnitIds.add(unit.id)
   }
   if (deadUnitIds.size > 0) {
+    // 死亡事件（Prompt 10.5 完整版）：戰後復盤戰鬥時間軸資料源。純記錄——
+    // 按 unit 陣列序遍歷，確定性與 sim 其餘部分一致；cap 溢出丟最舊（session 每 tick 抽取，常態觸不到）。
+    for (const unit of world.units) {
+      if (unit.hp > 0 || !deadUnitIds.has(unit.id)) continue
+      const def = world.defs.units[unit.defId]
+      world.recentDeaths.push({
+        tick: world.tick,
+        player: unit.player,
+        defId: unit.defId,
+        tier: def?.tier ?? 'small',
+        role: unit.role,
+      })
+    }
+    while (world.recentDeaths.length > COMBAT_EVENT_CAP) {
+      world.recentDeaths.shift()
+    }
     world.units = world.units.filter((unit) => !deadUnitIds.has(unit.id))
     for (const unit of world.units) {
       if (unit.targetId !== null && deadUnitIds.has(unit.targetId)) unit.targetId = null
@@ -289,7 +308,11 @@ export function stepCombat(world: World): void {
       // 裝甲（Prompt 3.1）：單位受害者套防禦方裝甲；建築受害者不套。
       const victimDef = world.defs.units[victim.defId]
       if (victimDef === undefined) throw new Error(`未知單位定義：${victim.defId}`)
-      victim.hp = Math.max(0, victim.hp - applyArmor(victimDef, attack.dmg))
+      const actual = applyArmor(victimDef, attack.dmg)
+      victim.hp = Math.max(0, victim.hp - actual)
+      // 裝甲量測（Prompt 10.5 完整版）：原始 vs 實際按受害方累計（純記錄，行為讀取點為零）。
+      world.metrics.damageTakenRaw[victim.player] += attack.dmg
+      world.metrics.damageTakenActual[victim.player] += actual
       // 受傷也是交戰（被打的單位同樣不回血）。
       victim.lastCombatTick = world.tick
     } else if (attack.targetBuildingId !== null) {
