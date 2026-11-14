@@ -364,6 +364,7 @@ describe('勝負判定（純函數）', () => {
       despairAtSurrender: 0.81,
       powerRatio: 0.3,
       incomeRatio: 0.4,
+      buildingCount: { player: 1, enemy: 1 },
     }
     world.tick = 2000 + 3 * TICK_RATE_HZ - 1
     expect(matchEnded(world)).toBe(false)
@@ -380,6 +381,7 @@ describe('勝負判定（純函數）', () => {
       despairAtSurrender: 0.9,
       powerRatio: 0.2,
       incomeRatio: 0.2,
+      buildingCount: { player: 1, enemy: 1 },
     }
     mirrored.tick = 100 + 3 * TICK_RATE_HZ
     expect(matchEnded(mirrored)).toBe(true)
@@ -582,6 +584,13 @@ describe('手動結束與 replay 產出（Prompt 10.5）', () => {
     ])
     expect(replay.policyEvents).toEqual([])
 
+    // 開局政策快照（Prompt 10.5c 反事實重放起點）：預設 0.5／standard。
+    const initial = replay.initialPolicies
+    if (initial === undefined) throw new Error('initialPolicies 應存在')
+    expect(initial.sliders.aggression).toBe(0.5)
+    expect(initial.sliders['resourceBias.blue']).toBe(0.5)
+    expect(initial.tempoPreset).toBe('standard')
+
     session.stop()
   })
 
@@ -689,6 +698,9 @@ describe('投降按鈕（Prompt 10.6：玩家手動投降）', () => {
     expect(surrender?.despairAtSurrender).toBe(0)
     expect(surrender?.powerRatio).toBeGreaterThan(0)
     expect(surrender?.incomeRatio).toBeGreaterThan(0)
+    // 建築數快照（Prompt 10.5c 局勢快照）：開局未損 → 雙方 ≥ 1。
+    expect(surrender?.buildingCount?.player).toBeGreaterThanOrEqual(1)
+    expect(surrender?.buildingCount?.enemy).toBeGreaterThanOrEqual(1)
 
     expect(app.ticker.remove).toHaveBeenCalled()
     session.stop()

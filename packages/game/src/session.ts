@@ -315,9 +315,11 @@ export async function startGameSession(app: Application, scene: GameScene): Prom
   scene.initialize(world)
 
   const loop = new GameLoop(world)
+  // 開局政策快照（Prompt 10.5c 反事實重放起點）：先取出再掛進 policies。
+  const playerInitialPolicies = consumeInitialPolicies()
   const policies: Record<PlayerId, PolicyValues> = {
     // 戰前頁初始政策（Prompt 10.5 完整版）：戰前頁有設定 → 帶入；否則預設值。
-    player: consumeInitialPolicies(),
+    player: playerInitialPolicies,
     enemy: DEFAULT_POLICIES,
   }
   const plans: Record<PlayerId, TacticalPlan | null> = { player: null, enemy: null }
@@ -371,6 +373,24 @@ export async function startGameSession(app: Application, scene: GameScene): Prom
 
   // 復盤紀錄（Prompt 10.5）：tick 0 起每 20 tick 取雙陣營樣本；政策變更即時記錄。
   const recorder = new ReplayRecorder()
+  // 開局政策快照（Prompt 10.5c 反事實重放起點）：與 policyEvents 合成完整時間線。
+  recorder.recordInitialPolicies({
+    sliders: {
+      econMilitary: playerInitialPolicies.econMilitary,
+      unitSize: playerInitialPolicies.unitSize,
+      unitRange: playerInitialPolicies.unitRange,
+      clusterSpread: playerInitialPolicies.clusterSpread,
+      aggression: playerInitialPolicies.aggression,
+      expansion: playerInitialPolicies.expansion,
+      techRush: playerInitialPolicies.techRush,
+      reserve: playerInitialPolicies.reserve,
+      retreatThreshold: playerInitialPolicies.retreatThreshold,
+      'resourceBias.blue': playerInitialPolicies.resourceBias.blue,
+      'resourceBias.red': playerInitialPolicies.resourceBias.red,
+      'resourceBias.green': playerInitialPolicies.resourceBias.green,
+    },
+    tempoPreset: playerInitialPolicies.tempoPreset,
+  })
 
   // 影響力粗格（Prompt 9.5 完整版）：以 tick 為鍵的緩存——同一 tick 內重複
   // 呼叫回同一物件；UI 500ms 熱力圖輪詢不重算，sim 決策亦不受影響（純觀測）。
@@ -507,6 +527,7 @@ export async function startGameSession(app: Application, scene: GameScene): Prom
         armorTier: unitDef === undefined ? 'none' : armorTierOf(unitDef.stats.armor),
       })
       // 決策歸因（Prompt 10.5 完整版）：效用分＝候選第一名；成本＝藍水晶（影響力排序主鍵）。
+      // 備選項（Prompt 10.5c「如果當時改成 X」）：效用前三名快照（僅候選 ≥ 2 時記）。
       const buildDef = record.action === 'build' ? world.defs.buildings[targetDefId] : undefined
       const cost =
         unitDef !== undefined
@@ -523,6 +544,13 @@ export async function startGameSession(app: Application, scene: GameScene): Prom
           score: record.reason.candidates[0]?.score ?? 0,
           cost,
           explanation: record.reason.explanation,
+          ...(record.reason.candidates.length > 1
+            ? {
+                alternatives: record.reason.candidates
+                  .slice(0, 3)
+                  .map((candidate) => ({ defId: candidate.defId, score: candidate.score })),
+              }
+            : {}),
         },
       ])
     }
@@ -659,6 +687,10 @@ export async function startGameSession(app: Application, scene: GameScene): Prom
               despairAtSurrender: event.despairAtSurrender,
               powerRatio: event.powerRatio,
               incomeRatio: event.incomeRatio,
+              buildingCount: {
+                player: event.buildingCount.player,
+                enemy: event.buildingCount.enemy,
+              },
             })
           }
         }
@@ -1023,6 +1055,10 @@ export async function startGameSession(app: Application, scene: GameScene): Prom
           powerRatio: event.powerRatio,
           incomeRatio: event.incomeRatio,
           timestamp: Date.now(),
+          buildingCount: {
+            player: event.buildingCount.player,
+            enemy: event.buildingCount.enemy,
+          },
         })
       }
       return true

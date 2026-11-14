@@ -64,6 +64,8 @@ describe('applySurrender（Prompt 10.6 共用定案）', () => {
     // 戰力比：雙方各 1 隻 soldier（同戰力）→ 1；收入比：我 2/tick vs 敵 1/tick → 2。
     expect(event.powerRatio).toBe(1)
     expect(event.incomeRatio).toBe(2)
+    // 建築數快照（Prompt 10.5c）：口徑同 initialBuildingCount（baseWorld 各 1 座 keep）。
+    expect(event.buildingCount).toEqual({ player: 1, enemy: 1 })
     // 即時停行動。
     expect(keep.queue).toEqual([])
     expect(soldier.path).toBeNull()

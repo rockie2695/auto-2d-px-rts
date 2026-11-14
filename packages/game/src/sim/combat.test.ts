@@ -183,7 +183,7 @@ describe('computeEngageLines（Prompt 9.5c：接戰線 = 實際攻擊計算）',
     const world = createTestWorld({ units: [RANGED], seed: 7 })
     const blueId = putUnit(world, 'player', 'r', { x: 5, y: 5 })
     putUnit(world, 'enemy', 'r', { x: 5, y: 7 })
-    world.surrender = { player: 'player', tick: world.tick, despairAtSurrender: 1, powerRatio: 0, incomeRatio: 0 }
+    world.surrender = { player: 'player', tick: world.tick, despairAtSurrender: 1, powerRatio: 0, incomeRatio: 0, buildingCount: { player: 0, enemy: 0 } }
     expect(computeEngageLines(world).units.get(blueId)).toBeUndefined()
   })
 })

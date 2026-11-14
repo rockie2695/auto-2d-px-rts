@@ -176,6 +176,8 @@ export interface SurrenderEvent {
   readonly powerRatio: number
   /** 投降當刻收入比（我方 / 敵方；投降方檢視）。 */
   readonly incomeRatio: number
+  /** 投降當刻雙方存活建築數（Prompt 10.5c 局勢快照；口徑同 initialBuildingCount）。 */
+  readonly buildingCount: { player: number; enemy: number }
 }
 
 /** 單位死亡事件（Prompt 10.5 完整版：戰後復盤的戰鬥時間軸資料源；純記錄）。 */

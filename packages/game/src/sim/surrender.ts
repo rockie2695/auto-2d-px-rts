@@ -50,12 +50,18 @@ export function applySurrender(
   const enemyPower = surrenderPowerOf(world, other)
   const myIncome = Math.max(0.01, surrenderIncomeOf(world, playerId))
   const enemyIncome = Math.max(0.01, surrenderIncomeOf(world, other))
+  // 建築數快照（Prompt 10.5c）：口徑同 initialBuildingCount（不濾 hp——與開局分母一致）。
+  const buildingCount = {
+    player: world.buildings.filter((building) => building.player === 'player').length,
+    enemy: world.buildings.filter((building) => building.player === 'enemy').length,
+  }
   world.surrender = {
     player: playerId,
     tick: world.tick,
     despairAtSurrender,
     powerRatio: myPower / Math.max(1, enemyPower),
     incomeRatio: myIncome / enemyIncome,
+    buildingCount,
   }
   // 停止一切行動：清生產隊列、斷單位移動與攻擊目標。
   for (const building of world.buildings) {

@@ -303,3 +303,105 @@ describe('Prompt 10.5 完整版欄位（可缺；型別壞擲錯；recorder 往�
     expect(() => parseReplay({ ...FIXTURE, armorStats: 'nope' })).toThrow(/armorStats/)
   })
 })
+
+describe('Prompt 10.5c 欄位（反事實／局勢快照資料層）', () => {
+  it('recorder：recordInitialPolicies → finish 帶出；未記錄則省略（舊檔同形）', () => {
+    const recorder = new ReplayRecorder()
+    recorder.recordInitialPolicies({
+      sliders: { aggression: 0.8, 'resourceBias.blue': 1 },
+      tempoPreset: 'rush',
+    })
+    const record = recorder.finish(42, 'player', { player: 600, enemy: 600 }, 100)
+    expect(record.initialPolicies).toEqual({
+      sliders: { aggression: 0.8, 'resourceBias.blue': 1 },
+      tempoPreset: 'rush',
+    })
+
+    // 未記錄 → 欄位省略（舊 replay 檔同形）。
+    const bare = new ReplayRecorder().finish(42, 'draw', { player: 0, enemy: 0 }, 0)
+    expect(bare.initialPolicies).toBeUndefined()
+  })
+
+  it('parseReplay：initialPolicies 合法往返＋可缺＋壞型別擲錯', () => {
+    // 缺欄（舊檔）→ undefined。
+    expect(parseReplay(FIXTURE).initialPolicies).toBeUndefined()
+
+    // 合法 → 原樣往返。
+    const snapshot = {
+      sliders: { aggression: 0.8, 'resourceBias.blue': 1, 'resourceBias.red': 0 },
+      tempoPreset: 'rush',
+    }
+    expect(parseReplay({ ...FIXTURE, initialPolicies: snapshot }).initialPolicies).toEqual(snapshot)
+
+    // 壞型別擲錯。
+    expect(() => parseReplay({ ...FIXTURE, initialPolicies: 'nope' })).toThrow(/initialPolicies/)
+    expect(() =>
+      parseReplay({ ...FIXTURE, initialPolicies: { sliders: 'nope', tempoPreset: 'rush' } }),
+    ).toThrow(/initialPolicies\.sliders/)
+    expect(() =>
+      parseReplay({
+        ...FIXTURE,
+        initialPolicies: { sliders: { aggression: 'high' }, tempoPreset: 'rush' },
+      }),
+    ).toThrow(/initialPolicies\.sliders\.aggression/)
+    expect(() =>
+      parseReplay({ ...FIXTURE, initialPolicies: { sliders: {}, tempoPreset: 3 } }),
+    ).toThrow(/initialPolicies\.tempoPreset/)
+  })
+
+  it('parseReplay：decisions.alternatives 合法往返＋可缺＋壞型別擲錯；surrender.buildingCount 同', () => {
+    // 合法 → 原樣往返。
+    const full = parseReplay({
+      ...FIXTURE,
+      decisions: [
+        {
+          tick: 40,
+          actor: 'player',
+          action: 'train',
+          target: 'archer',
+          score: 1.8,
+          cost: 50,
+          explanation: '生 archer',
+          alternatives: [
+            { defId: 'archer', score: 1.8 },
+            { defId: 'legionnaire', score: 1.2 },
+          ],
+        },
+      ],
+      surrender: {
+        tick: 2400,
+        player: 'enemy',
+        type: 'ai_surrender',
+        despairAtSurrender: 0.81,
+        powerRatio: 0.4,
+        incomeRatio: 0.5,
+        buildingCount: { player: 4, enemy: 2 },
+      },
+    })
+    expect(full.decisions?.[0]?.alternatives).toEqual([
+      { defId: 'archer', score: 1.8 },
+      { defId: 'legionnaire', score: 1.2 },
+    ])
+    expect(full.surrender?.buildingCount).toEqual({ player: 4, enemy: 2 })
+
+    // 缺欄（舊檔）→ undefined。
+    const bare = parseReplay({
+      ...FIXTURE,
+      decisions: [
+        { tick: 40, actor: 'player', action: 'train', target: 'archer', score: 1.8, cost: 50, explanation: 'x' },
+      ],
+    })
+    expect(bare.decisions?.[0]?.alternatives).toBeUndefined()
+
+    // 壞型別擲錯。
+    expect(() =>
+      parseReplay({ ...FIXTURE, decisions: [{ tick: 1, actor: 'player', action: 'train', target: 'u', score: 1, cost: 1, explanation: 'x', alternatives: 'nope' }] }),
+    ).toThrow(/decisions\[0\]\.alternatives/)
+    expect(() =>
+      parseReplay({ ...FIXTURE, decisions: [{ tick: 1, actor: 'player', action: 'train', target: 'u', score: 1, cost: 1, explanation: 'x', alternatives: [{ defId: 3, score: 1 }] }] }),
+    ).toThrow(/decisions\[0\]\.alternatives\[0\]\.defId/)
+    expect(() =>
+      parseReplay({ ...FIXTURE, surrender: { tick: 1, player: 'enemy', type: 'ai_surrender', despairAtSurrender: 0, powerRatio: 1, incomeRatio: 1, buildingCount: { player: 'x', enemy: 1 } } }),
+    ).toThrow(/surrender\.buildingCount\.player/)
+  })
+})

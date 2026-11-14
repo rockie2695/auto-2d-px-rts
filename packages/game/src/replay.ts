@@ -35,6 +35,8 @@ export interface ReplaySurrenderEvent {
   readonly incomeRatio: number
   /** 牆鐘時間戳 ms（Prompt 10.6 玩家投降；AI 投降/舊檔 undefined）。 */
   readonly timestamp?: number
+  /** 投降當刻雙方存活建築數（Prompt 10.5c 局勢快照；舊檔 undefined）。 */
+  readonly buildingCount?: { readonly player: number; readonly enemy: number }
 }
 
 /** 單位死亡事件（Prompt 10.5 完整版：戰鬥時間軸資料源；player = 受害方）。 */
@@ -74,6 +76,19 @@ export interface ReplayDecision {
   readonly explanation: string
   /** 實際後果（Prompt 10.5 完整版）：此決策之後出生的同 target 現存量（session finalize 時算）。 */
   readonly outcomeAlive?: number
+  /**
+   * 執行當刻效用前三名候選（Prompt 10.5c「如果當時改成 X」；[0] 即實際選擇，
+   * UI 取 [1] 起為備選項；僅候選 ≥ 2 時記錄，舊檔 undefined）。
+   */
+  readonly alternatives?: readonly { readonly defId: string; readonly score: number }[]
+}
+
+/** 開局政策快照（Prompt 10.5c 反事實重放的起點；與 policyEvents 合成完整時間線）。 */
+export interface ReplayInitialPolicies {
+  /** 滑桿扁平 map：鍵 = 數值滑桿 id 或 `resourceBias.blue|red|green`（與 policyEvents 同鍵）。 */
+  readonly sliders: Readonly<Record<string, number>>
+  /** 開局節奏預設。 */
+  readonly tempoPreset: string
 }
 
 /** 裝甲效益統計（Prompt 10.5 完整版；按受害方累計——單位受害者才計，建築無裝甲）。 */
@@ -116,6 +131,8 @@ export interface ReplayRecord {
   readonly decisions?: readonly ReplayDecision[]
   /** 裝甲效益統計（Prompt 10.5 完整版；舊檔缺欄 = undefined，UI 顯示 --）。 */
   readonly armorStats?: ReplayArmorStats
+  /** 開局政策快照（Prompt 10.5c 反事實重放；舊檔缺欄 = undefined，UI 隱藏反事實）。 */
+  readonly initialPolicies?: ReplayInitialPolicies
 }
 
 /** 取樣間隔：20 tick（1 秒）。 */
@@ -137,6 +154,7 @@ export class ReplayRecorder {
   private readonly tempos: ReplayTempoEvent[] = []
   private readonly decisions: ReplayDecision[] = []
   private surrender: ReplaySurrenderEvent | null = null
+  private initialPolicies: ReplayInitialPolicies | null = null
 
   /** 對局中取一個雙陣營樣本（三資源、存活單位數、戰力，同一時刻成對）。 */
   sample(
@@ -202,6 +220,16 @@ export class ReplayRecorder {
     if (this.surrender === null) this.surrender = event
   }
 
+  /** 記錄開局政策快照（Prompt 10.5c 反事實重放起點；session 開局時呼叫一次）。 */
+  recordInitialPolicies(snapshot: ReplayInitialPolicies): void {
+    if (this.initialPolicies === null) {
+      this.initialPolicies = {
+        sliders: { ...snapshot.sliders },
+        tempoPreset: snapshot.tempoPreset,
+      }
+    }
+  }
+
   /** 對局結束：組出不可變的完整紀錄（陣列複本，之後再動紀錄器不影響已產出者）。 */
   finish(
     seed: number,
@@ -230,6 +258,7 @@ export class ReplayRecorder {
       ...(this.tempos.length === 0 ? {} : { tempoEvents: [...this.tempos] }),
       ...(this.decisions.length === 0 ? {} : { decisions: [...this.decisions] }),
       ...(this.surrender === null ? {} : { surrender: this.surrender }),
+      ...(this.initialPolicies === null ? {} : { initialPolicies: this.initialPolicies }),
     }
   }
 }
@@ -325,6 +354,11 @@ export function parseReplay(json: unknown): ReplayRecord {
     decisions:
       raw.decisions === undefined ? undefined : requireDecisions(raw.decisions),
     armorStats: raw.armorStats === undefined ? undefined : requireArmorStats(raw.armorStats),
+    // Prompt 10.5c：開局政策快照可缺（舊 replay 檔）。
+    initialPolicies:
+      raw.initialPolicies === undefined
+        ? undefined
+        : requireInitialPolicies(raw.initialPolicies),
   }
 }
 
@@ -433,8 +467,56 @@ function requireDecisions(value: unknown): ReplayDecision[] {
       ...(event.outcomeAlive === undefined
         ? {}
         : { outcomeAlive: requireFiniteNumber(event.outcomeAlive, `decisions[${index}].outcomeAlive`) }),
+      ...(event.alternatives === undefined
+        ? {}
+        : {
+            alternatives: requireCandidates(
+              event.alternatives,
+              `decisions[${index}].alternatives`,
+            ),
+          }),
     }
   })
+}
+
+/** 候選陣列驗證（Prompt 10.5c 決策備選項；可缺）。 */
+function requireCandidates(
+  value: unknown,
+  field: string,
+): Array<{ defId: string; score: number }> {
+  if (!Array.isArray(value)) throw new Error(`replay 欄位 ${field} 必須是陣列`)
+  return value.map((item, index) => {
+    if (typeof item !== 'object' || item === null) {
+      throw new Error(`replay 欄位 ${field}[${index}] 必須是物件`)
+    }
+    const candidate = item as Record<string, unknown>
+    if (typeof candidate.defId !== 'string') {
+      throw new Error(`replay 欄位 ${field}[${index}].defId 必須是字串`)
+    }
+    return {
+      defId: candidate.defId,
+      score: requireFiniteNumber(candidate.score, `${field}[${index}].score`),
+    }
+  })
+}
+
+/** 開局政策快照驗證（可缺；型別壞擲錯）。 */
+function requireInitialPolicies(value: unknown): ReplayInitialPolicies {
+  if (typeof value !== 'object' || value === null) {
+    throw new Error('replay 欄位 initialPolicies 必須是物件')
+  }
+  const raw = value as Record<string, unknown>
+  if (raw.sliders === null || typeof raw.sliders !== 'object') {
+    throw new Error('replay 欄位 initialPolicies.sliders 必須是物件')
+  }
+  const sliders: Record<string, number> = {}
+  for (const [key, sliderValue] of Object.entries(raw.sliders as Record<string, unknown>)) {
+    sliders[key] = requireFiniteNumber(sliderValue, `initialPolicies.sliders.${key}`)
+  }
+  if (typeof raw.tempoPreset !== 'string') {
+    throw new Error('replay 欄位 initialPolicies.tempoPreset 必須是字串')
+  }
+  return { sliders, tempoPreset: raw.tempoPreset }
 }
 
 /** 裝甲效益統計驗證（可缺；型別壞擲錯）。 */
@@ -485,5 +567,10 @@ function requireSurrender(value: unknown): ReplaySurrenderEvent {
     ...(raw.timestamp === undefined
       ? {}
       : { timestamp: requireFiniteNumber(raw.timestamp, 'surrender.timestamp') }),
+    ...(raw.buildingCount === undefined
+      ? {}
+      : {
+          buildingCount: requireSidePair(raw.buildingCount, 'surrender.buildingCount'),
+        }),
   }
 }

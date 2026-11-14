@@ -332,6 +332,7 @@ describe('投降行為閘門（sim 層 Prompt 8.6）', () => {
       despairAtSurrender: 0.9,
       powerRatio: 0,
       incomeRatio: 0,
+      buildingCount: { player: 1, enemy: 1 },
     }
     return world
   }
