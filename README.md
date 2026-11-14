@@ -760,3 +760,39 @@ JSON 結構會按最終 schema 設計，方便日後遷移到 DB。
   不重跑**（metrics/spawnTick/事件環為純記錄，零 sim/AI 行為改動）；
   Vite 轉譯冒煙 7 模組 200。SPEC §12.3 重寫＋新增 §12.4（戰前頁）＋
   §15 修 uPlot 陳舊清單；README 本條目記錄。
+
+- [x] 階段三 Prompt 10.5c — 投降後復盤特殊處理（四輪提交：
+  `4ad8446` 資料層／`5fd5456` 反事實引擎／`7fc10c7` 三視圖 UI／本條目文檔）：
+  1. **資料層（Phase A）**：四個可缺欄位（舊 replay 檔缺欄 = undefined）——
+     `SurrenderEvent.buildingCount`（投降當刻雙方存活建築數，`applySurrender`
+     現算、口徑同 `initialBuildingCount`）／`decisions[].alternatives`
+     （效用前三名候選，僅候選 ≥ 2 時記）／`ReplayRecord.initialPolicies`
+     （開局政策快照：滑桿扁平 map＋tempoPreset，session 開局記錄一次）／
+     parse 全套（可缺、往返、壞型別擲錯）。
+  2. **反事實引擎（Phase B）**：新 `ai/counterfactual.ts`——
+     `buildPolicyTimeline`（初始快照＋政策/節奏事件 → 任意 tick 政策時間線）＋
+     `replayMatch`（**headless 確定性重放**：同 seed 從 tick 0、三層 AI 全開、
+     與 session/CLI 同組合語義；可選 `overrideTick` 起換滑桿、`maxTicks` 以
+     `durationTicks` 封頂）＋`suggestCounterfactuals`（3 快照點 × 3 維度
+     ±0.25、撞邊界翻轉）。**核心驗收：session 跑一場 → replay 自帶資料
+     重建時間線 → 無覆寫重放 → result 與原局一致**（10 測試）。
+  3. **三視圖 UI（Phase C）**：`ui/postGameView.ts` 純邏輯＋PostGamePanel
+     重寫——「你投降了」（紅系：局勢快照＋建築數＋投降前 30 秒戰力小圖＋
+     「為什麼會輸」＝前 5 個勢均力敵的「如果當時改成 X」時刻＋三按鈕）／
+     「對手投降了」（綠系：勝利快照＋Policy 為什麼贏＋下次挑戰提示）／
+     正常結束原文案；**白旗 ⚑**（政策/戰鬥時間軸 marker＋hover 詳情、
+     旗後灰化；canvas 曲線投降後灰化＋白豎線）；**反事實區塊**＝3×3 真
+     重放按快照點分批（setTimeout 呼吸、可取消），顯示「重放：轉勝/仍敗/
+     平手（時長）」＋每條「以此參數重玩」→ `replayPoliciesOf`（快照時刻
+     政策＋覆寫）→ `setInitialPolicies` 開新局（**從 tick 0 重玩，非中途
+     接管**）；舊檔缺快照／內容包載入失敗 → 對應降級提示。文案中性
+     分析性（不羞辱、不假裝鼓勵）。
+  4. **投降局統計處理（誠實降級）**：無玩家檔案系統——投降局不進平衡
+     統計（本就不含 UI 局；CLI tally 不觸發投降），SPEC 注記即處理方式。
+  **驗證**——542/542 測試全過（+30：10.5c 資料層往返、反事實引擎 10、
+  panels +8（含真內容包反事實端到端：3 快照點 × 3 維度短局重放全跑完＋
+  重玩按鈕接線）、postGameView 9）；tsc×2＋oxlint 0 警告；
+  **tally/公平門不重跑**（Phase A buildingCount/alternatives/initialPolicies
+  皆為純記錄元數據、Phase B/C 零 sim/AI 行為改動；鏡像探針不受影響）。
+  SPEC §12.3 補 10.5c 欄位/三視圖/反事實實裝/統計注記＋§12.4 補重玩入徑；
+  README 本條目記錄。

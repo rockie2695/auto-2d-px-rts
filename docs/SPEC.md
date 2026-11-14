@@ -1123,6 +1123,14 @@ JSON 檔即完整輸入）。路由（Prompt 10.5 完整版）：**react-router-
     finalize 按 `Unit.spawnTick`／`Building.spawnTick` 元數據計））；
   - `armorStats`：裝甲量測（按受害方累計的原始/實際傷害——sim `World.metrics`
     純累加器，單位受擊點記錄；建築無裝甲不計）。
+  **Prompt 10.5c 新增（全部可缺——舊檔缺欄 = undefined，UI 降級顯示）**：
+  - `surrender.buildingCount`：投降當刻雙方存活建築數（`applySurrender` 現算，
+    口徑同 `initialBuildingCount`——不濾 hp，與開局分母一致）；
+  - `decisions[].alternatives`：執行當刻效用**前三名**候選（[0] 即實際選擇；
+    僅候選 ≥ 2 時記錄——「如果當時改成 X」的素材）；
+  - `initialPolicies`：開局政策快照（`sliders` 扁平 map 與 `policyEvents`
+    同鍵、含 `resourceBias.blue|red|green`＋`tempoPreset`）——反事實時間線
+    重建的起點；session 開局記錄一次，未記錄 = 舊檔，反事實不可用。
   `parseReplay` 負責 replay 檔（JSON）驗證——MVP 以記憶體物件傳遞，
   測試以 JSON fixture 模擬檔案，日後要存檔／分享再擴充。
 - **復盤頁內容**：勝負結果（勝利綠／戰敗紅／平手黃）、對局時長、雙方最終資源、
@@ -1137,7 +1145,35 @@ JSON 檔即完整輸入）。路由（Prompt 10.5 完整版）：**react-router-
   當時分數／實際後果／一行解釋）、**裝甲效益區塊**（我方累計減傷、若無裝甲
   傷亡會增加 %、敵方原始 vs 減傷後傷害；「平均裝甲等級」欄待單位構成快照——
   延後）、「再來一場」回 `/pre-game`。
-- **反事實建議**：佔位區塊（**待 Prompt 10.5b**——仍延後）。
+- **反事實建議（Prompt 10.5c 實裝）**：**headless 確定性重放**——不是規則推演。
+  `ai/counterfactual.ts`：
+  - `buildPolicyTimeline`：`initialPolicies` 為底、按 tick 疊加 `policyEvents`／
+    `tempoEvents` → 任意時刻的我方政策（與正式對局同語義）；
+  - `replayMatch`：同 seed 從 tick 0 重放整場（三層 AI 全開、與 session／CLI
+    同一組合語義），可選自 `overrideTick` 起換一組我方滑桿；
+    `maxTicks` 以 `durationTicks` 封頂（成本有界，實測整場 12000 tick ≈ 0.9s）；
+  - 建議＝3 快照點（投降局用投降 tick 的 1/3、2/3、整點；正常局用全場
+    三等分）× 3 維度（aggression 更積極／econMilitary 更偏軍事／
+    retreatThreshold 更死戰，各 ±0.25、撞邊界翻轉）＝9 場重放；
+    UI 按快照點分批（setTimeout 呼吸）顯示「重放：轉勝／仍敗／平手（時長）」；
+  - 「以此參數重玩」＝從 tick 0、同規則、**快照時刻政策＋覆寫**開新局
+    （`setInitialPolicies` ＋開新局；非中途接管——中途注入需 session 快照，
+    暫不做）。不顯示百分比勝率（單場重放無統計意義）；
+  - 缺 `initialPolicies`（舊檔）或內容包載入失敗 → 對應降級提示。
+- **三視圖（Prompt 10.5c）**：依投降方分派結束視圖（文案中性分析性、
+  不羞辱、不假裝鼓勵）——
+  - 「你投降了」（玩家投降，紅系）：局勢快照（投降 tick／戰力比／收入比／
+    建築數＋投降前 30 秒戰力小圖）→「為什麼會輸」（投降前決策歸因＋前 5 個
+    勢均力敵的「如果當時改成 X」時刻＝alternatives 第二候選＋分差排序）→
+    反事實建議 → 三按鈕（用建議參數重玩／調整 Policy 重玩／回主選單）；
+  - 「對手投降了」（AI 投降，綠系）：勝利快照＋「你的 Policy 為什麼贏」
+    佐證＋下次挑戰提示；
+  - 正常結束維持原文案；反事實建議同樣可用。
+  **投降標記**：政策／戰鬥時間軸加白旗 ⚑（hover 詳情含 buildingCount）、
+  旗後 marker／明細灰化；canvas 曲線投降後灰化＋白豎線。
+- **投降局的統計處理（誠實降級）**：無玩家檔案系統——投降局不進任何
+  平衡統計（本就不含 UI 局；CLI 24-seed tally 不觸發投降），此注記即
+  處理方式；日後有玩家檔案再擴充。
   （Prompt 8.6 補 AI 投降橫幅：`surrender` 欄位有值時顯示投降方、時鐘與
   絕望／戰力比／收入比——見 §11 第 4 條；Prompt 10.6 補玩家手動投降：
   `type = 'player_surrender'` 顯示「玩家投降（手動）」、省略絕望值、
@@ -1164,6 +1200,8 @@ JSON 檔即完整輸入）。路由（Prompt 10.5 完整版）：**react-router-
 - **Policy 預設滑桿＋節奏下拉**：9 滑桿＋tempo 寫入**初始政策**
   （`session.setInitialPolicies` 模組級 pending，下一次 `startGameSession`
   消費後清空；未設定 = `DEFAULT_POLICIES`）；「開始對戰」→ `/game`。
+  Prompt 10.5c：復盤頁「用建議參數重玩」也走同一入徑——寫入快照時刻
+  政策＋單一維度覆寫後直接開新局（見 §12.3 反事實建議）。
 
 ---
 
