@@ -882,6 +882,92 @@ body,
   background: #303845;
 }
 
+/* ---- Prompt 10.5c：三視圖副標題／投降旗幟／局勢快照／反事實區塊 ---- */
+.post-game-subtitle {
+  margin: -6px 0 12px;
+  font-size: 12px;
+  color: #9aa5b1;
+}
+
+/* 投降橫幅（⚑ 詳情 hover）。 */
+.post-game-surrender {
+  display: inline-block;
+  margin-bottom: 16px;
+  padding: 4px 10px;
+  font-size: 12px;
+  color: #f5f7fa;
+  background: #2a2f38;
+  border: 1px solid #5a6472;
+  cursor: help;
+}
+
+/* 時間軸白旗（投降 tick）。 */
+.post-game-surrender-flag {
+  font-size: 13px;
+  line-height: 22px;
+  text-shadow: 0 0 3px #1c1c1c;
+  z-index: 1;
+}
+
+/* 旗後（投降後）時間軸明細灰化。 */
+.post-surrender-muted {
+  color: #5a6472;
+}
+
+/* 局勢快照區塊：紅系（你投降了）／綠系（對手投降了）。 */
+.post-snapshot-bad,
+.post-snapshot-good {
+  padding: 8px 12px;
+  border: 1px solid #4a5568;
+}
+
+.post-snapshot-bad {
+  border-left: 3px solid #ff7a7a;
+}
+
+.post-snapshot-good {
+  border-left: 3px solid #7ce38b;
+}
+
+/* 反事實區塊：快照點卡片與重放按鈕。 */
+.post-cf-point {
+  margin-bottom: 12px;
+  padding: 8px 12px;
+  background: #262c35;
+  border: 1px solid #4a5568;
+}
+
+.post-cf-point-title {
+  margin-bottom: 4px;
+  font-size: 12px;
+  color: #ffd866;
+}
+
+.post-cf-replay {
+  padding: 2px 10px;
+  font: inherit;
+  font-size: 11px;
+  color: #dfe5ec;
+  background: #303845;
+  border: 1px solid #6f8ecf;
+  cursor: pointer;
+}
+
+.post-cf-replay:hover {
+  background: #3d4a63;
+}
+
+.post-cf-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.post-cf-actions button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
 /* ---- Prompt 9.5 完整版：uPlot 資源曲線／戰力堆疊條／日誌展開／小隊色點／疊加開關 ---- */
 
 /* 左上 uPlot：與手繪 canvas 同尺寸，nearest 縮放保像素。 */

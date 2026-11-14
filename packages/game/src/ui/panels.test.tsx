@@ -5,6 +5,7 @@
 import { StrictMode, act } from 'react'
 import type { ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
+import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // uPlot 在模組初始化時就碰 `matchMedia`（jsdom 沒有）——測試環境整體 mock：
@@ -40,6 +41,8 @@ import { SquadPanel } from './SquadPanel.tsx'
 import { SurrenderButton } from './SurrenderButton.tsx'
 import type { DecisionLogEntry, PolicySnapshot, SquadInfo } from '../session.ts'
 import type { ReplayDecision, ReplayRecord } from '../replay.ts'
+import { loadContentPackFromDir } from '../data/loadFromDir.ts'
+import type { ContentPack } from '@auto-2d-px-rts/shared'
 
 /**
  * 四角 HUD 展示面板測試（Prompt 9.5 驗收）：
@@ -1021,9 +1024,82 @@ const replayFixture: ReplayRecord = {
   },
 }
 
+/* ---------- Prompt 10.5c：三視圖／反事實 ---------- */
+
+/** 「用建議參數重玩」的捕獲（每次 render 前清空）。 */
+let replayWithCalls: PolicyValues[] = []
+const replayWith = (values: PolicyValues): void => {
+  replayWithCalls.push(values)
+}
+
+/** 既有測試統一掛載：content=null（不觸發 fetch）＋必填 onReplayWithPolicies。 */
+function renderPostGame(replay: ReplayRecord, props: Record<string, unknown> = {}): HTMLElement {
+  replayWithCalls = []
+  return render(
+    <PostGamePanel
+      replay={replay}
+      onRestart={() => {}}
+      onReplayWithPolicies={replayWith}
+      content={null}
+      {...props}
+    />,
+  )
+}
+
+/**
+ * 投降局短 fixture（Prompt 10.5c 反事實測試）：時長短（投降 tick 240）→
+ * 9 場重放每場 ≤ 240 tick，真 content 計算 < 1s。
+ */
+const surrenderFixture: ReplayRecord = {
+  seed: 42,
+  result: 'enemy',
+  durationTicks: 300, // 投降 240 + 60 寬限
+  finalCrystal: { player: 120, enemy: 640 },
+  resourceSeries: [
+    { tick: 0, player: 600, enemy: 600 },
+    { tick: 240, player: 620, enemy: 640 },
+  ],
+  unitCountSeries: [
+    { tick: 0, player: 3, enemy: 3 },
+    { tick: 240, player: 2, enemy: 5 },
+  ],
+  powerSeries: [
+    { tick: 0, player: 4320, enemy: 4320 },
+    { tick: 120, player: 3000, enemy: 6100 },
+    { tick: 240, player: 1900, enemy: 7400 },
+  ],
+  policyEvents: [{ tick: 100, key: 'aggression', from: 0.5, to: 0.8 }],
+  surrender: {
+    tick: 240,
+    player: 'player',
+    type: 'player_surrender',
+    despairAtSurrender: 0,
+    powerRatio: 0.26,
+    incomeRatio: 0.4,
+    buildingCount: { player: 4, enemy: 5 },
+  },
+  initialPolicies: {
+    sliders: {
+      econMilitary: 0.5,
+      unitSize: 0.5,
+      unitRange: 0.5,
+      clusterSpread: 0.5,
+      aggression: 0.5,
+      expansion: 0.5,
+      techRush: 0.5,
+      reserve: 0.5,
+      retreatThreshold: 0.5,
+      'resourceBias.blue': 0.5,
+      'resourceBias.red': 0.5,
+      'resourceBias.green': 0.5,
+    },
+    tempoPreset: 'standard',
+  },
+}
+
 describe('PostGamePanel（/post-game，Prompt 10.5）', () => {
   it('讀 replay：勝負＋時長＋最終資源＋圖表（三資源走 uPlot、單位/戰力 canvas、tier 堆疊）', () => {
-    const container = render(<PostGamePanel replay={replayFixture} onRestart={() => {}} />)
+    const container = renderPostGame(replayFixture)
     const result = container.querySelector('[data-testid="post-game-result"]')
     expect(result?.textContent).toBe('勝利')
     expect((result as HTMLElement).style.color).toBe('rgb(124, 227, 139)')
@@ -1041,7 +1117,7 @@ describe('PostGamePanel（/post-game，Prompt 10.5）', () => {
   })
 
   it('Policy 時間軸：標記數與明細（tick → 時鐘、key from→to）', () => {
-    const container = render(<PostGamePanel replay={replayFixture} onRestart={() => {}} />)
+    const container = renderPostGame(replayFixture)
     const timeline = container.querySelector('[data-testid="policy-timeline"]')
     expect(timeline).not.toBeNull()
     expect(timeline?.querySelectorAll('.policy-timeline-marker').length).toBe(2)
@@ -1054,11 +1130,9 @@ describe('PostGamePanel（/post-game，Prompt 10.5）', () => {
 
   it('平手顯示黃色、無政策變更走空狀態、「再來一場」觸發 onRestart', () => {
     const restarts: number[] = []
-    const container = render(
-      <PostGamePanel
-        replay={{ ...replayFixture, result: 'draw', policyEvents: [] }}
-        onRestart={() => restarts.push(1)}
-      />,
+    const container = renderPostGame(
+      { ...replayFixture, result: 'draw', policyEvents: [] },
+      { onRestart: () => restarts.push(1) },
     )
     const result = container.querySelector('[data-testid="post-game-result"]') as HTMLElement
     expect(result.textContent).toBe('平手')
@@ -1074,31 +1148,24 @@ describe('PostGamePanel（/post-game，Prompt 10.5）', () => {
   })
 
   it('戰敗顯示紅色', () => {
-    const container = render(
-      <PostGamePanel replay={{ ...replayFixture, result: 'enemy' }} onRestart={() => {}} />,
-    )
+    const container = renderPostGame({ ...replayFixture, result: 'enemy' })
     const result = container.querySelector('[data-testid="post-game-result"]') as HTMLElement
     expect(result.textContent).toBe('戰敗')
     expect(result.style.color).toBe('rgb(255, 122, 122)')
   })
 
   it('投降橫幅（Prompt 8.6）：投降方＋絕望值＋時鐘；無投降不渲染', () => {
-    const withSurrender = render(
-      <PostGamePanel
-        replay={{
-          ...replayFixture,
-          surrender: {
-            tick: 2400,
-            player: 'enemy',
-            type: 'ai_surrender',
-            despairAtSurrender: 0.81,
-            powerRatio: 0.42,
-            incomeRatio: 0.35,
-          },
-        }}
-        onRestart={() => {}}
-      />,
-    )
+    const withSurrender = renderPostGame({
+      ...replayFixture,
+      surrender: {
+        tick: 2400,
+        player: 'enemy',
+        type: 'ai_surrender',
+        despairAtSurrender: 0.81,
+        powerRatio: 0.42,
+        incomeRatio: 0.35,
+      },
+    })
     const banner = withSurrender.querySelector('[data-testid="post-game-surrender"]')
     expect(banner).not.toBeNull()
     expect(banner?.textContent).toContain('2:00') // tick 2400
@@ -1106,28 +1173,23 @@ describe('PostGamePanel（/post-game，Prompt 10.5）', () => {
     expect(banner?.textContent).toContain('0.81')
 
     // 舊 replay（無投降欄）→ 不渲染橫幅。
-    const without = render(<PostGamePanel replay={replayFixture} onRestart={() => {}} />)
+    const without = renderPostGame(replayFixture)
     expect(without.querySelector('[data-testid="post-game-surrender"]')).toBeNull()
   })
 
   it('投降橫幅（Prompt 10.6 玩家手動）：「玩家投降（手動）」＋省略絕望值＋保留戰力／收入比', () => {
-    const container = render(
-      <PostGamePanel
-        replay={{
-          ...replayFixture,
-          surrender: {
-            tick: 1500,
-            player: 'player',
-            type: 'player_surrender',
-            despairAtSurrender: 0,
-            powerRatio: 0.55,
-            incomeRatio: 0.6,
-            timestamp: 1760000000000,
-          },
-        }}
-        onRestart={() => {}}
-      />,
-    )
+    const container = renderPostGame({
+      ...replayFixture,
+      surrender: {
+        tick: 1500,
+        player: 'player',
+        type: 'player_surrender',
+        despairAtSurrender: 0,
+        powerRatio: 0.55,
+        incomeRatio: 0.6,
+        timestamp: 1760000000000,
+      },
+    })
     const banner = container.querySelector('[data-testid="post-game-surrender"]')
     expect(banner).not.toBeNull()
     expect(banner?.textContent).toContain('1:15') // tick 1500 = 75 秒（投降時間點）
@@ -1141,7 +1203,7 @@ describe('PostGamePanel（/post-game，Prompt 10.5）', () => {
   /* ---------- Prompt 10.5 完整版：新區塊 ---------- */
 
   it('完整版區塊（有新欄位）：uPlot 三線資源＋tier 堆疊＋戰鬥/節奏時間軸＋歸因表＋裝甲效益', () => {
-    const container = render(<PostGamePanel replay={replayFixture} onRestart={() => {}} />)
+    const container = renderPostGame(replayFixture)
     // 資源曲線走 uPlot 三線（rubySeries/emeraldSeries 存在）。
     expect(uplotInstances.length).toBeGreaterThan(0)
     // tier 堆疊 canvas。
@@ -1173,9 +1235,9 @@ describe('PostGamePanel（/post-game，Prompt 10.5）', () => {
     expect(container.querySelector('[data-testid="armor-casualty-increase"]')?.textContent).toBe('66.7%')
     expect(container.querySelector('[data-testid="armor-raw-player"]')?.textContent).toBe('200')
     expect(container.querySelector('[data-testid="armor-actual-player"]')?.textContent).toBe('120')
-    // 反事實佔位。
-    expect(container.querySelector('[data-testid="counterfactual-placeholder"]')?.textContent).toContain(
-      '待 Prompt 10.5b',
+    // 反事實（10.5c）：fixture 無 initialPolicies（舊檔）→ 不可用降級提示。
+    expect(container.querySelector('[data-testid="counterfactual-unavailable"]')?.textContent).toContain(
+      '反事實重放不可用',
     )
   })
 
@@ -1190,7 +1252,7 @@ describe('PostGamePanel（/post-game，Prompt 10.5）', () => {
       decisions: undefined,
       armorStats: undefined,
     }
-    const container = render(<PostGamePanel replay={bare} onRestart={() => {}} />)
+    const container = renderPostGame(bare)
     expect(container.querySelector('[data-testid="post-game-resource-chart"]')).not.toBeNull() // 雙線 canvas 回退
     expect(container.querySelector('[data-testid="post-game-resource-uplot"]')).toBeNull()
     expect(container.querySelector('[data-testid="post-game-tierstack-chart"]')).toBeNull()
@@ -1214,7 +1276,7 @@ describe('PostGamePanel（/post-game，Prompt 10.5）', () => {
         outcomeAlive: index,
       })
     }
-    const container = render(<PostGamePanel replay={{ ...replayFixture, decisions: many }} onRestart={() => {}} />)
+    const container = renderPostGame({ ...replayFixture, decisions: many })
     const list = container.querySelector('[data-testid="decision-attribution-list"]')
     expect(list?.children.length).toBe(10)
     // 成本 70 的三筆（index 2/5/8…）在前——首位是成本最大且分數較高者（分數為輔）。
@@ -1222,3 +1284,199 @@ describe('PostGamePanel（/post-game，Prompt 10.5）', () => {
     expect(first).toContain('成本 70')
   })
 })
+
+describe('PostGamePanel 三視圖（Prompt 10.5c：投降後復盤特殊處理）', () => {
+  it('視圖一（你投降了）：紅系標題＋中性副標題＋局勢快照（含建築數）＋投降前 30 秒戰力小圖', () => {
+    const container = renderPostGame(surrenderFixture)
+    const title = container.querySelector('[data-testid="post-game-title"]') as HTMLElement
+    expect(title.textContent).toBe('你投降了')
+    expect(title.style.color).toBe('rgb(255, 122, 122)')
+    expect(container.querySelector('[data-testid="post-game-subtitle"]')?.textContent).toContain(
+      '如果當時改了什麼',
+    )
+    // 局勢快照：紅系 tint、建築數快照（10.5c 新欄位）、戰力小圖。
+    const snapshot = container.querySelector('[data-testid="post-game-snapshot"]')
+    expect(snapshot?.className).toContain('post-snapshot-bad')
+    expect(container.querySelector('[data-testid="snapshot-facts"]')?.textContent).toContain('我方 4｜敵方 5')
+    expect(container.querySelector('[data-testid="snapshot-power-chart"]')).not.toBeNull()
+  })
+
+  it('視圖二（對手投降了）：綠系標題＋「Policy 為什麼贏」＋下次挑戰提示', () => {
+    const container = renderPostGame({
+      ...surrenderFixture,
+      result: 'player',
+      decisions: [
+        {
+          tick: 60,
+          actor: 'player',
+          action: 'train',
+          target: 'archer',
+          score: 1.8,
+          cost: 50,
+          explanation: '生 archer。理由：unitRange 偏遠程',
+        },
+      ],
+      surrender: {
+        tick: 240,
+        player: 'enemy',
+        type: 'ai_surrender',
+        despairAtSurrender: 0.81,
+        powerRatio: 0.35,
+        incomeRatio: 0.5,
+        buildingCount: { player: 5, enemy: 3 },
+      },
+    })
+    const title = container.querySelector('[data-testid="post-game-title"]') as HTMLElement
+    expect(title.textContent).toBe('對手投降了')
+    expect(title.style.color).toBe('rgb(124, 227, 139)')
+    expect(container.querySelector('[data-testid="post-game-snapshot"]')?.className).toContain(
+      'post-snapshot-good',
+    )
+    expect(container.querySelector('[data-testid="ai-surrender-challenge"]')?.textContent).toContain(
+      '下次可以挑戰',
+    )
+  })
+
+  it('視圖三（正常結束）：維持既有文案（勝利），無局勢快照區塊', () => {
+    const container = renderPostGame(replayFixture)
+    expect(container.querySelector('[data-testid="post-game-title"]')?.textContent).toBe('勝利')
+    expect(container.querySelector('[data-testid="post-game-snapshot"]')).toBeNull()
+  })
+
+  it('白旗⚑：政策與戰鬥時間軸加旗幟 marker；旗後明細灰化；無死亡也渲染戰鬥區塊', () => {
+    const container = renderPostGame(surrenderFixture)
+    // 投降 tick 240 / 時長 300 → 旗在 80%。
+    const policyFlag = container.querySelector(
+      '[data-testid="policy-timeline-surrender-flag"]',
+    ) as HTMLElement | null
+    expect(policyFlag).not.toBeNull()
+    expect(policyFlag?.textContent).toBe('⚑')
+    expect(policyFlag?.style.left).toBe('80%')
+    expect(container.querySelector('[data-testid="combat-timeline-surrender-flag"]')).not.toBeNull()
+    // 投降局無死亡事件（surrenderFixture 無 deathEvents）也渲染戰鬥區塊＋空狀態。
+    expect(container.querySelector('[data-testid="combat-timeline"]')).not.toBeNull()
+    expect(textOf(container)).toContain('對局中無陣亡')
+  })
+
+  it('為什麼會輸：備選決策的「如果當時改成 X」前 5 條（分差小在前）', () => {
+    const container = renderPostGame({
+      ...surrenderFixture,
+      decisions: [
+        // 分差大（1.0）→ 排後；分差小（0.05）→ 排前。
+        {
+          tick: 60,
+          actor: 'player',
+          action: 'build',
+          target: 'crystal_mine',
+          score: 2.2,
+          cost: 150,
+          explanation: '蓋 crystal_mine。理由：經濟',
+          alternatives: [
+            { defId: 'crystal_mine', score: 2.2 },
+            { defId: ' barracks', score: 1.2 },
+          ],
+        },
+        {
+          tick: 120,
+          actor: 'player',
+          action: 'train',
+          target: 'archer',
+          score: 1.5,
+          cost: 50,
+          explanation: '生 archer。理由：unitRange',
+          alternatives: [
+            { defId: 'archer', score: 1.5 },
+            { defId: 'legionnaire', score: 1.45 },
+          ],
+        },
+        // 敵方決策不取。
+        { tick: 120, actor: 'enemy', action: 'train', target: 'archer', score: 1.5, cost: 50, explanation: 'x' },
+      ],
+    })
+    const list = container.querySelector('[data-testid="lost-moments-list"]')
+    expect(list).not.toBeNull()
+    expect(list?.children.length).toBe(2)
+    const items = Array.from(list?.children ?? []).map((item) => item.textContent ?? '')
+    expect(items[0]).toContain('如果改成')
+    expect(items[0]).toContain('legionnaire') // 分差 0.05 的在前
+    expect(items[1]).toContain(' barracks') // 分差 1.0 的在後
+  })
+
+  it('無備選決策 → lost-moments 空狀態（不羞辱：說明而非指責）', () => {
+    const container = renderPostGame({
+      ...surrenderFixture,
+      decisions: [{ tick: 60, actor: 'player', action: 'train', target: 'archer', score: 1.5, cost: 50, explanation: 'x' }],
+    })
+    const list = container.querySelector('[data-testid="lost-moments-list"]')
+    expect(list).not.toBeNull()
+    expect(list?.textContent).toContain('沒有勢均力敵的備選決策')
+  })
+})
+
+describe('PostGamePanel 反事實區塊（Prompt 10.5c：真實 headless 重放）', () => {
+  // 真內容包（jsdom 環境用 cwd 拼路徑，避免 import.meta.url 協議差異）。
+  const contentPack: ContentPack = loadContentPackFromDir(
+    join(process.cwd(), 'packages', 'game', 'public', 'data'),
+  )
+
+  /** 輪詢等待異步分批計算完成（每批 setTimeout(0) 呼吸；真重放 ~每場數十 ms）。 */
+  async function waitForCondition(
+    container: HTMLElement,
+    predicate: () => boolean,
+    deadlineMs = 15000,
+  ): Promise<void> {
+    const started = Date.now()
+    while (Date.now() - started < deadlineMs) {
+      if (predicate()) return
+      await act(async () => {
+        await new Promise((resolve) => window.setTimeout(resolve, 50))
+      })
+    }
+    throw new Error(`等待反事實計算超時（${deadlineMs}ms）；container: ${textOf(container).slice(0, 200)}`)
+  }
+
+  it('投降局：3 快照點 × 3 維度重放完成後顯示建議與重放結局；單條重玩按鈕接線', async () => {
+    const container = renderPostGame(surrenderFixture, { content: contentPack })
+    // 計算中提示（3 快照點）。
+    expect(container.querySelector('[data-testid="counterfactual-progress"]')?.textContent).toContain(
+      '0/3',
+    )
+    await waitForCondition(container, () => container.querySelector('[data-testid="counterfactual-progress"]') === null)
+    // 三個快照點都出來（80/160/240）。
+    expect(container.querySelector('[data-testid="counterfactual-point-80"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="counterfactual-point-160"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="counterfactual-point-240"]')).not.toBeNull()
+    // 每點三條建議：from → to ＋重放結局＋按鈕。
+    const firstPoint = container.querySelector('[data-testid="counterfactual-point-80"]')
+    const suggestions = firstPoint?.querySelectorAll('[data-testid="counterfactual-replay-button"]')
+    expect(suggestions?.length).toBe(3)
+    expect(firstPoint?.textContent).toContain('重放：')
+    // 三按鈕（主操作區）都在。
+    expect(container.querySelector('[data-testid="replay-with-suggestion"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="replay-adjust-policy"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="back-to-menu"]')).not.toBeNull()
+    // 「用建議參數重玩」→ onReplayWithPolicies 收到 PolicyValues（快照時刻政策＋覆寫）。
+    const mainButton = container.querySelector('[data-testid="replay-with-suggestion"]') as HTMLButtonElement
+    expect(mainButton.disabled).toBe(false)
+    act(() => {
+      mainButton.click()
+    })
+    expect(replayWithCalls).toHaveLength(1)
+    const values = replayWithCalls[0]
+    expect(values?.aggression).toBeGreaterThanOrEqual(0)
+    expect(values?.tempoPreset).toBe('standard')
+    // 單條建議按鈕也接線：點第一點第一條 → 一次呼叫。
+    const singleButton = suggestions?.[0] as HTMLButtonElement
+    act(() => {
+      singleButton.click()
+    })
+    expect(replayWithCalls).toHaveLength(2)
+  })
+
+  it('舊檔缺 initialPolicies → 顯示不可用；內容包注入 null 且載入失敗 → 降級提示', () => {
+    const bare: ReplayRecord = { ...surrenderFixture, initialPolicies: undefined }
+    const container = renderPostGame(bare, { content: null })
+    expect(container.querySelector('[data-testid="counterfactual-unavailable"]')).not.toBeNull()
+  })
+})
+
