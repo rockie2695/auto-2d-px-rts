@@ -1,0 +1,20 @@
+{
+  "name": "@auto-2d-px-rts/server",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "build": "tsc --noEmit -p tsconfig.json",
+    "db:migrate": "node --env-file=../../.env --experimental-strip-types --disable-warning=ExperimentalWarning src/db/runMigrate.ts up",
+    "db:seed": "node --env-file=../../.env --experimental-strip-types --disable-warning=ExperimentalWarning src/db/seed.ts",
+    "db:export": "node --env-file=../../.env --experimental-strip-types --disable-warning=ExperimentalWarning src/db/export.ts"
+  },
+  "dependencies": {
+    "@auto-2d-px-rts/shared": "workspace:*",
+    "node-pg-migrate": "^8.0.3",
+    "pg": "^8.19.0"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.19.0"
+  }
+}
