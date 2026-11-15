@@ -1205,11 +1205,13 @@ JSON 檔即完整輸入）。路由（Prompt 10.5 完整版）：**react-router-
 
 ---
 
-## 13. 資料結構（JSON，MVP 唯一資料來源）
+## 13. 資料結構（JSON 內容檔）
 
-位置：`/packages/game/public/data/`。
-依規則 7，**不用 Postgres、Content Pack、CDN**；但結構按最終 schema 設計，
-日後遷移 DB 不需改欄位。所有檔案帶 `schemaVersion: 1`。
+位置：`/packages/game/public/data/`（seed 來源與回退資料源）。
+階段四起正規資料源為 **Postgres（Neon）**：`packages/server` 的 seed 把
+JSON 寫入 DB（draft pack `v0`），`db:export` 重組出 `public/data-db/`；
+遊戲 loader 優先讀 `/data-db`、探測不到回退 `/data`。
+表 ↔ 檔對應見 `docs/DB_MAPPING.md`。所有檔案帶 `schemaVersion: 1`。
 
 schema 定義在 `packages/shared/src/schema.ts`（Zod）；
 每份內容檔的外層固定是 `{ "schemaVersion": 1, "<種類>": { ... } }`。
@@ -1443,7 +1445,8 @@ public/data/
 - 地圖編輯器、平衡工具、元 AI、反事實建議、統計檢定
 
 **平台**
-- Content Pack、Postgres、CDN、帳號與多人對戰
+- Content Pack 發布流程（draft → published 的審核機制）、CDN、帳號與多人對戰。
+  （階段四起內容資料源已用 Postgres／Neon 儲存與匯出，但無帳號、無多人。）
 
 ---
 

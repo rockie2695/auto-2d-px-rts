@@ -25,6 +25,14 @@ pnpm sim:fight # 純模擬對打 CLI（無 AI，雙方推向中心接戰）
 pnpm build     # 型別檢查 + 產出 dist
 ```
 
+資料庫（Neon Postgres；root `.env` 需有 `DATABASE_URL`）：
+
+```bash
+pnpm --filter @auto-2d-px-rts/server db:migrate # migrations（14 張表）
+pnpm --filter @auto-2d-px-rts/server db:seed    # JSON → DB（draft pack v0）
+pnpm --filter @auto-2d-px-rts/server db:export  # DB → game/public/data-db/
+```
+
 ## 目錄結構
 
 ```
@@ -32,7 +40,8 @@ packages/
   shared/                 共用型別與常數（遊戲與測試都從這裡 import）
     src/constants.ts      TICK_RATE_HZ / TICK_INTERVAL_MS / MAP_SIZE
   game/
-    public/data/          遊戲內容 JSON（MVP 階段的唯一資料來源）
+    public/data/          遊戲內容 JSON（seed 來源與回退資料源）
+    public/data-db/       DB 匯出的內容 JSON（loader 優先讀取）
     src/
       sim/                純邏輯模擬
       render/             PixiJS 渲染
@@ -41,6 +50,7 @@ packages/
       session.ts          組合根（data + sim + ai + render 匯合；政策 API / 復盤）
       replay.ts           戰後復盤紀錄（純資料層，可重播）
       ui/                 React UI 覆蓋層（四角 HUD、政策面板、復盤頁）
+  server/                 資料庫（Neon Postgres）：migrations / seed / export
 ```
 
 ## 分層規則
@@ -71,9 +81,12 @@ packages/
 
 ## 資料來源
 
-MVP 階段遊戲內容存在 `packages/game/public/data/` 的本地 JSON，
-**不用** Postgres、Content Pack 或 CDN。
-JSON 結構會按最終 schema 設計，方便日後遷移到 DB。
+遊戲內容的正規資料源是 **Postgres（Neon 遠端庫）**：
+
+- `packages/server`：migrations（14 張表）、seed（JSON → DB）、export（DB → `packages/game/public/data-db/`）。
+- 遊戲 loader 優先讀 `/data-db`（`pnpm --filter @auto-2d-px-rts/server db:export` 產生），
+  探測不到才回退 `packages/game/public/data/` 的本地 JSON。
+- 表格／檔案對應、RLE 格式與已知正規化差異見 [`docs/DB_MAPPING.md`](docs/DB_MAPPING.md)。
 
 ## 目前進度
 
@@ -796,3 +809,18 @@ JSON 結構會按最終 schema 設計，方便日後遷移到 DB。
   皆為純記錄元數據、Phase B/C 零 sim/AI 行為改動；鏡像探針不受影響）。
   SPEC §12.3 補 10.5c 欄位/三視圖/反事實實裝/統計注記＋§12.4 補重玩入徑；
   README 本條目記錄。
+
+- [x] 階段四 Prompt 1 — 內容資料源遷移 Postgres（Neon）：
+  `packages/server`（pg＋node-pg-migrate，僅依賴 shared）——
+  14 張表 migration（content_packs 根表 draft/published＋sha256；
+  resources/factions/units/buildings/policies 複合 PK＋data jsonb；
+  maps＋map_tiles（RLE bytea）＋map_resources；palettes/sprites 佔位；
+  balance_changes/balance_snapshots/meta_ai_models 預留）；
+  `db:seed` 把 `public/data` 17 檔（Zod 驗證→draft pack v0）寫入 Neon
+  （tiles→RLE 99 bytes、resourceNodes→正規化、match/policies→policies 表）；
+  `db:export` 重組出 `public/data-db/`（17 檔，與來源語意一致）；
+  遊戲 loader 優先 probe `/data-db` 回退 `/data`（順修 fetch MANIFEST 陳舊
+  10→17 檔）；測試庫 `neondb_test` 自動建置（DROP FORCE→CREATE→migrate→
+  seed），export.test 深比對＋RLE roundtrip（+8 測試）；表 ↔ 檔對應見
+  `docs/DB_MAPPING.md`。**tally/公平門不重跑**（內容資料源等價遷移，
+  零 sim/AI 行為改動）。
