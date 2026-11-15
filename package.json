@@ -15,7 +15,9 @@
     "db:seed": "pnpm --filter @auto-2d-px-rts/server db:seed",
     "db:export": "pnpm --filter @auto-2d-px-rts/server db:export",
     "build:pack": "pnpm --filter @auto-2d-px-rts/server build:pack",
-    "rollback": "pnpm --filter @auto-2d-px-rts/server rollback"
+    "rollback": "pnpm --filter @auto-2d-px-rts/server rollback",
+    "api": "pnpm --filter @auto-2d-px-rts/server api",
+    "pack:dev": "node --experimental-strip-types --disable-warning=ExperimentalWarning packages/server/src/export/devPackCli.ts"
   },
   "devDependencies": {
     "jsdom": "^30.1.3",

@@ -50,6 +50,39 @@ export async function setActivePack(
   }
 }
 
+/**
+ * 開發用：把已 published 的 pack 退回 draft（並清掉指向它的 active 指標）。
+ * 讓 `pnpm pack:dev`（seed → publish）可在同一版本上反覆迭代；
+ * 正式流程不應使用（published 唯讀是資料完整性守衛）。
+ */
+export async function resetPackToDraft(
+  databaseUrl: string,
+  packVersion: string,
+): Promise<{ reset: boolean }> {
+  const client = new Client({ connectionString: databaseUrl })
+  await client.connect()
+  try {
+    await client.query('BEGIN')
+    const pack = await client.query('select id from content_packs where version = $1', [
+      packVersion,
+    ])
+    if (pack.rows.length !== 1) {
+      await client.query('ROLLBACK')
+      return { reset: false }
+    }
+    const packId: string = pack.rows[0]!['id'] as string
+    await client.query('delete from active_pack where pack_id = $1', [packId])
+    await client.query("update content_packs set status = 'draft' where id = $1", [packId])
+    await client.query('COMMIT')
+    return { reset: true }
+  } catch (cause) {
+    await client.query('ROLLBACK')
+    throw cause
+  } finally {
+    await client.end()
+  }
+}
+
 /** 讀取目前 active pack（無指標時為 null）。 */
 export async function getActivePack(
   databaseUrl: string,

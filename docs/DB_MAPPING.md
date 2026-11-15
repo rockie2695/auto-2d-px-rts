@@ -1,14 +1,20 @@
 # DB ↔ 內容檔對應（階段四 Prompt 1）
 
 資料源從 JSON 檔遷移到 Postgres（Neon 遠端庫）。
-`packages/server` 負責 schema（node-pg-migrate）、seed（JSON → DB）與
-export（DB → `packages/game/public/data-db/`）。遊戲 loader 直接讀
-`/data-db`（Vite public 直服）；seed 來源 JSON 在 `packages/server/seed-data/`。
+`packages/server` 負責 schema（node-pg-migrate）、seed（JSON → DB）、
+export（DB → `packages/game/public/data-db/`）與 publish（DB → Content Pack
+`packages/game/public/packs/`）。遊戲 loader 優先讀 `/packs/latest/pack.json`
+（含 hash 驗證），載入不到才回退 `/data-db`；seed 來源 JSON 在
+`packages/server/seed-data/`。
 
 ## 指令
 
 | 指令                | 說明 |
 | ------------------- | ---- |
+| `pnpm build:pack`   | DB draft pack → Content Pack 三件套（pack.json／atlas.png／frames.json）→ 標記 published＋active |
+| `pnpm rollback <v>` | 把某個 published pack 設為 active（draft 拒絕） |
+| `pnpm api`          | 迷你 publish API（`POST /api/publish/latest`、`GET /api/active-pack`，預設埠 3000） |
+| `pnpm pack:dev`     | 開發一步到位：退回 draft → seed → publish（不需常駐 API） |
 | `pnpm --filter @auto-2d-px-rts/server db:migrate` | 對 Neon 正式庫跑 migrations（`packages/server/migrations/*.sql`） |
 | `pnpm --filter @auto-2d-px-rts/server db:seed`   | 讀 `packages/server/seed-data` JSON → 驗證 → 寫入 draft pack `v0`（冪等，重跑即整包重建；已 published 拒絕覆寫） |
 | `pnpm --filter @auto-2d-px-rts/server db:export` | 從 DB 重組內容檔 → `packages/game/public/data-db/` |
@@ -48,6 +54,27 @@ export（DB → `packages/game/public/data-db/`）。遊戲 loader 直接讀
 - **jsonb 不保留 key 順序**：匯出檔的欄位順序與原始檔不同（語意等價）。
 - **`resourceNodes` 順序**：DB 正規化後按 `x, y` 排序輸出，與原始檔順序可能不同。
 - 兩者皆不影響 Zod 驗證與遊戲行為；`export.test.ts` 的深比對會先正規化再逐格比對。
+
+## Content Pack 發布 pipeline（Prompt 3.5）
+
+`publishPack(version)` 七步：DB 讀表（`buildPackContent`）→ content 以
+`PackContentSchema.parse` 正規化（預設值補齊，**hash 與檔案同源**）→ sharp 合成
+atlas → `packHash = sha256(canonicalJson(content) + atlasHash)` →
+Storage 上傳 → `content_packs` 標記 `published` 並把 `sha256` 改寫為 packHash
+（seed 期是來源檔 hash，publish 後是 packHash）→ `active_pack` 指標切到本 pack。
+
+- **Storage 介面**：現行 `LocalDiskStorage` 寫 `packages/game/public/packs/{version}/`
+  並鏡像 `latest/`；R2/S3 日後以同介面插入（pipeline 其餘不動）。
+- **active 指標**：`active_pack` singleton（migration 0002）；rollback＝指標切回。
+- **遊戲端**：`loadPack('/packs/latest')` fetch `pack.json` → Zod 驗證 → **重算 hash**
+  比對，不符即丟 `PackHashMismatchError` 拒載；`loadPackWithFallback` 在「載入不到」
+  時回退 `/data-db`，但 hash 不符**不**回退（竄改防護）。
+- **Replay 一致性**：`ReplayRecord.packVersion/packHash`（可缺）；復盤頁比對 replay
+  與載入 pack 的 hash，不一致即拒絕反事實播放並說明原因。
+- **atlas 現況**：sprites 為 seed 的佔位色塊（`sprite.color/size`），atlas 只參與
+  pack 與 hash，render 仍程序繪製（frames.json 為日後像素 sprite 預留）。
+- **另註**：`resetPackToDraft`（`pnpm pack:dev` 用）把已 published 同版本退回 draft
+  以利迭代；正式流程不使用（published 唯讀）。
 
 ## 載入路徑
 

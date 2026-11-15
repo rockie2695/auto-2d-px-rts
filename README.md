@@ -28,9 +28,13 @@ pnpm build     # 型別檢查 + 產出 dist
 資料庫（Neon Postgres；root `.env` 需有 `DATABASE_URL`）：
 
 ```bash
-pnpm --filter @auto-2d-px-rts/server db:migrate # migrations（14 張表）
-pnpm --filter @auto-2d-px-rts/server db:seed    # JSON → DB（draft pack v0）
-pnpm --filter @auto-2d-px-rts/server db:export  # DB → game/public/data-db/
+pnpm db:migrate   # migrations（14 張表）
+pnpm db:seed      # seed-data JSON → DB（draft pack v0）
+pnpm db:export    # DB → game/public/data-db/（17 檔回退源）
+pnpm build:pack   # DB → Content Pack（pack.json＋atlas＋hash）→ published＋active
+pnpm rollback v0  # 把某 published pack 設為 active
+pnpm api          # 迷你 publish API（POST /api/publish/latest，埠 3000）
+pnpm pack:dev     # 開發一步到位：退回 draft → seed → publish
 ```
 
 ## 目錄結構
@@ -40,7 +44,8 @@ packages/
   shared/                 共用型別與常數（遊戲與測試都從這裡 import）
     src/constants.ts      TICK_RATE_HZ / TICK_INTERVAL_MS / MAP_SIZE
   game/
-    public/data-db/       DB 匯出的內容 JSON（遊戲唯一資料來源）
+    public/packs/         Content Pack（pack.json／atlas.png／frames.json；遊戲首選）
+    public/data-db/       DB 匯出的內容 JSON（回退源）
     src/
       sim/                純邏輯模擬
       render/             PixiJS 渲染
@@ -84,10 +89,15 @@ packages/
 遊戲內容的正規資料源是 **Postgres（Neon 遠端庫）**：
 
 - `packages/server`：migrations（14 張表）、seed（`seed-data/` JSON → DB）、
-  export（DB → `packages/game/public/data-db/`）。
-- 遊戲（瀏覽器 fetch 與 Node 測試／CLI）一律讀 `public/data-db/`；
-  內容變更流程：改 `packages/server/seed-data/*.json` → `db:seed` → `db:export`。
-- 表格／檔案對應、RLE 格式與已知正規化差異見 [`docs/DB_MAPPING.md`](docs/DB_MAPPING.md)。
+  export（DB → `public/data-db/`）、publish（DB → Content Pack
+  `public/packs/{version}/`＋`latest/`）。
+- 遊戲優先讀 `/packs/latest/pack.json`（Zod 驗證＋**重新計算 packHash 比對**，
+  不符即拒載）；載入不到才回退 `public/data-db/` 的 17 檔。
+- 內容變更流程（不需手改任何 JSON）：改 DB（或改 `seed-data/` 後 `db:seed`）
+  → `pnpm build:pack` → 遊戲重載即生效；開發迭代用 `pnpm pack:dev`。
+- Replay 檔記 `packVersion/packHash`，復盤頁在 hash 不一致時拒絕反事實播放。
+- 表格／檔案對應、RLE 格式、publish pipeline 與已知正規化差異見
+  [`docs/DB_MAPPING.md`](docs/DB_MAPPING.md)。
 
 ## 目前進度
 
@@ -825,3 +835,28 @@ packages/
   seed），export.test 深比對＋RLE roundtrip（+8 測試）；表 ↔ 檔對應見
   `docs/DB_MAPPING.md`。**tally/公平門不重跑**（內容資料源等價遷移，
   零 sim/AI 行為改動）。
+
+- [x] 階段四 Prompt 3.5 — Content Pack 匯出 pipeline（DB → pack.json → 遊戲）：
+  1. **pack 組裝與 hash**：`shared` 加 PackFileSchema／PackFramesSchema 與
+     canonical hash（`shared/src/hash.ts`：canonicalJson＋sha256 WebCrypto）；
+     `server/export/packBuilder.ts` 由 DB 組出 content 本體（schema 驗證）。
+  2. **atlas**：seed 由 unit/building def 的 `sprite.color/size` 產生佔位
+     sprites（10 列）；`atlas.ts` shelf packing → sharp 合成 atlas.png＋
+     frames.json（atlasHash＝PNG bytes sha256；render 仍程序繪製）。
+  3. **publish／storage／rollback**：migration 0002 `active_pack` 指標；
+     `Storage` 介面＋LocalDiskStorage（寫 `public/packs/{version}/`＋`latest/`）；
+     `publishPack` 七步（DB→content 正規化→atlas→packHash→上傳→published＋
+     sha256 改寫＋active→URL）；`rollback()`；`build:pack` CLI＋迷你
+     node:http API（`pnpm api`：POST /api/publish/latest、GET /api/active-pack）。
+  4. **遊戲端**：`data/pack.ts` `loadPack`（fetch→Zod→**重算 hash 比對**，
+     不符丟 PackHashMismatchError 拒載）＋`loadPackWithFallback`（pack 優先、
+     「載入不到」才回退 data-db；hash 不符不回退）；session/App/PreGamePage/
+     PostGamePanel 改走此入徑；Replay 記 `packVersion/packHash`，復盤頁
+     hash 不一致即拒絕反事實播放。
+  5. **便利腳本**：`scripts/dev-pack.sh`（seed→curl publish→確認 latest）＋
+     Windows 等價 `pnpm pack:dev`（退回 draft→seed→publish）。
+  **驗證**：565/565 測試（+15：pack 6／publish 3／atlas 3／packBuilder 3／
+  API 2 併入 server 計數）、tsc×3＋oxlint 0 警告；實機：`db:seed`＋
+  `build:pack` 產出 pack.json/atlas/frames（hash 穩定）；改 DB 值→重 publish→
+  遊戲讀到新值（目視驗收）；SPEC §13 與 DB_MAPPING 補 pipeline。
+  **tally/公平門不重跑**（內容資料源與發布管線，零 sim/AI 行為改動）。

@@ -1209,9 +1209,12 @@ JSON 檔即完整輸入）。路由（Prompt 10.5 完整版）：**react-router-
 
 位置：seed 來源 `packages/server/seed-data/`（17 檔 JSON）。
 階段四起正規資料源為 **Postgres（Neon）**：`packages/server` 的 seed 把
-JSON 寫入 DB（draft pack `v0`），`db:export` 重組出 `public/data-db/`；
-遊戲（瀏覽器與 Node 測試／CLI）一律讀 `data-db/`，不再回退。
-表 ↔ 檔對應見 `docs/DB_MAPPING.md`。所有檔案帶 `schemaVersion: 1`。
+JSON 寫入 DB（draft pack `v0`），`db:export` 重組出 `public/data-db/`（17 檔）。
+Prompt 3.5 起遊戲首選 **Content Pack**：`pnpm build:pack` 由 DB 產生
+`public/packs/{version}/{pack.json,atlas.png,frames.json}` 並鏡像 `latest/`，
+`packHash = sha256(canonicalJson(content) + atlasHash)`；遊戲 `loadPack`
+驗證 hash 後使用，載入不到才回退 `data-db/`（hash 不符不回退）。
+表 ↔ 檔對應與 pipeline 見 `docs/DB_MAPPING.md`。所有檔案帶 `schemaVersion: 1`。
 
 schema 定義在 `packages/shared/src/schema.ts`（Zod）；
 每份內容檔的外層固定是 `{ "schemaVersion": 1, "<種類>": { ... } }`。

@@ -9,7 +9,8 @@
     "db:seed": "node --env-file=../../.env --experimental-strip-types --disable-warning=ExperimentalWarning src/db/seed.ts",
     "db:export": "node --env-file=../../.env --experimental-strip-types --disable-warning=ExperimentalWarning src/db/export.ts",
     "build:pack": "node --env-file=../../.env --experimental-strip-types --disable-warning=ExperimentalWarning src/export/packCli.ts",
-    "rollback": "node --env-file=../../.env --experimental-strip-types --disable-warning=ExperimentalWarning src/export/rollback.ts"
+    "rollback": "node --env-file=../../.env --experimental-strip-types --disable-warning=ExperimentalWarning src/export/rollback.ts",
+    "api": "node --env-file=../../.env --experimental-strip-types --disable-warning=ExperimentalWarning src/export/api.ts"
   },
   "dependencies": {
     "@auto-2d-px-rts/shared": "workspace:*",
