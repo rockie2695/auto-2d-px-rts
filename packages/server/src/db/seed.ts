@@ -5,16 +5,8 @@ import { fileURLToPath } from 'node:url'
 
 import { Client } from 'pg'
 
-import {
-  BuildingFileSchema,
-  FactionFileSchema,
-  MapFileSchema,
-  MatchFileSchema,
-  PoliciesFileSchema,
-  ResourceFileSchema,
-  UnitFileSchema,
-} from '@auto-2d-px-rts/shared'
 import { getDatabaseUrl } from './config.ts'
+import { validateContentFile } from './fileSchemas.ts'
 import { encodeTilesRle } from './rle.ts'
 
 /** repo 根目錄（`packages/server/src/db/` 往上四層）。 */
@@ -24,10 +16,10 @@ const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..'
  * seed 來源：現階段仍是 `packages/game/public/data` 的 17 檔 JSON。
  * Phase E 會整批搬到 `packages/server/seed-data`。
  */
-const SEED_SOURCE_DIR = resolve(REPO_ROOT, 'packages/game/public/data')
+export const SEED_SOURCE_DIR = resolve(REPO_ROOT, 'packages/game/public/data')
 
 /** 初始 draft 包版本；seed 可重複執行（重跑即重建 draft）。 */
-const PACK_VERSION = 'v0'
+export const PACK_VERSION = 'v0'
 
 /** MVP 佔位 palette：借 game 既有的裝甲階層色（render/armor.ts）。 */
 const DEFAULT_PALETTE_COLORS = {
@@ -72,35 +64,6 @@ function loadJsonFile(dir: string, file: string): JsonFile {
   return { file, data, raw }
 }
 
-/** 依目錄結構挑出對應的 FileSchema 逐檔驗證（不合格即丟錯，不靜默降級）。 */
-function validateFile(file: JsonFile): void {
-  // 結構型別即可，避免 server 直接依賴 zod（zod 是 shared 的依賴）。
-  const schema: { parse(data: unknown): unknown } = (() => {
-    if (file.file === 'match.json') return MatchFileSchema
-    if (file.file === 'policies.json') return PoliciesFileSchema
-    const folder = file.file.split('/')[0]
-    switch (folder) {
-      case 'resources':
-        return ResourceFileSchema
-      case 'factions':
-        return FactionFileSchema
-      case 'units':
-        return UnitFileSchema
-      case 'buildings':
-        return BuildingFileSchema
-      case 'maps':
-        return MapFileSchema
-      default:
-        throw new Error(`無法分類的內容檔：${file.file}`)
-    }
-  })()
-  try {
-    schema.parse(file.data)
-  } catch (cause) {
-    throw new Error(`內容檔驗證失敗：${file.file}`, { cause })
-  }
-}
-
 /** 內容表共用的列（id 取自包裝物件內的 def id）。 */
 interface ContentRow {
   readonly table: string
@@ -138,16 +101,36 @@ async function insertContentRows(
   }
 }
 
-async function main(): Promise<void> {
-  const files = listJsonFiles(SEED_SOURCE_DIR).map((file) =>
-    loadJsonFile(SEED_SOURCE_DIR, file),
+export interface SeedSummary {
+  readonly packVersion: string
+  readonly sha256: string
+  readonly resources: number
+  readonly factions: number
+  readonly units: number
+  readonly buildings: number
+  readonly policies: number
+  readonly maps: number
+}
+
+/**
+ * 把 `sourceDir` 的 JSON 內容檔 seed 進 `databaseUrl` 指向的資料庫。
+ *
+ * - 逐檔以 shared 的 FileSchema 驗證（不合格即丟錯，不靜默降級）。
+ * - sha256 以「排序後的原始檔內容」計算，與 seed／export 流程無關、可重現。
+ * - 已 published 的同版本 pack 拒絕覆寫；draft 則整包重建（冪等）。
+ * - 全程單一交易，失敗即 ROLLBACK。
+ */
+export async function seedDatabase(
+  databaseUrl: string,
+  sourceDir: string = SEED_SOURCE_DIR,
+): Promise<SeedSummary> {
+  const files = listJsonFiles(sourceDir).map((file) =>
+    loadJsonFile(sourceDir, file),
   )
   for (const file of files) {
-    validateFile(file)
+    validateContentFile(file.file, file.data)
   }
-  console.log(`已讀取並驗證 ${files.length} 個內容檔`)
 
-  // sha256 以「排序後的原始檔內容」計算，與 seed／export 流程無關、可重現。
   const sha256 = createHash('sha256')
   for (const file of files) {
     sha256.update(`${file.file}\n`)
@@ -180,12 +163,12 @@ async function main(): Promise<void> {
     { table: 'policies', id: 'match', data: match[0]!.data },
   ]
 
-  const client = new Client({ connectionString: getDatabaseUrl() })
+  const client = new Client({ connectionString: databaseUrl })
   await client.connect()
   try {
     await client.query('BEGIN')
 
-    // 已 published 的 v0 不可覆寫；draft 可整包重 seed。
+    // 已 published 的版本不可覆寫；draft 可整包重 seed。
     const existing = await client.query(
       'select status from content_packs where version = $1',
       [PACK_VERSION],
@@ -248,12 +231,17 @@ async function main(): Promise<void> {
     )
 
     await client.query('COMMIT')
-    console.log(
-      `seed 完成：pack ${PACK_VERSION}（draft, sha256=${sha256Hex.slice(0, 12)}…）` +
-        ` resources=${resources.length} factions=${factions.length}` +
-        ` units=${units.length} buildings=${buildings.length}` +
-        ` policies=2 maps=${maps.length} palettes=1`,
-    )
+
+    return {
+      packVersion: PACK_VERSION,
+      sha256: sha256Hex,
+      resources: resources.length,
+      factions: factions.length,
+      units: units.length,
+      buildings: buildings.length,
+      policies: contentRows.length - resources.length - factions.length - units.length - buildings.length,
+      maps: maps.length,
+    }
   } catch (cause) {
     await client.query('ROLLBACK')
     throw cause
@@ -262,4 +250,16 @@ async function main(): Promise<void> {
   }
 }
 
-await main()
+const isDirectRun =
+  process.argv[1] !== undefined &&
+  resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+
+if (isDirectRun) {
+  const summary = await seedDatabase(getDatabaseUrl())
+  console.log(
+    `seed 完成：pack ${summary.packVersion}（draft, sha256=${summary.sha256.slice(0, 12)}…）` +
+      ` resources=${summary.resources} factions=${summary.factions}` +
+      ` units=${summary.units} buildings=${summary.buildings}` +
+      ` policies=${summary.policies} maps=${summary.maps} palettes=1`,
+  )
+}

@@ -8,6 +8,9 @@ const REPO_ROOT = resolve(
   '../../../..',
 )
 
+/** node-pg-migrate 的 SQL migration 目錄。 */
+export const MIGRATIONS_DIR = resolve(REPO_ROOT, 'packages/server/migrations')
+
 /**
  * 極簡 `.env` 解析（只處理 `KEY=VALUE` 與成對引號，足夠讀 root `.env`）。
  *

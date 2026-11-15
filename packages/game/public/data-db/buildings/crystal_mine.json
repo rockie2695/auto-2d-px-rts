@@ -1,0 +1,29 @@
+{
+  "building": {
+    "ai": {
+      "value": 300
+    },
+    "hp": 300,
+    "id": "crystal_mine",
+    "cost": {
+      "blue_crystal": 150
+    },
+    "size": [
+      1,
+      1
+    ],
+    "sprite": {
+      "size": 16,
+      "color": "#38b0d8"
+    },
+    "faction": "test_faction",
+    "produces": [],
+    "requires": [],
+    "buildTimeSec": 12,
+    "incomePerSec": {
+      "blue_crystal": 1
+    },
+    "requiresResourceNode": true
+  },
+  "schemaVersion": 1
+}

@@ -1,0 +1,68 @@
+{
+  "policies": [
+    {
+      "id": "econMilitary",
+      "max": 1,
+      "min": 0,
+      "step": 0.01,
+      "default": 0.5
+    },
+    {
+      "id": "unitSize",
+      "max": 1,
+      "min": 0,
+      "step": 0.01,
+      "default": 0.5
+    },
+    {
+      "id": "unitRange",
+      "max": 1,
+      "min": 0,
+      "step": 0.01,
+      "default": 0.5
+    },
+    {
+      "id": "clusterSpread",
+      "max": 1,
+      "min": 0,
+      "step": 0.01,
+      "default": 0.5
+    },
+    {
+      "id": "aggression",
+      "max": 1,
+      "min": 0,
+      "step": 0.01,
+      "default": 0.5
+    },
+    {
+      "id": "expansion",
+      "max": 1,
+      "min": 0,
+      "step": 0.01,
+      "default": 0.5
+    },
+    {
+      "id": "techRush",
+      "max": 1,
+      "min": 0,
+      "step": 0.01,
+      "default": 0.5
+    },
+    {
+      "id": "reserve",
+      "max": 1,
+      "min": 0,
+      "step": 0.01,
+      "default": 0.5
+    },
+    {
+      "id": "retreatThreshold",
+      "max": 1,
+      "min": 0,
+      "step": 0.01,
+      "default": 0.5
+    }
+  ],
+  "schemaVersion": 1
+}

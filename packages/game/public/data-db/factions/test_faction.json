@@ -1,0 +1,55 @@
+{
+  "faction": {
+    "id": "test_faction",
+    "name": "Test Faction",
+    "roster": [
+      "legionnaire",
+      "archer",
+      "shield_guard",
+      "ballista"
+    ],
+    "buildings": [
+      "barracks",
+      "crystal_mine",
+      "ruby_mine",
+      "emerald_sanctuary",
+      "tower"
+    ],
+    "startUnits": {
+      "legionnaire": 3
+    },
+    "counterMatrix": {
+      "melee": {
+        "melee": 1,
+        "ranged": 1
+      },
+      "ranged": {
+        "melee": 1,
+        "ranged": 1
+      }
+    },
+    "startBuildings": [
+      "keep",
+      "barracks",
+      "crystal_mine"
+    ],
+    "startResources": {
+      "red_ruby": 0,
+      "blue_crystal": 600,
+      "green_emerald": 0
+    },
+    "aiSurrenderConfig": {
+      "weights": {
+        "tech": 0.1,
+        "time": 0.15,
+        "power": 0.35,
+        "income": 0.25,
+        "territory": 0.15
+      },
+      "sustainSec": 15,
+      "minGameTimeSec": 120,
+      "surrenderThreshold": 0.75
+    }
+  },
+  "schemaVersion": 1
+}

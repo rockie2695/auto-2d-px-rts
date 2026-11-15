@@ -1,0 +1,33 @@
+{
+  "unit": {
+    "ai": {
+      "value": 100,
+      "retreatHpPct": 0.5,
+      "preferredRange": 3
+    },
+    "id": "archer",
+    "cost": {
+      "blue_crystal": 75
+    },
+    "role": "ranged",
+    "tier": "small",
+    "stats": {
+      "hp": 60,
+      "dmg": 8,
+      "armor": 0,
+      "range": 3,
+      "moveSpeed": 2.5,
+      "attackSpeed": 1
+    },
+    "sprite": {
+      "size": 12,
+      "color": "#5b8def"
+    },
+    "faction": "test_faction",
+    "requires": [
+      "barracks"
+    ],
+    "trainTimeSec": 7
+  },
+  "schemaVersion": 1
+}

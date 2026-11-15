@@ -1,0 +1,33 @@
+{
+  "unit": {
+    "ai": {
+      "value": 140,
+      "retreatHpPct": 0.5,
+      "preferredRange": 0.8
+    },
+    "id": "shield_guard",
+    "cost": {
+      "blue_crystal": 80
+    },
+    "role": "melee",
+    "tier": "small",
+    "stats": {
+      "hp": 120,
+      "dmg": 6,
+      "armor": 0.5,
+      "range": 0.8,
+      "moveSpeed": 2,
+      "attackSpeed": 1
+    },
+    "sprite": {
+      "size": 12,
+      "color": "#7d8aa0"
+    },
+    "faction": "test_faction",
+    "requires": [
+      "barracks"
+    ],
+    "trainTimeSec": 6
+  },
+  "schemaVersion": 1
+}

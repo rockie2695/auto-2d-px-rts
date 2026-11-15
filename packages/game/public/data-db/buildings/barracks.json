@@ -1,0 +1,28 @@
+{
+  "building": {
+    "ai": {
+      "value": 400
+    },
+    "hp": 600,
+    "id": "barracks",
+    "cost": {
+      "blue_crystal": 200
+    },
+    "size": [
+      2,
+      2
+    ],
+    "sprite": {
+      "size": 32,
+      "color": "#a0713f"
+    },
+    "faction": "test_faction",
+    "produces": [
+      "legionnaire",
+      "archer"
+    ],
+    "requires": [],
+    "buildTimeSec": 15
+  },
+  "schemaVersion": 1
+}

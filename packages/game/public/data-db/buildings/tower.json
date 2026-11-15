@@ -1,0 +1,30 @@
+{
+  "building": {
+    "ai": {
+      "value": 400
+    },
+    "hp": 700,
+    "id": "tower",
+    "cost": {
+      "blue_crystal": 150
+    },
+    "size": [
+      2,
+      2
+    ],
+    "sprite": {
+      "size": 32,
+      "color": "#7f8fa6"
+    },
+    "defense": {
+      "dmg": 10,
+      "range": 4,
+      "attackSpeed": 0.5
+    },
+    "faction": "test_faction",
+    "produces": [],
+    "requires": [],
+    "buildTimeSec": 20
+  },
+  "schemaVersion": 1
+}
