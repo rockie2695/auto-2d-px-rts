@@ -5,7 +5,8 @@ import { buildPolicyTimeline, suggestCounterfactuals } from '../ai/counterfactua
 import type { CounterfactualSuggestion } from '../ai/counterfactual.ts'
 import type { PolicyValues } from '../ai/policy.ts'
 import type { ContentPack } from '@auto-2d-px-rts/shared'
-import { loadContentPackFromFetch } from '../data/loadFromFetch.ts'
+import { loadPackWithFallback, PackHashMismatchError } from '../data/pack.ts'
+import type { LoadedPack } from '../data/pack.ts'
 import type {
   ReplayDeathEvent,
   ReplayDecision,
@@ -671,11 +672,14 @@ function SnapshotBlock({
 function CounterfactualSection({
   replay,
   content,
+  packMismatch,
   onReplayWithPolicies,
   onRestart,
 }: {
   replay: ReplayRecord
   content: ContentPack | null
+  /** replay 的 packHash 與載入的 pack 不同 → 拒絕反事實播放（Prompt 3.5）。 */
+  packMismatch: boolean
   onReplayWithPolicies: (values: PolicyValues) => void
   onRestart: () => void
 }) {
@@ -699,7 +703,7 @@ function CounterfactualSection({
   }
 
   useEffect(() => {
-    if (content === null || timeline === null) return
+    if (content === null || timeline === null || packMismatch) return
     let cancelled = false
     const data: Record<number, CounterfactualSuggestion[]> = {}
     const runNext = (index: number): void => {
@@ -717,7 +721,7 @@ function CounterfactualSection({
       cancelled = true
       window.clearTimeout(handle)
     }
-  }, [content, timeline, points, replay])
+  }, [content, timeline, points, replay, packMismatch])
 
   const allSuggestions = points
     .map((tick) => ({ tick, suggestions: computed[tick] }))
@@ -747,7 +751,11 @@ function CounterfactualSection({
   return (
     <section className="post-game-section" data-testid="counterfactual-block">
       <h2>反事實建議（如果當時改成 X——真實重放驗證）</h2>
-      {content === null ? (
+      {packMismatch ? (
+        <div className="policy-timeline-empty" data-testid="counterfactual-pack-mismatch">
+          此 replay 的內容 pack 與目前載入的 pack 不一致，重放不成立——已拒絕播放。
+        </div>
+      ) : content === null ? (
         <div className="policy-timeline-empty" data-testid="counterfactual-loading">
           載入內容包中…
         </div>
@@ -825,25 +833,37 @@ export function PostGamePanel({
   /** 內容包（App 載入；測試可直接注入）——反事實重放計算用；null = 載入中。 */
   content?: ContentPack | null
 }) {
-  // 內容包：props 注入（App 載入／測試）優先；未注入才自行 fetch（舊用法）。
+  // 內容包：props 注入（App 載入／測試）優先；未注入才自行載入（pack 優先、回退 data-db）。
   // 派生而非同步 setState——避免 effect 內 cascading render（oxlint react 規則）。
-  const [fetchedContent, setFetchedContent] = useState<ContentPack | null>(null)
+  const [loadedPack, setLoadedPack] = useState<LoadedPack | null>(null)
   const [loadFailed, setLoadFailed] = useState(false)
+  const [packError, setPackError] = useState<string | null>(null)
   useEffect(() => {
     if (contentProp !== undefined) return
     let alive = true
-    loadContentPackFromFetch('/data-db')
-      .then((pack) => {
-        if (alive) setFetchedContent(pack)
+    loadPackWithFallback('/data-db')
+      .then((loaded) => {
+        if (alive) setLoadedPack(loaded)
       })
-      .catch(() => {
-        if (alive) setLoadFailed(true)
+      .catch((cause: unknown) => {
+        if (!alive) return
+        setLoadFailed(true)
+        // hash 不符（PackHashMismatchError）→ 明確訊息；其餘載入失敗走通用文案。
+        if (cause instanceof PackHashMismatchError) setPackError(cause.message)
       })
     return () => {
       alive = false
     }
   }, [contentProp])
-  const content = contentProp !== undefined ? contentProp : fetchedContent
+  const content = contentProp !== undefined ? contentProp : (loadedPack?.pack ?? null)
+
+  // Replay 與內容 pack 一致性（Prompt 3.5）：replay 帶 packHash 且與載入的
+  // pack 不同 → 拒絕反事實播放（內容已變，重放不成立）。
+  const packMismatch =
+    replay.packHash !== undefined &&
+    loadedPack !== null &&
+    loadedPack.packHash !== '' &&
+    replay.packHash !== loadedPack.packHash
 
   const endType = endTypeOf(replay)
   const copy = headerCopyOf(endType, replay.result)
@@ -1025,13 +1045,16 @@ export function PostGamePanel({
         <section className="post-game-section">
           <h2>反事實建議</h2>
           <div className="policy-timeline-empty" data-testid="counterfactual-load-error">
-            內容包載入失敗——反事實建議暫不可用（不影響其他復盤內容）
+            {packError === null
+              ? '內容包載入失敗——反事實建議暫不可用（不影響其他復盤內容）'
+              : `內容包 pack 驗證失敗——反事實建議暫不可用：${packError}`}
           </div>
         </section>
       ) : (
         <CounterfactualSection
           replay={replay}
           content={content}
+          packMismatch={packMismatch}
           onReplayWithPolicies={onReplayWithPolicies}
           onRestart={onRestart}
         />

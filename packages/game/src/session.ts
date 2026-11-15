@@ -20,7 +20,7 @@ import {
   TACTICAL_INTERVAL_TICKS,
 } from './ai/tactics.ts'
 import type { Squad, TacticalPlan, TacticalRecord } from './ai/tactics.ts'
-import { loadContentPackFromFetch } from './data/loadFromFetch.ts'
+import { loadPackWithFallback } from './data/pack.ts'
 import { ReplayRecorder, REPLAY_SAMPLE_INTERVAL_TICKS } from './replay.ts'
 import type { MatchResult, ReplayRecord } from './replay.ts'
 import type { GameScene, MapMarker } from './render/scene.ts'
@@ -309,7 +309,8 @@ export interface GameSession {
  *   下一個戰略／戰術週期讀到新值；敵方固定預設值。
  */
 export async function startGameSession(app: Application, scene: GameScene): Promise<GameSession> {
-  const content = await loadContentPackFromFetch('/data-db')
+  const loaded = await loadPackWithFallback('/data-db')
+  const content = loaded.pack
   const seed = matchSeed()
   const world = createWorld(content, seed)
   scene.initialize(world)
@@ -501,6 +502,11 @@ export async function startGameSession(app: Application, scene: GameScene): Prom
           enemy: world.metrics.damageTakenActual.enemy,
         },
       },
+      // pack 元數據（Prompt 3.5）：source=pack 時記 version＋packHash，
+      // 供 replay 載入時驗證與內容一致性；data-db 回退時不記（undefined）。
+      ...(loaded.source === 'pack'
+        ? { packVersion: loaded.version, packHash: loaded.packHash }
+        : {}),
     }
     outcome = { result, replay: withArmor }
     lastReplay = withArmor // 路由傳遞（Prompt 10.5 完整版）：/post-game 讀取。

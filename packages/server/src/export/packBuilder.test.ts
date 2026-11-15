@@ -43,7 +43,7 @@ describe('packBuilder（DB → pack content）', () => {
       const a = await buildPackContent(testUrl, 'v0')
       const b = await buildPackContent(testUrl, 'v0')
       expect(canonicalJson(a.content)).toBe(canonicalJson(b.content))
-      expect(computePackHash(a.content)).toBe(computePackHash(b.content))
+      expect(await computePackHash(a.content)).toBe(await computePackHash(b.content))
     },
     120_000,
   )

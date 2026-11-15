@@ -1,10 +1,10 @@
-import { createHash } from 'node:crypto'
-
 import sharp from 'sharp'
 
 import type { PackFrames } from '@auto-2d-px-rts/shared'
 import { PackFramesSchema } from '@auto-2d-px-rts/shared'
 import { Client } from 'pg'
+
+import { sha256HexSync } from './hash.ts'
 
 /** atlas 合成的單一 sprite 輸入（佔位色塊：MVP render 不消費 atlas）。 */
 export interface AtlasSpriteInput {
@@ -72,7 +72,7 @@ export async function buildAtlas(
     .png()
     .toBuffer()
 
-  const atlasHash = createHash('sha256').update(png).digest('hex')
+  const atlasHash = sha256HexSync(png)
   const frames = PackFramesSchema.parse({
     schemaVersion: 1,
     atlasHash,

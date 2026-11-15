@@ -38,7 +38,7 @@ describe('publish pipeline（DB → pack 三件套 → published＋active）', (
       const pack = PackFileSchema.parse(packJson) as PackFile
       expect(pack.version).toBe('v0')
       expect(pack.atlasHash).toBeTruthy()
-      expect(pack.packHash).toBe(computePackHash(pack.content, pack.atlasHash))
+      expect(pack.packHash).toBe(await computePackHash(pack.content, pack.atlasHash))
 
       // 三件套鏡像到 latest/。
       expect(() => readFileSync(join(storageRoot, 'latest', 'pack.json'))).not.toThrow()

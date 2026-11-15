@@ -62,3 +62,5 @@ export {
 } from './pack.ts'
 
 export type { PackContent, PackFile, PackFrames } from './pack.ts'
+
+export { canonicalJson, computePackHash, sha256Hex } from './hash.ts'

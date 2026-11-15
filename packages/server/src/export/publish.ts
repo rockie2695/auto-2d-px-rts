@@ -2,7 +2,7 @@ import { PackContentSchema, PackFileSchema } from '@auto-2d-px-rts/shared'
 import { Client } from 'pg'
 
 import { buildPackContent } from './packBuilder.ts'
-import { computePackHash } from './hash.ts'
+import { computePackHash } from '@auto-2d-px-rts/shared'
 import { buildAtlas, readPackSprites } from './atlas.ts'
 import { DEFAULT_PACKS_DIR, LocalDiskStorage } from './storage.ts'
 import type { Storage } from './storage.ts'
@@ -49,7 +49,7 @@ export async function publishPack(
   const atlasHash = frames.atlasHash
 
   // 4. hash ＋ 發布前最後驗證。
-  const packHash = computePackHash(content, atlasHash)
+  const packHash = await computePackHash(content, atlasHash)
   const packFile = { schemaVersion: 1, version: packVersion, packHash, atlasHash, content }
   PackFileSchema.parse(packFile)
 

@@ -133,6 +133,12 @@ export interface ReplayRecord {
   readonly armorStats?: ReplayArmorStats
   /** 開局政策快照（Prompt 10.5c 反事實重放；舊檔缺欄 = undefined，UI 隱藏反事實）。 */
   readonly initialPolicies?: ReplayInitialPolicies
+  /**
+   * 內容 pack 元數據（Prompt 3.5；舊檔／data-db 回退局 = undefined）。
+   * `packHash` 與載入時的 pack 不一致 → 拒絕播放（內容已變，重放不成立）。
+   */
+  readonly packVersion?: string
+  readonly packHash?: string
 }
 
 /** 取樣間隔：20 tick（1 秒）。 */
@@ -359,7 +365,19 @@ export function parseReplay(json: unknown): ReplayRecord {
       raw.initialPolicies === undefined
         ? undefined
         : requireInitialPolicies(raw.initialPolicies),
+    // Prompt 3.5：pack 元數據可缺（舊檔／data-db 回退局）。
+    packVersion:
+      raw.packVersion === undefined ? undefined : requirePackString(raw.packVersion, 'packVersion'),
+    packHash: raw.packHash === undefined ? undefined : requirePackString(raw.packHash, 'packHash'),
   }
+}
+
+/** pack 元數據（packVersion / packHash）欄位驗證（可缺；壞型別擲錯）。 */
+function requirePackString(value: unknown, field: string): string {
+  if (typeof value !== 'string' || value === '') {
+    throw new Error(`replay 欄位 ${field} 必須是非空字串`)
+  }
+  return value
 }
 
 /** 死亡事件陣列驗證（可缺；型別壞擲錯）。 */

@@ -10,7 +10,7 @@ import { PixiCanvas } from './ui/PixiCanvas.tsx'
 import { BattleDashboard } from './ui/BattleDashboard.tsx'
 import { PostGamePanel } from './ui/PostGamePanel.tsx'
 import { PreGamePage } from './ui/PreGamePage.tsx'
-import { loadContentPackFromFetch } from './data/loadFromFetch.ts'
+import { loadPackWithFallback } from './data/pack.ts'
 
 /**
  * 遊戲最外層（Prompt 9 / 9.5 / 10.5 完整版）：react-router-dom 三路由
@@ -64,9 +64,9 @@ function PostGamePage() {
   const [content, setContent] = useState<ContentPack | null>(null)
   useEffect(() => {
     let alive = true
-    loadContentPackFromFetch('/data-db')
-      .then((pack) => {
-        if (alive) setContent(pack)
+    loadPackWithFallback('/data-db')
+      .then((loaded) => {
+        if (alive) setContent(loaded.pack)
       })
       .catch(() => {
         /* 載入失敗：PostGamePanel 自行處理 null → 反事實降級顯示。 */

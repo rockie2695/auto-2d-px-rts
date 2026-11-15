@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 
-import { loadContentPackFromFetch } from '../data/loadFromFetch.ts'
+import { loadPackWithFallback } from '../data/pack.ts'
 import { simulateOpening } from '../ai/opening.ts'
 import { setInitialPolicies } from '../session.ts'
 import type { PolicyValues } from '../ai/policy.ts'
@@ -151,8 +151,8 @@ export function PreGamePage() {
 
   useEffect(() => {
     let cancelled = false
-    loadContentPackFromFetch('/data-db').then((pack) => {
-      if (!cancelled) setContent(pack)
+    loadPackWithFallback('/data-db').then((loaded) => {
+      if (!cancelled) setContent(loaded.pack)
     })
     return () => {
       cancelled = true
