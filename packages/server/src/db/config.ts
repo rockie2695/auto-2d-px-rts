@@ -52,17 +52,20 @@ export function getDatabaseUrl(): string {
 
 /**
  * 由正式庫 URL 推導測試庫 URL：把最後一段資料庫名稱換成 `<name>_test`。
- * 例如 `.../neondb?sslmode=...` → `.../neondb_test?sslmode=...`。
+ * 可傳 `dbName` 指定完整測試庫名稱（並行測試檔用唯一名稱避免互打）。
  * 查詢參數（sslmode 等）原封不動保留。
  */
-export function getTestDatabaseUrl(baseUrl: string = getDatabaseUrl()): string {
+export function getTestDatabaseUrl(
+  baseUrl: string = getDatabaseUrl(),
+  dbName?: string,
+): string {
   const url = new URL(baseUrl)
   const segments = url.pathname.split('/').filter((segment) => segment !== '')
-  const dbName = segments[segments.length - 1]
-  if (dbName === undefined || dbName === '') {
+  const currentName = segments[segments.length - 1]
+  if (currentName === undefined || currentName === '') {
     throw new Error(`DATABASE_URL 缺少資料庫名稱：${baseUrl}`)
   }
-  segments[segments.length - 1] = `${dbName}_test`
+  segments[segments.length - 1] = dbName ?? `${currentName}_test`
   url.pathname = `/${segments.join('/')}`
   return url.toString()
 }

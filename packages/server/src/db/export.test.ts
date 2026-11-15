@@ -1,9 +1,9 @@
 import { readdirSync, readFileSync } from 'node:fs'
 import { join, relative } from 'node:path'
 
-import { beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
-import { createTestDatabase } from './testDb.ts'
+import { createSeededTestDatabase, dropTestDatabase } from './testDb.ts'
 import { exportPack } from './export.ts'
 import { seedDatabase, SEED_SOURCE_DIR } from './seed.ts'
 
@@ -48,7 +48,11 @@ function normalize(data: unknown): unknown {
 let testUrl: string
 
 beforeAll(async () => {
-  testUrl = await createTestDatabase()
+  testUrl = await createSeededTestDatabase()
+}, 120_000)
+
+afterAll(async () => {
+  await dropTestDatabase(testUrl)
 }, 120_000)
 
 describe('seed → DB → export 深比對', () => {

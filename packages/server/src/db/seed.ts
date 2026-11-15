@@ -110,6 +110,7 @@ export interface SeedSummary {
   readonly buildings: number
   readonly policies: number
   readonly maps: number
+  readonly sprites: number
 }
 
 /**
@@ -225,10 +226,39 @@ export async function seedDatabase(
       }
     }
 
-    await client.query(
-      'insert into palettes (pack_id, palette_id, colors) values ($1, $2, $3)',
+    const paletteResult = await client.query(
+      'insert into palettes (pack_id, palette_id, colors) values ($1, $2, $3) returning id',
       [packId, 'default', JSON.stringify(DEFAULT_PALETTE_COLORS)],
     )
+    const paletteId: string = paletteResult.rows[0]!['id'] as string
+
+    // 佔位 sprites：從 unit/building def 的 sprite.color/size 產生，
+    // 供 publish pipeline 合成 atlas（MVP render 仍程序繪製，不消費 atlas）。
+    for (const file of [...units, ...buildings]) {
+      const wrapper = file.data as Record<string, unknown>
+      const key = file.file.startsWith('units/') ? 'unit' : 'building'
+      const def = wrapper[key] as
+        | { id: string; sprite?: { color: string; size: number } }
+        | undefined
+      if (def === undefined || def.sprite === undefined) {
+        throw new Error(`內容檔缺少 ${key}.sprite：${file.file}`)
+      }
+      await client.query(
+        'insert into sprites (pack_id, sprite_id, owner_type, owner_id, palette_id, data) values ($1, $2, $3, $4, $5, $6)',
+        [
+          packId,
+          def.id,
+          key,
+          def.id,
+          paletteId,
+          JSON.stringify({
+            source: 'placeholder',
+            color: def.sprite.color,
+            size: def.sprite.size,
+          }),
+        ],
+      )
+    }
 
     await client.query('COMMIT')
 
@@ -241,6 +271,7 @@ export async function seedDatabase(
       buildings: buildings.length,
       policies: contentRows.length - resources.length - factions.length - units.length - buildings.length,
       maps: maps.length,
+      sprites: units.length + buildings.length,
     }
   } catch (cause) {
     await client.query('ROLLBACK')
@@ -260,6 +291,6 @@ if (isDirectRun) {
     `seed 完成：pack ${summary.packVersion}（draft, sha256=${summary.sha256.slice(0, 12)}…）` +
       ` resources=${summary.resources} factions=${summary.factions}` +
       ` units=${summary.units} buildings=${summary.buildings}` +
-      ` policies=${summary.policies} maps=${summary.maps} palettes=1`,
+      ` policies=${summary.policies} maps=${summary.maps} sprites=${summary.sprites}`,
   )
 }

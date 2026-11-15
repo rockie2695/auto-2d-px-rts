@@ -1,23 +1,25 @@
-import { beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import { PackContentSchema } from '@auto-2d-px-rts/shared'
 
-import { createTestDatabase } from '../db/testDb.ts'
-import { seedDatabase } from '../db/seed.ts'
+import { createSeededTestDatabase, dropTestDatabase } from '../db/testDb.ts'
 import { canonicalJson, computePackHash } from './hash.ts'
 import { buildPackContent } from './packBuilder.ts'
 
 let testUrl: string
 
 beforeAll(async () => {
-  testUrl = await createTestDatabase()
+  testUrl = await createSeededTestDatabase()
+}, 120_000)
+
+afterAll(async () => {
+  await dropTestDatabase(testUrl)
 }, 120_000)
 
 describe('packBuilder（DB → pack content）', () => {
   it(
     '組出與 DB 一致的 content（8 單位/建築計數、3 資源、9 滑桿、1024 格地圖）',
     async () => {
-      await seedDatabase(testUrl)
       const { packId, content } = await buildPackContent(testUrl, 'v0')
       expect(packId).toBeTruthy()
       expect(content.units).toHaveLength(4)

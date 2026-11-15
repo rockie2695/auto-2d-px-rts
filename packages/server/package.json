@@ -12,7 +12,8 @@
   "dependencies": {
     "@auto-2d-px-rts/shared": "workspace:*",
     "node-pg-migrate": "^8.0.3",
-    "pg": "^8.19.0"
+    "pg": "^8.19.0",
+    "sharp": "^0.35.5"
   },
   "devDependencies": {
     "@types/pg": "^8.19.0"
