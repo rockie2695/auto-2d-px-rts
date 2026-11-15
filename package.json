@@ -10,7 +10,12 @@
     "lint": "oxlint",
     "sim": "node --experimental-strip-types --disable-warning=ExperimentalWarning packages/game/src/ai/aiCli.ts",
     "sim:fight": "node --experimental-strip-types --disable-warning=ExperimentalWarning packages/game/src/sim/simCli.ts",
-    "preview": "pnpm --filter @auto-2d-px-rts/game preview"
+    "preview": "pnpm --filter @auto-2d-px-rts/game preview",
+    "db:migrate": "pnpm --filter @auto-2d-px-rts/server db:migrate",
+    "db:seed": "pnpm --filter @auto-2d-px-rts/server db:seed",
+    "db:export": "pnpm --filter @auto-2d-px-rts/server db:export",
+    "build:pack": "pnpm --filter @auto-2d-px-rts/server build:pack",
+    "rollback": "pnpm --filter @auto-2d-px-rts/server rollback"
   },
   "devDependencies": {
     "jsdom": "^30.1.3",

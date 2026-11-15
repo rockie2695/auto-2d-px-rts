@@ -1,0 +1,78 @@
+{
+  "schemaVersion": 1,
+  "atlasHash": "02ce40abb8dcef5ec5d9d2c652fae1c43e7bc34b6d064c951e5551de7fc01e51",
+  "width": 512,
+  "height": 52,
+  "frames": [
+    {
+      "id": "archer",
+      "x": 2,
+      "y": 2,
+      "w": 12,
+      "h": 12
+    },
+    {
+      "id": "ballista",
+      "x": 16,
+      "y": 2,
+      "w": 12,
+      "h": 12
+    },
+    {
+      "id": "barracks",
+      "x": 30,
+      "y": 2,
+      "w": 32,
+      "h": 32
+    },
+    {
+      "id": "crystal_mine",
+      "x": 64,
+      "y": 2,
+      "w": 16,
+      "h": 16
+    },
+    {
+      "id": "emerald_sanctuary",
+      "x": 82,
+      "y": 2,
+      "w": 12,
+      "h": 12
+    },
+    {
+      "id": "keep",
+      "x": 96,
+      "y": 2,
+      "w": 48,
+      "h": 48
+    },
+    {
+      "id": "legionnaire",
+      "x": 146,
+      "y": 2,
+      "w": 12,
+      "h": 12
+    },
+    {
+      "id": "ruby_mine",
+      "x": 160,
+      "y": 2,
+      "w": 12,
+      "h": 12
+    },
+    {
+      "id": "shield_guard",
+      "x": 174,
+      "y": 2,
+      "w": 12,
+      "h": 12
+    },
+    {
+      "id": "tower",
+      "x": 188,
+      "y": 2,
+      "w": 32,
+      "h": 32
+    }
+  ]
+}
