@@ -636,7 +636,7 @@ describe('決策節奏與確定性（規則 8）', () => {
 
 /** 真實內容 + seed 42 跑 totalTicks，回傳雙方累積的決策記錄。 */
 function runRealWorldRecords(totalTicks: number): DecisionRecord[] {
-  const dataDir = fileURLToPath(new URL('../../public/data/', import.meta.url))
+  const dataDir = fileURLToPath(new URL('../../public/data-db/', import.meta.url))
   const content = loadContentPackFromDir(dataDir)
   const world = createWorld(content, 42)
   const records: DecisionRecord[] = []

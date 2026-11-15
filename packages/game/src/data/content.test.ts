@@ -25,7 +25,7 @@ import type {
   UnitDef,
 } from '@auto-2d-px-rts/shared'
 
-const DATA_DIR = fileURLToPath(new URL('../../public/data/', import.meta.url))
+const DATA_DIR = fileURLToPath(new URL('../../public/data-db/', import.meta.url))
 
 /** BFS 的四方向位移。 */
 const CARDINAL_DIRECTIONS: ReadonlyArray<readonly [number, number]> = [

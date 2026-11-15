@@ -1416,7 +1416,7 @@ describe('PostGamePanel 三視圖（Prompt 10.5c：投降後復盤特殊處理�
 describe('PostGamePanel 反事實區塊（Prompt 10.5c：真實 headless 重放）', () => {
   // 真內容包（jsdom 環境用 cwd 拼路徑，避免 import.meta.url 協議差異）。
   const contentPack: ContentPack = loadContentPackFromDir(
-    join(process.cwd(), 'packages', 'game', 'public', 'data'),
+    join(process.cwd(), 'packages', 'game', 'public', 'data-db'),
   )
 
   /** 輪詢等待異步分批計算完成（每批 setTimeout(0) 呼吸；真重放 ~每場數十 ms）。 */

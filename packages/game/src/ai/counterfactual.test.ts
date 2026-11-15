@@ -15,16 +15,16 @@ import type { ReplayRecord } from '../replay.ts'
  * - 建議生成：三維度各一條、撞邊界翻轉、快照點取樣。
  */
 
-// 內容來源改讀 public/data 目錄（避免相對 fetch 依賴 dev server）。
+// 內容來源改讀 public/data-db 目錄（避免相對 fetch 依賴 dev server）。
 vi.mock('../data/loadFromFetch.ts', () => ({
   loadContentPackFromFetch: vi.fn(async () => {
     const { loadContentPackFromDir } = await import('../data/loadFromDir.ts')
-    return loadContentPackFromDir(fileURLToPath(new URL('../../public/data/', import.meta.url)))
+    return loadContentPackFromDir(fileURLToPath(new URL('../../public/data-db/', import.meta.url)))
   }),
 }))
 
 const content = loadContentPackFromDir(
-  fileURLToPath(new URL('../../public/data/', import.meta.url)),
+  fileURLToPath(new URL('../../public/data-db/', import.meta.url)),
 )
 
 const INITIAL = {

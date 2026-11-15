@@ -12,7 +12,7 @@ import { loadContentPackFromDir } from '../data/loadFromDir.ts'
  */
 
 const content = loadContentPackFromDir(
-  fileURLToPath(new URL('../../public/data/', import.meta.url)),
+  fileURLToPath(new URL('../../public/data-db/', import.meta.url)),
 )
 
 describe('simulateOpening（Prompt 10.5 完整版：戰前頁 60 秒預測）', () => {

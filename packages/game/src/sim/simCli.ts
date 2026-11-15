@@ -33,7 +33,7 @@ function printStatus(world: World): void {
 
 function main(): void {
   // 以本檔位置推導資料目錄（dist 執行亦可用）。
-  const dataDir = fileURLToPath(new URL('../../public/data/', import.meta.url))
+  const dataDir = fileURLToPath(new URL('../../public/data-db/', import.meta.url))
   const content = loadContentPackFromDir(dataDir)
   const world = createWorld(content, SEED)
 

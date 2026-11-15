@@ -40,8 +40,7 @@ packages/
   shared/                 共用型別與常數（遊戲與測試都從這裡 import）
     src/constants.ts      TICK_RATE_HZ / TICK_INTERVAL_MS / MAP_SIZE
   game/
-    public/data/          遊戲內容 JSON（seed 來源與回退資料源）
-    public/data-db/       DB 匯出的內容 JSON（loader 優先讀取）
+    public/data-db/       DB 匯出的內容 JSON（遊戲唯一資料來源）
     src/
       sim/                純邏輯模擬
       render/             PixiJS 渲染
@@ -51,6 +50,7 @@ packages/
       replay.ts           戰後復盤紀錄（純資料層，可重播）
       ui/                 React UI 覆蓋層（四角 HUD、政策面板、復盤頁）
   server/                 資料庫（Neon Postgres）：migrations / seed / export
+    seed-data/            seed 來源 JSON（17 檔）
 ```
 
 ## 分層規則
@@ -83,9 +83,10 @@ packages/
 
 遊戲內容的正規資料源是 **Postgres（Neon 遠端庫）**：
 
-- `packages/server`：migrations（14 張表）、seed（JSON → DB）、export（DB → `packages/game/public/data-db/`）。
-- 遊戲 loader 優先讀 `/data-db`（`pnpm --filter @auto-2d-px-rts/server db:export` 產生），
-  探測不到才回退 `packages/game/public/data/` 的本地 JSON。
+- `packages/server`：migrations（14 張表）、seed（`seed-data/` JSON → DB）、
+  export（DB → `packages/game/public/data-db/`）。
+- 遊戲（瀏覽器 fetch 與 Node 測試／CLI）一律讀 `public/data-db/`；
+  內容變更流程：改 `packages/server/seed-data/*.json` → `db:seed` → `db:export`。
 - 表格／檔案對應、RLE 格式與已知正規化差異見 [`docs/DB_MAPPING.md`](docs/DB_MAPPING.md)。
 
 ## 目前進度
@@ -816,7 +817,7 @@ packages/
   resources/factions/units/buildings/policies 複合 PK＋data jsonb；
   maps＋map_tiles（RLE bytea）＋map_resources；palettes/sprites 佔位；
   balance_changes/balance_snapshots/meta_ai_models 預留）；
-  `db:seed` 把 `public/data` 17 檔（Zod 驗證→draft pack v0）寫入 Neon
+  `db:seed` 把 `packages/server/seed-data` 17 檔（Zod 驗證→draft pack v0）寫入 Neon
   （tiles→RLE 99 bytes、resourceNodes→正規化、match/policies→policies 表）；
   `db:export` 重組出 `public/data-db/`（17 檔，與來源語意一致）；
   遊戲 loader 優先 probe `/data-db` 回退 `/data`（順修 fetch MANIFEST 陳舊

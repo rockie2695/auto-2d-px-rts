@@ -31,7 +31,7 @@ function readDirEntries(dataDir: string, subDir: string): RawEntry[] {
 }
 
 /**
- * 從目錄載入 MVP 內容檔（`packages/game/public/data/`）。
+ * 從目錄載入 MVP 內容檔（`packages/game/public/data-db/`）。
  *
  * 只給 Node 端用（`pnpm sim` 與測試）；瀏覽器端日後用 fetch 組出
  * `RawContentPack` 再交給同一個 `parseContentPack`。

@@ -53,7 +53,7 @@ const MAX_WINS_PER_SIDE = 9
 let content: ContentPack
 
 beforeAll(() => {
-  const dataDir = fileURLToPath(new URL('../../public/data/', import.meta.url))
+  const dataDir = fileURLToPath(new URL('../../public/data-db/', import.meta.url))
   content = loadContentPackFromDir(dataDir)
 })
 

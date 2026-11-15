@@ -164,7 +164,7 @@ function printStatus(
 }
 
 function main(): void {
-  const dataDir = fileURLToPath(new URL('../../public/data/', import.meta.url))
+  const dataDir = fileURLToPath(new URL('../../public/data-db/', import.meta.url))
   const content = loadContentPackFromDir(dataDir)
   const world = createWorld(content, SEED)
 

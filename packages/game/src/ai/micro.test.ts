@@ -678,7 +678,7 @@ interface RealRun {
 
 /** 真實內容 + seed 42：戰略 40 / 戰術 10 / 微操 2 tick。 */
 function runReal(ticks: number): RealRun {
-  const dataDir = fileURLToPath(new URL('../../public/data/', import.meta.url))
+  const dataDir = fileURLToPath(new URL('../../public/data-db/', import.meta.url))
   const content = loadContentPackFromDir(dataDir)
   const world = createWorld(content, 42)
   const policies: Record<PlayerId, PolicyValues> = {

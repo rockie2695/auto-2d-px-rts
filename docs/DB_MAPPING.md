@@ -1,16 +1,16 @@
 # DB ↔ 內容檔對應（階段四 Prompt 1）
 
-資料源從 `packages/game/public/data/` 的 JSON 檔遷移到 Postgres（Neon 遠端庫）。
+資料源從 JSON 檔遷移到 Postgres（Neon 遠端庫）。
 `packages/server` 負責 schema（node-pg-migrate）、seed（JSON → DB）與
-export（DB → `packages/game/public/data-db/`）。遊戲 loader 優先讀
-`/data-db`，探測不到才回退 `/data`。
+export（DB → `packages/game/public/data-db/`）。遊戲 loader 直接讀
+`/data-db`（Vite public 直服）；seed 來源 JSON 在 `packages/server/seed-data/`。
 
 ## 指令
 
 | 指令                | 說明 |
 | ------------------- | ---- |
 | `pnpm --filter @auto-2d-px-rts/server db:migrate` | 對 Neon 正式庫跑 migrations（`packages/server/migrations/*.sql`） |
-| `pnpm --filter @auto-2d-px-rts/server db:seed`   | 讀 seed 來源 JSON → 驗證 → 寫入 draft pack `v0`（冪等，重跑即整包重建；已 published 拒絕覆寫） |
+| `pnpm --filter @auto-2d-px-rts/server db:seed`   | 讀 `packages/server/seed-data` JSON → 驗證 → 寫入 draft pack `v0`（冪等，重跑即整包重建；已 published 拒絕覆寫） |
 | `pnpm --filter @auto-2d-px-rts/server db:export` | 從 DB 重組內容檔 → `packages/game/public/data-db/` |
 
 - 連線字串：root `.env` 的 `DATABASE_URL`（Neon pooler，`sslmode=verify-full&channel_binding=require`）。
@@ -51,6 +51,7 @@ export（DB → `packages/game/public/data-db/`）。遊戲 loader 優先讀
 
 ## 載入路徑
 
-- 瀏覽器：`loadContentPackFromFetch('/data')` → probe `/data-db/match.json` 成功則整包改讀 `/data-db`，否則回退 `/data`（`loadFromFetch.ts`）。
-- Node（測試／CLI）：`loadContentPackFromDir(...)`，Phase E 起指向 `data-db/`。
+- 瀏覽器：`loadContentPackFromFetch('/data-db')`（`loadFromFetch.ts`）——
+  直接讀 DB 匯出目錄，不再回退。
+- Node（測試／CLI）：`loadContentPackFromDir(...)`，全部指向 `data-db/`。
 - 內容檔清單（17 檔）由 `content.test.ts` 的 `EXPECTED_FILES` 與 `loadFromFetch.ts` 的 `MANIFEST` 雙向鎖定。

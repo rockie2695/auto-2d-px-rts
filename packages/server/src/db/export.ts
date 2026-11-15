@@ -128,7 +128,7 @@ function toJsonText(data: unknown): string {
   return `${JSON.stringify(data, null, 2)}\n`
 }
 
-/** 把重組結果寫到 `outDir`（同 `public/data` 的目錄結構）。 */
+/** 把重組結果寫到 `outDir`（與 seed 來源相同的目錄結構）。 */
 export async function exportPackToDir(
   databaseUrl: string,
   packVersion: string,

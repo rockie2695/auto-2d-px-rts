@@ -176,7 +176,7 @@ interface RealRun {
 
 /** 真實內容 + seed：跑 ticks → 決策總數、微操記錄序列、成因覆蓋、終局位置。 */
 function runReal(ticks: number, seed = 42): RealRun {
-  const dataDir = fileURLToPath(new URL('../../public/data/', import.meta.url))
+  const dataDir = fileURLToPath(new URL('../../public/data-db/', import.meta.url))
   const content = loadContentPackFromDir(dataDir)
   const world = createWorld(content, seed)
   const policies: Record<PlayerId, PolicyValues> = {

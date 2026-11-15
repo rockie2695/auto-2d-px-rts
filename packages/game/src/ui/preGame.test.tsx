@@ -21,7 +21,7 @@ import type { ContentPack } from '@auto-2d-px-rts/shared'
 /**
  * 戰前準備頁 View（Prompt 10.5 完整版）：純 props 渲染——
  * 地圖預覽、六軸雷達、60 秒開局預測、Policy/節奏預設＋「開始對戰」。
- * content pack 改讀 public/data（避免相對 fetch 依賴 dev server）；
+ * content pack 改讀 public/data-db（避免相對 fetch 依賴 dev server）；
  * jsdom 的 import.meta.url 非 file: 協議——cwd 拼資料目錄。
  */
 
@@ -29,8 +29,8 @@ let pack: ContentPack | null = null
 
 function contentPack(): ContentPack {
   if (pack === null) {
-    const fromRoot = join(process.cwd(), 'packages', 'game', 'public', 'data')
-    const dataDir = existsSync(fromRoot) ? fromRoot : join(process.cwd(), 'public', 'data')
+    const fromRoot = join(process.cwd(), 'packages', 'game', 'public', 'data-db')
+    const dataDir = existsSync(fromRoot) ? fromRoot : join(process.cwd(), 'public', 'data-db')
     pack = loadContentPackFromDir(dataDir)
   }
   return pack

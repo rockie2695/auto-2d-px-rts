@@ -832,7 +832,7 @@ export function PostGamePanel({
   useEffect(() => {
     if (contentProp !== undefined) return
     let alive = true
-    loadContentPackFromFetch('/data')
+    loadContentPackFromFetch('/data-db')
       .then((pack) => {
         if (alive) setFetchedContent(pack)
       })

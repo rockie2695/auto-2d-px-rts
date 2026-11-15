@@ -990,7 +990,7 @@ interface RealRun {
 
 /** 真實內容 + seed 42：戰略層每 40、戰術層每 10、微操層每 2 tick 各跑一次。 */
 function runReal(ticks: number): RealRun {
-  const dataDir = fileURLToPath(new URL('../../public/data/', import.meta.url))
+  const dataDir = fileURLToPath(new URL('../../public/data-db/', import.meta.url))
   const content = loadContentPackFromDir(dataDir)
   const world = createWorld(content, 42)
   const policies: Record<PlayerId, PolicyValues> = {

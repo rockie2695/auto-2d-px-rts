@@ -19,7 +19,7 @@ import { createWorld, stepWorld } from '../sim/world.ts'
 
 /** 真實內容 + seed 42：戰略 40 / 戰術 10 tick；收集每循環的戰術記錄。 */
 function runReal(ticks: number, seed = 42): TacticalRecord[] {
-  const dataDir = fileURLToPath(new URL('../../public/data/', import.meta.url))
+  const dataDir = fileURLToPath(new URL('../../public/data-db/', import.meta.url))
   const content = loadContentPackFromDir(dataDir)
   const world = createWorld(content, seed)
   const policies: Record<PlayerId, PolicyValues> = {

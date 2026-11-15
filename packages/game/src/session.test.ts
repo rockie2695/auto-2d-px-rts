@@ -24,11 +24,11 @@ import { computeTacticalPlan, TACTICAL_INTERVAL_TICKS } from './ai/tactics.ts'
 import { MICRO_INTERVAL_TICKS, runMicroCycle } from './ai/micro.ts'
 import { runStrategicCycle, STRATEGIC_INTERVAL_TICKS } from './ai/strategy.ts'
 
-/** 內容來源改讀 public/data 目錄（避免相對 fetch 依賴 dev server）。 */
+/** 內容來源改讀 public/data-db 目錄（避免相對 fetch 依賴 dev server）。 */
 vi.mock('./data/loadFromFetch.ts', () => ({
   loadContentPackFromFetch: vi.fn(async () => {
     const { loadContentPackFromDir } = await import('./data/loadFromDir.ts')
-    return loadContentPackFromDir(fileURLToPath(new URL('../public/data/', import.meta.url)))
+    return loadContentPackFromDir(fileURLToPath(new URL('../public/data-db/', import.meta.url)))
   }),
 }))
 
@@ -478,7 +478,7 @@ describe('勝負判定（純函數）', () => {
 
   it('真實內容重現（Prompt 10.5 修）：敵方建築與單位全滅 → matchEnded、玩家勝', () => {
     const content = loadContentPackFromDir(
-      fileURLToPath(new URL('../public/data/', import.meta.url)),
+      fileURLToPath(new URL('../public/data-db/', import.meta.url)),
     )
     const world = createWorld(content, 42)
     expect(matchEnded(world)).toBe(false) // 開局：雙方俱全
@@ -740,7 +740,7 @@ describe('鏡像對稱（Prompt 10.9）', () => {
    */
   function mirrorProbe(ticks: number, options: { aggregate?: boolean } = {}): void {
     const content = loadContentPackFromDir(
-      fileURLToPath(new URL('../public/data/', import.meta.url)),
+      fileURLToPath(new URL('../public/data-db/', import.meta.url)),
     )
     const world = createWorld(content, 42)
     const policies = { player: DEFAULT_POLICIES, enemy: DEFAULT_POLICIES }

@@ -1207,10 +1207,10 @@ JSON 檔即完整輸入）。路由（Prompt 10.5 完整版）：**react-router-
 
 ## 13. 資料結構（JSON 內容檔）
 
-位置：`/packages/game/public/data/`（seed 來源與回退資料源）。
+位置：seed 來源 `packages/server/seed-data/`（17 檔 JSON）。
 階段四起正規資料源為 **Postgres（Neon）**：`packages/server` 的 seed 把
 JSON 寫入 DB（draft pack `v0`），`db:export` 重組出 `public/data-db/`；
-遊戲 loader 優先讀 `/data-db`、探測不到回退 `/data`。
+遊戲（瀏覽器與 Node 測試／CLI）一律讀 `data-db/`，不再回退。
 表 ↔ 檔對應見 `docs/DB_MAPPING.md`。所有檔案帶 `schemaVersion: 1`。
 
 schema 定義在 `packages/shared/src/schema.ts`（Zod）；
@@ -1219,7 +1219,7 @@ schema 定義在 `packages/shared/src/schema.ts`（Zod）；
 ### 檔案清單（共 17 個；Prompt 5 起三資源）
 
 ```
-public/data/
+seed-data/（packages/server/seed-data/）
   resources/blue_crystal.json     3 個資源（各一檔；Prompt 5）
   resources/red_ruby.json
   resources/green_emerald.json

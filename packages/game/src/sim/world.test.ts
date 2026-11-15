@@ -604,7 +604,7 @@ describe('脫戰回血（Prompt 10.8）', () => {
 /* ------------------------------------------------------------------ */
 
 function loadRealContent() {
-  const dataDir = fileURLToPath(new URL('../../public/data/', import.meta.url))
+  const dataDir = fileURLToPath(new URL('../../public/data-db/', import.meta.url))
   return loadContentPackFromDir(dataDir)
 }
 

@@ -151,7 +151,7 @@ export function PreGamePage() {
 
   useEffect(() => {
     let cancelled = false
-    loadContentPackFromFetch('/data').then((pack) => {
+    loadContentPackFromFetch('/data-db').then((pack) => {
       if (!cancelled) setContent(pack)
     })
     return () => {

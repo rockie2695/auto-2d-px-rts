@@ -13,10 +13,10 @@ import { encodeTilesRle } from './rle.ts'
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..')
 
 /**
- * seed 來源：現階段仍是 `packages/game/public/data` 的 17 檔 JSON。
- * Phase E 會整批搬到 `packages/server/seed-data`。
+ * seed 來源：`packages/server/seed-data` 的 17 檔 JSON
+ * （自 `packages/game/public/data` 整批搬入）。
  */
-export const SEED_SOURCE_DIR = resolve(REPO_ROOT, 'packages/game/public/data')
+export const SEED_SOURCE_DIR = resolve(REPO_ROOT, 'packages/server/seed-data')
 
 /** 初始 draft 包版本；seed 可重複執行（重跑即重建 draft）。 */
 export const PACK_VERSION = 'v0'

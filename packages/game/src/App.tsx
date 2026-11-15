@@ -64,7 +64,7 @@ function PostGamePage() {
   const [content, setContent] = useState<ContentPack | null>(null)
   useEffect(() => {
     let alive = true
-    loadContentPackFromFetch('/data')
+    loadContentPackFromFetch('/data-db')
       .then((pack) => {
         if (alive) setContent(pack)
       })

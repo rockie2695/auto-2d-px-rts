@@ -309,7 +309,7 @@ export interface GameSession {
  *   下一個戰略／戰術週期讀到新值；敵方固定預設值。
  */
 export async function startGameSession(app: Application, scene: GameScene): Promise<GameSession> {
-  const content = await loadContentPackFromFetch('/data')
+  const content = await loadContentPackFromFetch('/data-db')
   const seed = matchSeed()
   const world = createWorld(content, seed)
   scene.initialize(world)
